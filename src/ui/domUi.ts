@@ -1,5 +1,5 @@
-import type { BossAbilityType, DefenseType } from '../game/types';
-import type { CountItem, DungeonSnapshot, UiSnapshot } from '../game/uiSnapshot';
+import type { BossAbilityType, ConstructionTool, DefenseType } from '../game/types';
+import type { CountItem, DefenseUiItem, DungeonSnapshot, UiSnapshot } from '../game/uiSnapshot';
 import { emitUiAction, onUiState } from './uiEvents';
 
 const BEST_WAVE_STORAGE_KEY = 'final-boss-dungeon.best-wave';
@@ -85,33 +85,35 @@ export class GameDomUi {
 
           ${snapshot.phase === 'build' ? this.renderBuildControls(snapshot) : ''}
           ${snapshot.phase === 'wave' ? this.renderWavePanel(snapshot, bossPercent) : ''}
-          ${snapshot.phase === 'report' && snapshot.report ? this.renderReport(snapshot) : ''}
-          ${snapshot.phase === 'defeat' && snapshot.report ? this.renderDefeat(snapshot) : ''}
+          ${snapshot.phase === 'report' && snapshot.report ? '<div class="message">Le debriefing complet est ouvert.</div>' : ''}
+          ${snapshot.phase === 'defeat' && snapshot.report ? '<div class="message message--alert">Le boss est tombe. Rapport final ouvert.</div>' : ''}
         </aside>
+
+        ${snapshot.phase === 'report' && snapshot.report ? this.renderReport(snapshot) : ''}
+        ${snapshot.phase === 'defeat' && snapshot.report ? this.renderDefeat(snapshot) : ''}
       </section>
     `;
   }
 
   private renderBuildControls(snapshot: DungeonSnapshot): string {
+    const traps = snapshot.availableDefenses.filter((item) => item.kind === 'trap');
+    const minions = snapshot.availableDefenses.filter((item) => item.kind === 'minion');
+
     return `
       <div class="panel-section">
-        <p class="section-title">Defenses disponibles</p>
-        <div class="defense-list">
-          ${snapshot.availableDefenses
+        <p class="section-title">Construction</p>
+        <div class="tool-list">
+          ${snapshot.constructionTools
             .map((item) => {
-              const selected = item.type === snapshot.selectedDefense ? ' is-selected' : '';
+              const selected = item.type === snapshot.selectedConstructionTool ? ' is-selected' : '';
               return `
                 <button
-                  class="defense-button${selected}"
-                  data-defense="${item.type}"
+                  class="tool-button${selected}"
+                  data-construction="${item.type}"
                   ${item.disabled ? 'disabled' : ''}
                 >
-                  <span class="defense-button__swatch" style="--swatch:${item.color}"></span>
-                  <span>
-                    <strong>${escapeHtml(item.name)}</strong>
-                    <small>${escapeHtml(item.description)}</small>
-                  </span>
-                  <em>${item.cost} or</em>
+                  <strong>${escapeHtml(item.name)}</strong>
+                  <small>${escapeHtml(item.description)}</small>
                 </button>
               `;
             })
@@ -120,12 +122,40 @@ export class GameDomUi {
       </div>
 
       <div class="panel-section">
-        <p class="section-title">Effectifs ennemis prevus</p>
-        <div class="roster">${this.renderCounts(snapshot.adventurersByRole)}</div>
-        <div class="message">Reputation: ${escapeHtml(snapshot.dungeonReputationTitle)} (${snapshot.dungeonReputation}).</div>
+        <p class="section-title">Pieges</p>
+        <div class="defense-list">${traps.map((item) => this.renderDefenseButton(item, snapshot)).join('')}</div>
       </div>
 
-      ${this.renderNamedMinions(snapshot)}
+      <div class="panel-section">
+        <p class="section-title">Monstres</p>
+        <div class="defense-list">${minions.map((item) => this.renderDefenseButton(item, snapshot)).join('')}</div>
+        ${this.renderNamedMinions(snapshot)}
+      </div>
+
+      <div class="panel-section">
+        <p class="section-title">Boss</p>
+        <div class="report__grid">
+          <div class="report__metric"><span>Vie</span><strong>${snapshot.bossHp}/${snapshot.bossMaxHp}</strong></div>
+          <div class="report__metric"><span>Pouvoirs</span><strong>${snapshot.bossAbilities.length}</strong></div>
+        </div>
+      </div>
+
+      <div class="panel-section">
+        <p class="section-title">Expedition</p>
+        <div class="report__grid">
+          <div class="report__metric"><span>Type</span><strong>${escapeHtml(snapshot.expeditionLabel)}</strong></div>
+          <div class="report__metric"><span>Objectif</span><strong>${escapeHtml(snapshot.expeditionPrimaryGoal)}</strong></div>
+          <div class="report__metric"><span>Taille</span><strong>${snapshot.nextWaveSize}</strong></div>
+          <div class="report__metric"><span>Infamie</span><strong>${snapshot.dungeonReputation}</strong></div>
+        </div>
+        <div class="roster">${this.renderCounts(snapshot.adventurersByRole)}</div>
+        <div class="message${snapshot.dungeonValidation.valid ? ' message--ok' : ' message--alert'}">
+          ${snapshot.dungeonValidation.valid
+            ? 'Donjon valide: entree, tresor et boss restent relies.'
+            : escapeHtml(snapshot.dungeonValidation.reason ?? 'Donjon invalide.')}
+        </div>
+      </div>
+
       ${snapshot.report ? this.renderCompactReport(snapshot) : ''}
       ${snapshot.recentRumors.length > 0 ? this.renderRumors(snapshot.recentRumors) : ''}
       ${snapshot.recentJournal.length > 0 ? this.renderJournal(snapshot.recentJournal) : ''}
@@ -140,13 +170,32 @@ export class GameDomUi {
     `;
   }
 
+  private renderDefenseButton(item: DefenseUiItem, snapshot: DungeonSnapshot): string {
+    const selected = item.type === snapshot.selectedDefense ? ' is-selected' : '';
+
+    return `
+      <button
+        class="defense-button${selected}"
+        data-defense="${item.type}"
+        ${item.disabled ? 'disabled' : ''}
+      >
+        <span class="defense-button__swatch" style="--swatch:${item.color}"></span>
+        <span>
+          <strong>${escapeHtml(item.name)}</strong>
+          <small>${escapeHtml(item.description)}</small>
+        </span>
+        <em>${item.cost} or</em>
+      </button>
+    `;
+  }
+
   private renderNamedMinions(snapshot: DungeonSnapshot): string {
     if (snapshot.namedMinions.length === 0) {
       return '';
     }
 
     return `
-      <div class="panel-section">
+      <div class="named-minions">
         <p class="section-title">Sbires notables</p>
         <ul class="minion-list">
           ${snapshot.namedMinions
@@ -172,6 +221,10 @@ export class GameDomUi {
     return `
       <div class="panel-section">
         <p class="section-title">Vague en cours</p>
+        <div class="report__grid">
+          <div class="report__metric"><span>Plan</span><strong>${escapeHtml(snapshot.expeditionLabel)}</strong></div>
+          <div class="report__metric"><span>Objectif</span><strong>${escapeHtml(snapshot.expeditionPrimaryGoal)}</strong></div>
+        </div>
         <div class="wave-controls">
           <button class="control-button" data-action="toggle-pause">${snapshot.paused ? 'Reprendre' : 'Pause'}</button>
           ${[1, 2, 3]
@@ -277,18 +330,35 @@ export class GameDomUi {
     }
 
     return `
-      <div class="report">
-        <h3>Rapport de la vague ${report.wave}</h3>
-        <div class="report-budget">
-          <p><span>Recompense de la vague</span><strong>+${report.goldAwarded} or</strong></p>
-          <p><span>Or recupere (demontage des pieges)</span><strong>+${report.trapRefundGold} or</strong></p>
-          ${report.treasurePenaltyGold > 0 ? `<p><span>Tresor vole (remplacement)</span><strong>-${report.treasurePenaltyGold} or</strong></p>` : ''}
-          <p class="report-budget__total"><span>Budget pour la prochaine preparation</span><strong>${report.preparationBudget} or</strong></p>
-        </div>
-        ${this.renderTextList('Ce dont on se souviendra', report.storyLines)}
-        <div class="actions">
-          <button class="button" data-action="continue-build">Preparer la suite</button>
-        </div>
+      <div class="debrief-overlay">
+        <section class="debrief">
+          <header class="debrief__header">
+            <div>
+              <p class="section-title">Debriefing de vague</p>
+              <h2>Vague ${report.wave}: ${report.cleared ? 'le donjon tient' : 'le boss tombe'}</h2>
+              <p>${escapeHtml(report.verdict)}</p>
+            </div>
+            <div class="debrief__metrics">
+              <span>${report.adventurersKilled} morts</span>
+              <span>${report.adventurersEscaped} retours</span>
+              <span>${report.durationSeconds}s</span>
+            </div>
+          </header>
+
+          <div class="debrief__grid">
+            ${this.renderDebriefSection('Resume', report.storyLines)}
+            ${this.renderParticipantSection(snapshot)}
+            ${this.renderDebriefSection('Ce qu ils ont appris', report.learnedLines)}
+            ${this.renderDebriefSection('Ce qu ils ont partage', report.sharedLines)}
+            ${this.renderDebriefSection('Gains et pertes', report.gainsLosses)}
+            ${this.renderDebriefSection('Ce que la guilde change', report.guildChanges)}
+            ${this.renderDebriefSection('Economie du donjon', report.economyLines)}
+          </div>
+
+          <div class="debrief__actions">
+            <button class="button" data-action="continue-build">Preparer la suite</button>
+          </div>
+        </section>
       </div>
     `;
   }
@@ -301,17 +371,68 @@ export class GameDomUi {
     }
 
     return `
-      <div class="report">
-        <h3>Le boss est tombe</h3>
-        <div class="report-budget">
-          <p><span>Vagues repoussees cette fois</span><strong>${snapshot.survivedWaves}</strong></p>
-          <p class="report-budget__total"><span>Record local</span><strong>${this.bestWave}</strong></p>
-        </div>
-        ${this.renderTextList('Ce dont on se souviendra', report.storyLines)}
-        <div class="actions">
-          <button class="button" data-action="restart">Rebatir sur les cendres</button>
-        </div>
+      <div class="debrief-overlay">
+        <section class="debrief debrief--defeat">
+          <header class="debrief__header">
+            <div>
+              <p class="section-title">Rapport final</p>
+              <h2>Le boss est tombe</h2>
+              <p>${escapeHtml(report.verdict)}</p>
+            </div>
+            <div class="debrief__metrics">
+              <span>${snapshot.survivedWaves} vagues</span>
+              <span>record ${this.bestWave}</span>
+              <span>${report.durationSeconds}s</span>
+            </div>
+          </header>
+
+          <div class="debrief__grid">
+            ${this.renderDebriefSection('Resume', report.storyLines)}
+            ${this.renderParticipantSection(snapshot)}
+            ${this.renderDebriefSection('Ce qu ils ont appris', report.learnedLines)}
+            ${this.renderDebriefSection('Ce que la guilde retient', report.sharedLines)}
+            ${this.renderDebriefSection('Gains et pertes', report.gainsLosses)}
+            ${this.renderDebriefSection('Economie du donjon', report.economyLines)}
+          </div>
+
+          <div class="debrief__actions">
+            <button class="button" data-action="restart">Rebatir sur les cendres</button>
+          </div>
+        </section>
       </div>
+    `;
+  }
+
+  private renderParticipantSection(snapshot: DungeonSnapshot): string {
+    const participants = snapshot.report?.participants ?? [];
+
+    return `
+      <section class="debrief-section debrief-section--wide">
+        <p class="section-title">Participants</p>
+        <div class="participant-list">
+          ${participants
+            .map(
+              (participant) => `
+                <div class="participant">
+                  <strong>${escapeHtml(participant.name)}</strong>
+                  <span>${escapeHtml(roleLabel(participant.role))} niv. ${participant.level}</span>
+                  <em>${escapeHtml(participant.status)}</em>
+                  <small>${escapeHtml(participant.note)}</small>
+                </div>
+              `,
+            )
+            .join('')}
+        </div>
+      </section>
+    `;
+  }
+
+  private renderDebriefSection(title: string, entries: string[]): string {
+    return `
+      <section class="debrief-section">
+        <p class="section-title">${escapeHtml(title)}</p>
+        <ul>${entries.map((entry) => `<li>${escapeHtml(entry)}</li>`).join('')}</ul>
+      </section>
     `;
   }
 
@@ -417,6 +538,16 @@ export class GameDomUi {
       });
     });
 
+    this.root.querySelectorAll<HTMLButtonElement>('[data-construction]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const constructionType = button.dataset.construction as ConstructionTool | undefined;
+
+        if (constructionType) {
+          emitUiAction({ type: 'select-construction', constructionType });
+        }
+      });
+    });
+
     this.root.querySelectorAll<HTMLButtonElement>('[data-ability]').forEach((button) => {
       button.addEventListener('click', () => {
         const abilityType = button.dataset.ability as BossAbilityType | undefined;
@@ -446,4 +577,19 @@ function escapeHtml(value: string): string {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
+}
+
+function roleLabel(role: string): string {
+  switch (role) {
+    case 'warrior':
+      return 'Guerrier';
+    case 'thief':
+      return 'Voleur';
+    case 'mage':
+      return 'Mage';
+    case 'healer':
+      return 'Soigneur';
+    default:
+      return role;
+  }
 }

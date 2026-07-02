@@ -116,13 +116,15 @@ button {
 }
 
 .button:hover:not(:disabled),
-.defense-button:hover:not(:disabled) {
+.defense-button:hover:not(:disabled),
+.tool-button:hover:not(:disabled) {
   border-color: rgba(225, 179, 90, 0.8);
   filter: brightness(1.08);
 }
 
 .button:disabled,
-.defense-button:disabled {
+.defense-button:disabled,
+.tool-button:disabled {
   cursor: not-allowed;
   opacity: 0.52;
 }
@@ -200,6 +202,45 @@ button {
 .defense-list {
   display: grid;
   gap: 7px;
+}
+
+.tool-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.tool-button {
+  display: grid;
+  min-width: 0;
+  min-height: 58px;
+  align-content: center;
+  gap: 3px;
+  border: 1px solid rgba(244, 234, 210, 0.13);
+  border-radius: 8px;
+  padding: 7px;
+  color: #f4ead2;
+  background: rgba(38, 61, 55, 0.24);
+  cursor: pointer;
+  text-align: left;
+}
+
+.tool-button.is-selected {
+  border-color: #79c7a1;
+  background: rgba(121, 199, 161, 0.16);
+}
+
+.tool-button strong {
+  overflow-wrap: anywhere;
+  color: #fff4d8;
+  font-size: 0.78rem;
+  line-height: 1.1;
+}
+
+.tool-button small {
+  color: #aa9d86;
+  font-size: 0.66rem;
+  line-height: 1.12;
 }
 
 .defense-button {
@@ -372,6 +413,7 @@ button {
 .report__metric strong {
   display: block;
   margin-top: 2px;
+  overflow-wrap: anywhere;
   color: #fff4d8;
 }
 
@@ -455,6 +497,17 @@ button {
   background: rgba(225, 179, 90, 0.1);
 }
 
+.message--ok {
+  border-left-color: #79c7a1;
+  color: #d8ead9;
+  background: rgba(121, 199, 161, 0.1);
+}
+
+.named-minions {
+  display: grid;
+  gap: 6px;
+}
+
 .minion-list {
   display: grid;
   gap: 5px;
@@ -497,6 +550,153 @@ button {
   font-weight: 700;
 }
 
+.debrief-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  pointer-events: auto;
+  background: rgba(10, 9, 12, 0.72);
+}
+
+.debrief {
+  display: grid;
+  width: min(900px, 100%);
+  max-height: 94%;
+  gap: 12px;
+  overflow: auto;
+  border: 1px solid rgba(244, 234, 210, 0.18);
+  border-radius: 8px;
+  padding: 16px;
+  background: rgba(20, 17, 21, 0.98);
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.52);
+  scrollbar-color: #6e232c #171318;
+}
+
+.debrief__header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: start;
+  border-bottom: 1px solid rgba(244, 234, 210, 0.12);
+  padding-bottom: 12px;
+}
+
+.debrief__header h2 {
+  margin: 4px 0 6px;
+  color: #fff4d8;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1.55rem;
+  line-height: 1.05;
+}
+
+.debrief__header p {
+  margin: 0;
+  color: #cfc0a0;
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+
+.debrief__metrics {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: end;
+  gap: 6px;
+}
+
+.debrief__metrics span {
+  border: 1px solid rgba(244, 234, 210, 0.14);
+  border-radius: 999px;
+  padding: 5px 8px;
+  color: #f6d88a;
+  background: rgba(225, 179, 90, 0.08);
+  font-size: 0.75rem;
+  font-weight: 850;
+}
+
+.debrief__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.debrief-section {
+  min-width: 0;
+  border: 1px solid rgba(244, 234, 210, 0.11);
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(244, 234, 210, 0.045);
+}
+
+.debrief-section--wide {
+  grid-column: 1 / -1;
+}
+
+.debrief-section ul {
+  display: grid;
+  gap: 5px;
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.debrief-section li {
+  color: #cfc0a0;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.participant-list {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.participant {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  border-left: 3px solid #8f2631;
+  padding: 7px 8px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.participant strong,
+.participant span,
+.participant small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.participant strong {
+  color: #fff4d8;
+  font-size: 0.82rem;
+  line-height: 1.14;
+}
+
+.participant span,
+.participant small {
+  color: #aa9d86;
+  font-size: 0.7rem;
+  line-height: 1.2;
+}
+
+.participant em {
+  color: #f6d88a;
+  font-size: 0.72rem;
+  font-style: normal;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.debrief__actions {
+  display: flex;
+  justify-content: end;
+  border-top: 1px solid rgba(244, 234, 210, 0.12);
+  padding-top: 10px;
+}
+
 @media (max-width: 760px), (max-height: 560px) {
   #app {
     width: 100vw;
@@ -516,5 +716,22 @@ button {
     left: 10px;
     width: auto;
     max-height: 45vh;
+  }
+
+  .tool-list,
+  .debrief__header,
+  .debrief__grid,
+  .participant-list {
+    grid-template-columns: 1fr;
+  }
+
+  .debrief {
+    max-height: 96%;
+    padding: 12px;
+  }
+
+  .debrief__metrics,
+  .debrief__actions {
+    justify-content: start;
   }
 }

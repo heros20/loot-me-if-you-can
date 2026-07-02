@@ -1,30 +1,27 @@
-import { ENTRY_CELL, cellKey } from '../game/constants';
+import { ENTRY_CELL, PARTY_SIZE, cellKey } from '../game/constants';
 import type { AdventurerEntity, AdventurerProfile, AdventurerRole, AdaptationMemory } from '../game/types';
 import { getAdventurerDefinition } from '../entities/definitions';
 
-const ROLE_CYCLE: AdventurerRole[] = ['warrior', 'thief', 'mage', 'warrior', 'healer', 'mage'];
+const ADAPTIVE_ROLE_ORDER: AdventurerRole[] = ['warrior', 'thief', 'mage', 'healer'];
+const BASE_ROLE_SCORE: Record<AdventurerRole, number> = {
+  warrior: 1.34,
+  thief: 0.96,
+  mage: 1.02,
+  healer: 0.88,
+};
 
 export function buildWaveRoster(wave: number, memory: AdaptationMemory): AdventurerRole[] {
-  const roles: AdventurerRole[] = ['warrior', 'thief', 'mage'];
+  const roles: AdventurerRole[] = [];
 
-  if (wave >= 2) {
-    roles.push('warrior');
-  }
+  while (roles.length < PARTY_SIZE) {
+    const nextRole = ADAPTIVE_ROLE_ORDER
+      .map((role) => ({
+        role,
+        score: roleScore(role, wave, memory, roles),
+      }))
+      .sort((a, b) => b.score - a.score || ADAPTIVE_ROLE_ORDER.indexOf(a.role) - ADAPTIVE_ROLE_ORDER.indexOf(b.role))[0]?.role ?? 'warrior';
 
-  if (wave >= 3) {
-    roles.push('healer');
-  }
-
-  addRoles(roles, 'thief', memory.rolePressure.thief);
-  addRoles(roles, 'healer', memory.rolePressure.healer);
-  addRoles(roles, 'warrior', memory.rolePressure.warrior);
-
-  const targetCount = Math.min(18, 3 + wave + Math.floor(wave / 2));
-  let cycleIndex = wave % ROLE_CYCLE.length;
-
-  while (roles.length < targetCount) {
-    roles.push(ROLE_CYCLE[cycleIndex] ?? 'warrior');
-    cycleIndex = (cycleIndex + 1) % ROLE_CYCLE.length;
+    roles.push(nextRole);
   }
 
   return roles;
@@ -85,10 +82,22 @@ export function createAdventurer(profile: AdventurerProfile, id: string, wave: n
   };
 }
 
-function addRoles(roles: AdventurerRole[], role: AdventurerRole, pressure: number): void {
-  const count = Math.min(4, pressure);
+function roleScore(
+  role: AdventurerRole,
+  wave: number,
+  memory: AdaptationMemory,
+  currentRoles: AdventurerRole[],
+): number {
+  const currentCount = currentRoles.filter((candidate) => candidate === role).length;
 
-  for (let i = 0; i < count; i += 1) {
-    roles.push(role);
+  if (currentCount >= 2) {
+    return -100;
   }
+
+  const pressure = memory.rolePressure[role] ?? 0;
+  const waveBias = ((wave + ADAPTIVE_ROLE_ORDER.indexOf(role)) % ADAPTIVE_ROLE_ORDER.length) * 0.045;
+  const trapLearningBias = role === 'thief' ? Math.max(0, memory.trapAvoidance - 0.35) * 0.36 : 0;
+  const duplicatePenalty = currentCount * 1.08 + Math.max(0, currentCount - 1) * 0.68;
+
+  return BASE_ROLE_SCORE[role] + pressure * 1.22 + waveBias + trapLearningBias - duplicatePenalty;
 }

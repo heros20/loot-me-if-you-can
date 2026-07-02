@@ -2,9 +2,12 @@ import type {
   AdventurerRole,
   AdventurerTrait,
   BossAbilityType,
+  ConstructionTool,
   DefenseKind,
   DefenseType,
+  DungeonValidation,
   GamePhase,
+  GridCell,
   TreasureStatus,
   WaveReport,
 } from './types';
@@ -16,6 +19,13 @@ export interface DefenseUiItem {
   description: string;
   cost: number;
   color: string;
+  disabled: boolean;
+}
+
+export interface ConstructionUiItem {
+  type: ConstructionTool;
+  name: string;
+  description: string;
   disabled: boolean;
 }
 
@@ -71,12 +81,18 @@ export interface DungeonSnapshot {
   wave: number;
   gold: number;
   selectedDefense: DefenseType | null;
+  selectedConstructionTool: ConstructionTool | null;
   bossHp: number;
   bossMaxHp: number;
   message: string;
   dungeonReputation: number;
   dungeonReputationTitle: string;
+  constructionTools: ConstructionUiItem[];
   availableDefenses: DefenseUiItem[];
+  wallCells: GridCell[];
+  dungeonValidation: DungeonValidation;
+  expeditionLabel: string;
+  expeditionPrimaryGoal: string;
   adventurersByRole: CountItem[];
   defensesByKind: CountItem[];
   activeAdventurerNames: string[];
@@ -101,6 +117,7 @@ export type UiSnapshot = MenuSnapshot | DungeonSnapshot;
 
 export type UiAction =
   | { type: 'start-game' }
+  | { type: 'select-construction'; constructionType: ConstructionTool }
   | { type: 'select-defense'; defenseType: DefenseType }
   | { type: 'launch-wave' }
   | { type: 'continue-build' }

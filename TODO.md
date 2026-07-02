@@ -10,7 +10,7 @@
 
 ## Gameplay
 
-- Add rooms and doors instead of a fixed wall layout.
+- Add doors, room ownership, and named room behaviors on top of the new basic wall/floor/room construction.
 - Add trap upgrades between waves.
 - Add more boss abilities and an ability upgrade path funded by infamy.
 - Add adventurer equipment traits after repeated deaths.
@@ -43,3 +43,13 @@
 - Tavern rumors influencing future waves.
 - Pause and speed controls.
 - Best wave saved in local storage.
+
+## Done in current studio pass
+
+- Fixed every expedition at exactly 5 adventurers.
+- Added adaptive class composition without increasing party size.
+- Enlarged the dungeon and made walls editable during build phase.
+- Added wall, floor/path, and simple room construction tools.
+- Added route validation before wall placement and wave launch.
+- Reorganized build UI by construction, traps, monsters, boss, and expedition.
+- Added a full post-wave debrief screen with participants, learning, rumors, adaptation, and economy.

@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased - Direction studio gameplay
+
+- Fixed expedition size at exactly 5 adventurers via the new `PARTY_SIZE` constant; difficulty now shifts through class composition, levels, memory, and tactics instead of larger waves.
+- Reworked class composition into a fixed-size adaptive roster: traps push the guild toward thieves, long fights toward healers, lethal minions toward warriors, boss pressure toward tanks/healers, and treasure theft toward more aggressive boss-capable teams.
+- Enlarged the dungeon grid from 12x9 to 18x12 and moved wall layout into mutable simulation state.
+- Added build-phase construction tools for walls, floor/path tiles, and simple 3x3 room carving.
+- Added dungeon route validation: entry, treasure, and boss must remain connected; wall placement is rejected and wave launch disabled when the dungeon would become impossible.
+- Reorganized build UI into Construction, Traps, Monsters, Boss, and Expedition sections.
+- Replaced the small sidebar report with a full debrief overlay covering summary, all 5 participants, learned dangers, shared rumors, gains/losses, guild adaptation, and dungeon economy.
+- Added smoke assertions for fixed 5-adventurer reports.
+
 ## 0.5.0 - Le boss devient un vrai boss
 
 - Added active boss abilities usable by the player during waves: `Onde de choc` (area damage + stun), `Rugissement` (fear that sends nearby heroes running to the exit), and `Renforts osseux` (summons temporary skeletons near the boss for the current wave).

@@ -1,13 +1,14 @@
 import {
   BOSS_CELL,
   ENTRY_CELL,
+  PARTY_SIZE,
   STARTING_GOLD,
   TREASURE_CELL,
+  WALL_CELLS,
   cellKey,
   isInsideGrid,
   isProtectedCell,
   isSameCell,
-  isWallCell,
 } from './constants';
 import type {
   AdventurerDefinition,
@@ -15,12 +16,16 @@ import type {
   AdventurerRole,
   BossAbilityType,
   BossEntity,
+  ConstructionTool,
   DefenseEntity,
   DefenseStatsByType,
   DefenseType,
+  DungeonValidation,
   EffectStats,
+  ExpeditionParticipantReport,
   GameState,
   GridCell,
+  PartyPlan,
   ReportEntry,
   TreasureState,
   WaveReport,
@@ -43,7 +48,7 @@ import {
   getDefenseDefinition,
 } from '../entities/definitions';
 import { buildWaveRoster, createAdventurer } from '../systems/waveDirector';
-import { findPath } from '../systems/pathfinding';
+import { findPath, hasWalkablePath } from '../systems/pathfinding';
 import {
   activateProfileForExpedition,
   addChronicle,
@@ -95,6 +100,24 @@ const BOSS_TEMPLATE: Omit<BossEntity, 'hp' | 'attackTimerMs' | 'abilities'> = {
   attackCooldownMs: 760,
   targetAdventurerId: null,
 };
+
+const CONSTRUCTION_TOOLS: Array<{ type: ConstructionTool; name: string; description: string }> = [
+  {
+    type: 'wall',
+    name: 'Mur',
+    description: 'Bloque les aventuriers si le donjon reste praticable.',
+  },
+  {
+    type: 'floor',
+    name: 'Sol / chemin',
+    description: 'Ouvre une dalle et restaure une route.',
+  },
+  {
+    type: 'room',
+    name: 'Salle',
+    description: 'Creuse une petite zone de 3 par 3 dalles.',
+  },
+];
 
 export class DungeonSimulation {
   private state: GameState;
@@ -247,7 +270,15 @@ export class DungeonSimulation {
     this.state.inspectedAdventurerId = null;
   }
 
+  selectConstructionTool(type: ConstructionTool): void {
+    this.state.selectedConstructionTool = type;
+    this.state.selectedDefense = null;
+    const definition = CONSTRUCTION_TOOLS.find((tool) => tool.type === type);
+    this.state.message = `${definition?.name ?? 'Construction'} selectionne. Le donjon commence a ressembler a une mauvaise idee structuree.`;
+  }
+
   selectDefense(type: DefenseType): void {
+    this.state.selectedConstructionTool = null;
     this.state.selectedDefense = type;
     this.state.message = `${getDefenseDefinition(type).name} selectionne. La decoration devient enfin hostile.`;
   }
@@ -258,6 +289,11 @@ export class DungeonSimulation {
       return;
     }
 
+    if (this.state.selectedConstructionTool) {
+      this.placeConstructionTool(cell, this.state.selectedConstructionTool);
+      return;
+    }
+
     const selected = this.state.selectedDefense;
 
     if (!selected) {
@@ -265,7 +301,7 @@ export class DungeonSimulation {
       return;
     }
 
-    if (!isInsideGrid(cell) || isWallCell(cell) || isProtectedCell(cell)) {
+    if (!isInsideGrid(cell) || this.isWallCell(cell) || isProtectedCell(cell)) {
       this.state.message = 'Cette dalle refuse ton autorite. Tres insolent.';
       return;
     }
@@ -288,6 +324,91 @@ export class DungeonSimulation {
     this.state.message = definition.kind === 'minion'
       ? `${entity.name} le ${definition.name} prend son poste. Il a deja des exigences.`
       : `${definition.name} pose. C'est juridiquement discutable, donc parfait.`;
+  }
+
+  private placeConstructionTool(cell: GridCell, tool: ConstructionTool): void {
+    if (!isInsideGrid(cell) || isProtectedCell(cell)) {
+      this.state.message = 'Cette dalle est structurellement syndiquee: entree, tresor et boss restent intouchables.';
+      return;
+    }
+
+    if (tool === 'wall') {
+      this.placeWall(cell);
+      return;
+    }
+
+    if (tool === 'floor') {
+      this.placeFloor(cell);
+      return;
+    }
+
+    this.carveRoom(cell);
+  }
+
+  private placeWall(cell: GridCell): void {
+    if (this.isWallCell(cell)) {
+      this.state.message = 'Il y a deja un mur ici. Meme le beton a ses limites narratives.';
+      return;
+    }
+
+    if (this.state.defenses.some((defense) => defense.alive && isSameCell(defense.cell, cell))) {
+      this.state.message = 'Impossible de murer une defense en poste. Les RH du donjon protesteraient.';
+      return;
+    }
+
+    const previousWallKeys = this.state.wallKeys;
+    const nextWallKeys = new Set(previousWallKeys);
+    nextWallKeys.add(cellKey(cell));
+    this.state.wallKeys = sortWallKeys([...nextWallKeys]);
+
+    const validation = this.validateDungeonLayout();
+
+    if (!validation.valid) {
+      this.state.wallKeys = previousWallKeys;
+      this.state.message = validation.reason ?? 'Ce mur condamnerait le donjon. Les aventuriers doivent encore pouvoir se perdre dedans.';
+      return;
+    }
+
+    this.state.message = 'Mur ajoute. Les architectes hostiles applaudissent en silence.';
+  }
+
+  private placeFloor(cell: GridCell): void {
+    if (!this.isWallCell(cell)) {
+      this.state.message = 'Cette dalle est deja praticable. On appelle ca du sol, concept audacieux.';
+      return;
+    }
+
+    this.state.wallKeys = this.state.wallKeys.filter((key) => key !== cellKey(cell));
+    this.state.message = 'Chemin ouvert. Les aventuriers auront moins d excuses et plus de problemes.';
+  }
+
+  private carveRoom(center: GridCell): void {
+    const nextWallKeys = new Set(this.state.wallKeys);
+    let cleared = 0;
+
+    for (let y = center.y - 1; y <= center.y + 1; y += 1) {
+      for (let x = center.x - 1; x <= center.x + 1; x += 1) {
+        const cell = { x, y };
+
+        if (!isInsideGrid(cell) || isProtectedCell(cell)) {
+          continue;
+        }
+
+        const key = cellKey(cell);
+
+        if (nextWallKeys.delete(key)) {
+          cleared += 1;
+        }
+      }
+    }
+
+    if (cleared === 0) {
+      this.state.message = 'La salle est deja ouverte. Luxueux, pour une ruine.';
+      return;
+    }
+
+    this.state.wallKeys = sortWallKeys([...nextWallKeys]);
+    this.state.message = `Salle creusee: ${cleared} mur${cleared > 1 ? 's' : ''} retire${cleared > 1 ? 's' : ''}.`;
   }
 
   private createDefenseEntity(type: DefenseType, cell: GridCell, summoned: boolean): DefenseEntity {
@@ -334,7 +455,7 @@ export class DungeonSimulation {
 
           if (
             !isInsideGrid(cell) ||
-            isWallCell(cell) ||
+            this.isWallCell(cell) ||
             isProtectedCell(cell) ||
             this.state.defenses.some((defense) => defense.alive && isSameCell(defense.cell, cell))
           ) {
@@ -355,6 +476,13 @@ export class DungeonSimulation {
       return;
     }
 
+    const validation = this.validateDungeonLayout();
+
+    if (!validation.valid) {
+      this.state.message = validation.reason ?? 'Le donjon est invalide: la vague refuse poliment de se perdre pour rien.';
+      return;
+    }
+
     advanceWorldDay(this.state.world, 3 + this.state.wave);
     const roster = buildWaveRoster(this.state.wave, this.state.memory);
     const profiles = selectProfilesForWave(roster, this.state.world, this.state.wave);
@@ -365,6 +493,7 @@ export class DungeonSimulation {
       elapsedMs: 0,
       spawnTimerMs: 0,
       spawnQueue: [...profiles],
+      partyProfiles: [...profiles],
       spawned: 0,
       partyPlan: createPartyPlan(this.state.wave, this.state.world.dungeonReputation.value, lastRumor?.effect ?? null),
       stats: createEmptyWaveStats(),
@@ -378,7 +507,7 @@ export class DungeonSimulation {
     this.state.defenses.forEach((defense) => {
       defense.cooldownRemainingMs = 0;
     });
-    this.state.message = `${this.state.runtime.partyPlan.label}: les heros arrivent avec une strategie, ce qui est nouveau et inquietant.`;
+    this.state.message = `${this.state.runtime.partyPlan.label}: ${PARTY_SIZE} heros arrivent avec une strategie, ce qui est nouveau et inquietant.`;
   }
 
   continueBuild(): void {
@@ -411,15 +540,22 @@ export class DungeonSimulation {
       ...this.state.adventurers.map((adventurer) => adventurer.role),
       ...previewRoster,
     ];
+    const dungeonValidation = this.validateDungeonLayout();
+    const expeditionPlan = this.previewPartyPlan();
 
     return {
       phase: this.state.phase === 'menu' ? 'build' : this.state.phase,
       wave: this.state.wave,
       gold: this.state.gold,
       selectedDefense: this.state.selectedDefense,
+      selectedConstructionTool: this.state.selectedConstructionTool,
       bossHp: Math.ceil(this.state.boss.hp),
       bossMaxHp: this.state.boss.maxHp,
       message: this.state.message,
+      constructionTools: CONSTRUCTION_TOOLS.map((tool) => ({
+        ...tool,
+        disabled: this.state.phase !== 'build',
+      })),
       availableDefenses: DEFENSE_ORDER.map((type) => {
         const definition = getDefenseDefinition(type);
         return {
@@ -432,11 +568,15 @@ export class DungeonSimulation {
           disabled: this.state.phase !== 'build' || this.state.gold < definition.cost,
         };
       }),
+      wallCells: this.wallCells(),
+      dungeonValidation,
+      expeditionLabel: expeditionPlan.label,
+      expeditionPrimaryGoal: expeditionPlan.primaryGoal === 'boss' ? 'Boss' : 'Tresor',
       adventurersByRole: countRoles(allRoles),
       defensesByKind: this.countDefensesByKind(),
       liveAdventurers: this.state.adventurers.length,
       nextWaveSize: previewRoster.length,
-      canLaunchWave: this.state.phase === 'build',
+      canLaunchWave: this.state.phase === 'build' && dungeonValidation.valid,
       report: this.state.report,
       survivedWaves: Math.max(0, this.state.wave - 1),
       dungeonReputation: this.state.world.dungeonReputation.value,
@@ -455,14 +595,58 @@ export class DungeonSimulation {
     };
   }
 
-  getRenderState(): Pick<GameState, 'defenses' | 'adventurers' | 'boss' | 'phase' | 'selectedDefense' | 'treasure'> {
+  getRenderState(): Pick<GameState, 'defenses' | 'adventurers' | 'boss' | 'phase' | 'selectedDefense' | 'selectedConstructionTool' | 'treasure' | 'wallKeys'> {
     return {
       defenses: this.state.defenses,
       adventurers: this.state.adventurers,
       boss: this.state.boss,
       phase: this.state.phase,
       selectedDefense: this.state.selectedDefense,
+      selectedConstructionTool: this.state.selectedConstructionTool,
       treasure: this.state.treasure,
+      wallKeys: this.state.wallKeys,
+    };
+  }
+
+  private previewPartyPlan(): PartyPlan {
+    if (this.state.phase === 'wave' && this.state.runtime) {
+      return this.state.runtime.partyPlan;
+    }
+
+    const lastRumor = this.state.world.rumors[this.state.world.rumors.length - 1] ?? null;
+    return createPartyPlan(this.state.wave, this.state.world.dungeonReputation.value, lastRumor?.effect ?? null);
+  }
+
+  private isWallCell(cell: GridCell): boolean {
+    return this.state.wallKeys.includes(cellKey(cell));
+  }
+
+  private wallKeySet(): Set<string> {
+    return new Set(this.state.wallKeys);
+  }
+
+  private wallCells(): GridCell[] {
+    return this.state.wallKeys.map((key) => {
+      const [x, y] = key.split(',').map(Number);
+      return { x, y };
+    });
+  }
+
+  private validateDungeonLayout(): DungeonValidation {
+    const blockedCellKeys = this.wallKeySet();
+    const entryToTreasure = hasWalkablePath(ENTRY_CELL, TREASURE_CELL, blockedCellKeys);
+    const treasureToBoss = hasWalkablePath(TREASURE_CELL, BOSS_CELL, blockedCellKeys);
+    const valid = entryToTreasure && treasureToBoss;
+
+    return {
+      valid,
+      entryToTreasure,
+      treasureToBoss,
+      reason: valid
+        ? null
+        : !entryToTreasure
+          ? 'Chemin bloque: les aventuriers ne peuvent plus rejoindre le tresor depuis l entree.'
+          : 'Chemin bloque: le tresor et la salle du boss ne sont plus relies.',
     };
   }
 
@@ -553,6 +737,8 @@ export class DungeonSimulation {
       wave: 1,
       gold: STARTING_GOLD,
       selectedDefense: 'spikeTrap',
+      selectedConstructionTool: null,
+      wallKeys: sortWallKeys(WALL_CELLS.map((cell) => cellKey(cell))),
       defenses: [],
       adventurers: [],
       boss: {
@@ -771,6 +957,7 @@ export class DungeonSimulation {
         trapAvoidance: this.state.memory.trapAvoidance * personalityTrapAvoidance(adventurer),
         trapDangerByCell: this.state.memory.trapDangerByCell,
         knownTrapCells: this.getKnownTrapCells(),
+        blockedCellKeys: this.wallKeySet(),
       });
     }
 
@@ -1158,10 +1345,21 @@ export class DungeonSimulation {
   ): WaveReport {
     const trapHighlights = statsToReportEntries(runtime.stats.trapStats, 'trap');
     const minionHighlights = statsToReportEntries(runtime.stats.minionStats, 'minion');
+    const participants = this.buildParticipantReports(runtime, cleared);
+    const storyLines = buildWaveStoryLines({
+      cleared,
+      wave,
+      stats: runtime.stats,
+      trapHighlights,
+      minionHighlights,
+      dungeonTitle: this.state.world.dungeonReputation.title,
+      reputationDelta,
+    });
 
     return {
       wave,
       cleared,
+      partyLabel: runtime.partyPlan.label,
       durationSeconds: Math.round(runtime.elapsedMs / 1000),
       adventurersKilled: runtime.stats.adventurersKilled,
       adventurersEscaped: runtime.stats.adventurersEscaped,
@@ -1175,15 +1373,13 @@ export class DungeonSimulation {
       reputationDelta,
       trapHighlights,
       minionHighlights,
-      storyLines: buildWaveStoryLines({
-        cleared,
-        wave,
-        stats: runtime.stats,
-        trapHighlights,
-        minionHighlights,
-        dungeonTitle: this.state.world.dungeonReputation.title,
-        reputationDelta,
-      }),
+      storyLines,
+      learnedLines: this.buildLearnedLines(runtime, trapHighlights, minionHighlights),
+      sharedLines: this.buildSharedLines(runtime, storyLines),
+      gainsLosses: this.buildGainsLosses(runtime, participants),
+      guildChanges: this.buildGuildChanges(wave, adaptationNotes),
+      economyLines: this.buildEconomyLines(goldAwarded, trapRefundGold, treasurePenaltyGold, preparationBudget),
+      participants,
       notableAdventurers: buildNotableAdventurers(runtime.stats),
       deaths: runtime.stats.deaths.slice(-5).map((record) => record.note),
       survivors: runtime.stats.survivors.slice(-5).map((record) => record.note),
@@ -1192,6 +1388,148 @@ export class DungeonSimulation {
         ? 'Tous les aventuriers sont morts. Ils reviendront, parce que les heros confondent obstination et scenario.'
         : 'Le boss est mort. Le donjon passe sous gestion heroique, donc probablement en open space.',
     };
+  }
+
+  private buildParticipantReports(runtime: WaveRuntime, cleared: boolean): ExpeditionParticipantReport[] {
+    const deathByProfile = new Map(runtime.stats.deaths.map((record) => [record.profileId, record]));
+    const survivorByProfile = new Map(runtime.stats.survivors.map((record) => [record.profileId, record]));
+
+    return runtime.partyProfiles.map((profile) => {
+      const death = deathByProfile.get(profile.id);
+
+      if (death) {
+        return {
+          name: profile.name,
+          role: profile.role,
+          level: profile.level,
+          status: 'mort',
+          note: death.note,
+        };
+      }
+
+      const survivor = survivorByProfile.get(profile.id);
+
+      if (survivor) {
+        const currentProfile = this.state.world.profiles[profile.id] ?? profile;
+        const injured = currentProfile.lifeStatus === 'injured';
+        return {
+          name: currentProfile.name,
+          role: currentProfile.role,
+          level: currentProfile.level,
+          status: injured ? 'blesse' : cleared ? 'fuite' : 'survivant',
+          note: survivor.note,
+        };
+      }
+
+      return {
+        name: profile.name,
+        role: profile.role,
+        level: profile.level,
+        status: 'disparu',
+        note: 'Aucun temoin fiable ne sait ou ce dossier s est termine.',
+      };
+    });
+  }
+
+  private buildLearnedLines(
+    runtime: WaveRuntime,
+    trapHighlights: ReportEntry[],
+    minionHighlights: ReportEntry[],
+  ): string[] {
+    const lines: string[] = [];
+    const bestTrap = trapHighlights[0];
+    const bestMinion = minionHighlights[0];
+    const bossKills = runtime.stats.deaths.filter((record) => record.note.includes('entretien direct')).length;
+
+    if (bestTrap) {
+      lines.push(`${bestTrap.label}: ${bestTrap.damage} degats observes, ${bestTrap.kills} mort${bestTrap.kills > 1 ? 's' : ''}. Les voleurs marquent ces dalles.`);
+    } else {
+      lines.push('Aucun piege n a domine le rapport. La guilde cherchera le danger ailleurs.');
+    }
+
+    if (bestMinion) {
+      lines.push(`${bestMinion.label}: menace prioritaire, ${bestMinion.damage} degats et ${bestMinion.kills} elimination${bestMinion.kills > 1 ? 's' : ''}.`);
+    } else {
+      lines.push('Les monstres n ont pas signe de massacre clair, mais leurs positions sont notees.');
+    }
+
+    if (runtime.stats.bossDamageTaken > 0 || bossKills > 0) {
+      lines.push(`Le boss est observe: ${Math.round(runtime.stats.bossDamageTaken)} degats infliges, ${bossKills} mort${bossKills > 1 ? 's' : ''} au contact.`);
+    } else {
+      lines.push('La salle du boss reste surtout une rumeur couteuse.');
+    }
+
+    lines.push(
+      runtime.stats.treasureStolen
+        ? 'Le chemin vers le tresor est confirme et vendable en taverne.'
+        : 'Le tresor n est pas sorti: la route existe, mais le prix a payer reste dissuasif.',
+    );
+
+    return lines;
+  }
+
+  private buildSharedLines(runtime: WaveRuntime, storyLines: string[]): string[] {
+    const survivorNames = runtime.stats.survivors.map((record) => record.adventurerName);
+    const lines: string[] = [];
+
+    if (survivorNames.length > 0) {
+      lines.push(`${survivorNames.slice(0, 3).join(', ')} transmet${survivorNames.length > 1 ? 'tent' : ''} cartes, blessures et exagerations a la guilde.`);
+    } else {
+      lines.push('Aucun survivant officiel, mais les effets personnels recuperes alimentent deja les hypotheses.');
+    }
+
+    const rumor = this.state.world.rumors[this.state.world.rumors.length - 1] ?? null;
+
+    if (rumor) {
+      lines.push(`Rumeur diffusee: ${rumor.text}`);
+    }
+
+    lines.push(storyLines[0] ?? 'Le royaume classe cette expedition comme instructive et tres mal payee.');
+    return lines;
+  }
+
+  private buildGainsLosses(
+    runtime: WaveRuntime,
+    participants: ExpeditionParticipantReport[],
+  ): string[] {
+    const injuredCount = participants.filter((participant) => participant.status === 'blesse').length;
+    const highestLevel = Math.max(...participants.map((participant) => participant.level));
+    const losses = runtime.stats.adventurersKilled;
+    const escaped = runtime.stats.adventurersEscaped;
+
+    return [
+      `${participants.length} dossiers traites: ${losses} mort${losses > 1 ? 's' : ''}, ${escaped} retour${escaped > 1 ? 's' : ''} ou fuite${escaped > 1 ? 's' : ''}.`,
+      `${injuredCount} blessure${injuredCount > 1 ? 's' : ''} durable${injuredCount > 1 ? 's' : ''}; les survivants gagnent experience, trauma et mauvaises idees.`,
+      `Niveau maximum observe dans l equipe: ${highestLevel}.`,
+    ];
+  }
+
+  private buildGuildChanges(wave: number, adaptationNotes: string[]): string[] {
+    const nextRoster = buildWaveRoster(wave + 1, this.state.memory);
+    return [
+      `Composition probable: ${formatRoster(nextRoster)}.`,
+      ...adaptationNotes,
+    ].slice(0, 6);
+  }
+
+  private buildEconomyLines(
+    goldAwarded: number,
+    trapRefundGold: number,
+    treasurePenaltyGold: number,
+    preparationBudget: number,
+  ): string[] {
+    const lines = [
+      `Or gagne par notoriete: +${goldAwarded}.`,
+      `Or recupere via demontage des pieges: +${trapRefundGold}.`,
+    ];
+
+    if (treasurePenaltyGold > 0) {
+      lines.push(`Tresor vole: -${treasurePenaltyGold} pour remplacer l humiliation brillante.`);
+    }
+
+    lines.push(`Budget ajoute pour la prochaine preparation: ${preparationBudget}.`);
+    lines.push(`Tresorerie actuelle du donjon: ${this.state.gold} or.`);
+    return lines;
   }
 
   private maybeStartRetreat(adventurer: AdventurerEntity): void {
@@ -1330,6 +1668,7 @@ export class DungeonSimulation {
     const minionDamage = sumStats(stats.minionStats, 'damage');
     const minionKills = sumStats(stats.minionStats, 'kills');
     const trapCount = this.state.defenses.filter((defense) => defense.kind === 'trap').length;
+    const bossKills = stats.deaths.filter((record) => record.note.includes('entretien direct')).length;
 
     if (trapCount >= 3 || trapDamage >= 55 || trapKills >= 2) {
       this.state.memory.rolePressure.thief += 1;
@@ -1345,6 +1684,24 @@ export class DungeonSimulation {
     if (minionDamage >= 70 || minionKills >= 2) {
       this.state.memory.rolePressure.warrior += 1;
       notes.push('Tes sbires font mal: ils enverront plus de guerriers epais comme des portes de crypte.');
+    }
+
+    if (bossKills >= 2 || stats.bossDamageTaken >= 90) {
+      this.state.memory.rolePressure.healer += 1;
+      this.state.memory.rolePressure.warrior += 1;
+      notes.push('Le boss devient le probleme officiel: plus de tanks et de soigneurs sont requis pour le prochain dossier.');
+    }
+
+    if (stats.treasureStolen && stats.bossDamageTaken < 45) {
+      this.state.memory.rolePressure.warrior += 1;
+      this.state.memory.rolePressure.mage += 1;
+      notes.push('Ils ont vole le tresor sans regler le boss: la prochaine equipe cherchera davantage la confrontation.');
+    }
+
+    if (stats.adventurersKilled >= PARTY_SIZE - 1 && durationMs < 18000) {
+      this.state.memory.rolePressure.healer += 1;
+      this.state.memory.rolePressure.thief += 1;
+      notes.push('Expedition decimee trop tot: la guilde prepare une approche plus prudente et mieux eclairee.');
     }
 
     if (notes.length === 0) {
@@ -1418,6 +1775,7 @@ export class DungeonSimulation {
     const minions = this.state.defenses.filter((defense) => defense.kind === 'minion').length;
 
     return [
+      { label: 'Murs', count: this.state.wallKeys.length },
       { label: 'Pieges', count: traps },
       { label: 'Sbires', count: minions },
     ];
@@ -1450,6 +1808,18 @@ function createSecureTreasure(): TreasureState {
     holderAdventurerId: null,
     droppedCell: null,
   };
+}
+
+function sortWallKeys(keys: string[]): string[] {
+  return [...new Set(keys)].sort((a, b) => {
+    const [ax, ay] = a.split(',').map(Number);
+    const [bx, by] = b.split(',').map(Number);
+    return (ay ?? 0) - (by ?? 0) || (ax ?? 0) - (bx ?? 0);
+  });
+}
+
+function formatRoster(roles: AdventurerRole[]): string {
+  return roles.map((role) => ADVENTURER_DEFINITIONS[role].name).join(', ');
 }
 
 function recordStats(stats: DefenseStatsByType, type: DefenseType, damage: number, kills: number): void {

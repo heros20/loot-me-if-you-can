@@ -9,6 +9,8 @@ export type DefenseType =
   | 'skeleton'
   | 'goblin';
 
+export type ConstructionTool = 'wall' | 'floor' | 'room';
+
 export type AdventurerRole = 'warrior' | 'thief' | 'mage' | 'healer';
 
 export type AdventurerTargetStage = 'treasure' | 'boss' | 'exit';
@@ -321,6 +323,7 @@ export interface WaveRuntime {
   elapsedMs: number;
   spawnTimerMs: number;
   spawnQueue: AdventurerProfile[];
+  partyProfiles: AdventurerProfile[];
   spawned: number;
   partyPlan: PartyPlan;
   stats: WaveStats;
@@ -341,9 +344,25 @@ export interface ReportEntry {
   kills: number;
 }
 
+export interface DungeonValidation {
+  valid: boolean;
+  reason: string | null;
+  entryToTreasure: boolean;
+  treasureToBoss: boolean;
+}
+
+export interface ExpeditionParticipantReport {
+  name: string;
+  role: AdventurerRole;
+  level: number;
+  status: 'mort' | 'survivant' | 'blesse' | 'fuite' | 'disparu';
+  note: string;
+}
+
 export interface WaveReport {
   wave: number;
   cleared: boolean;
+  partyLabel: string;
   durationSeconds: number;
   adventurersKilled: number;
   adventurersEscaped: number;
@@ -358,6 +377,12 @@ export interface WaveReport {
   trapHighlights: ReportEntry[];
   minionHighlights: ReportEntry[];
   storyLines: string[];
+  learnedLines: string[];
+  sharedLines: string[];
+  gainsLosses: string[];
+  guildChanges: string[];
+  economyLines: string[];
+  participants: ExpeditionParticipantReport[];
   notableAdventurers: string[];
   deaths: string[];
   survivors: string[];
@@ -370,6 +395,8 @@ export interface GameState {
   wave: number;
   gold: number;
   selectedDefense: DefenseType | null;
+  selectedConstructionTool: ConstructionTool | null;
+  wallKeys: string[];
   defenses: DefenseEntity[];
   adventurers: AdventurerEntity[];
   boss: BossEntity;

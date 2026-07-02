@@ -4,7 +4,6 @@ import {
   GRID_ROWS,
   isInsideGrid,
   isSameCell,
-  isWallCell,
 } from '../game/constants';
 import type { AdventurerRole, GridCell } from '../game/types';
 
@@ -13,6 +12,7 @@ interface PathOptions {
   trapAvoidance: number;
   trapDangerByCell: Record<string, number>;
   knownTrapCells: Set<string>;
+  blockedCellKeys: Set<string>;
 }
 
 interface OpenNode {
@@ -51,7 +51,7 @@ export function findPath(start: GridCell, goal: GridCell, options: PathOptions):
     }
 
     for (const neighbor of neighbors(current.cell)) {
-      if (!isInsideGrid(neighbor) || isWallCell(neighbor)) {
+      if (!isWalkable(neighbor, options.blockedCellKeys)) {
         continue;
       }
 
@@ -75,6 +75,44 @@ export function findPath(start: GridCell, goal: GridCell, options: PathOptions):
   }
 
   return [];
+}
+
+export function hasWalkablePath(start: GridCell, goal: GridCell, blockedCellKeys: Set<string>): boolean {
+  if (isSameCell(start, goal)) {
+    return true;
+  }
+
+  if (!isWalkable(start, blockedCellKeys) || !isWalkable(goal, blockedCellKeys)) {
+    return false;
+  }
+
+  const visited = new Set<string>([cellKey(start)]);
+  const queue: GridCell[] = [start];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+
+    if (!current) {
+      break;
+    }
+
+    for (const neighbor of neighbors(current)) {
+      const key = cellKey(neighbor);
+
+      if (!isWalkable(neighbor, blockedCellKeys) || visited.has(key)) {
+        continue;
+      }
+
+      if (isSameCell(neighbor, goal)) {
+        return true;
+      }
+
+      visited.add(key);
+      queue.push(neighbor);
+    }
+  }
+
+  return false;
 }
 
 function rebuildPath(cameFrom: Map<string, string>, endKey: string): GridCell[] {
@@ -113,6 +151,10 @@ function neighbors(cell: GridCell): GridCell[] {
     { x: cell.x, y: cell.y + 1 },
     { x: cell.x, y: cell.y - 1 },
   ].filter((candidate) => candidate.x >= 0 && candidate.y >= 0 && candidate.x < GRID_COLS && candidate.y < GRID_ROWS);
+}
+
+function isWalkable(cell: GridCell, blockedCellKeys: Set<string>): boolean {
+  return isInsideGrid(cell) && !blockedCellKeys.has(cellKey(cell));
 }
 
 function heuristic(a: GridCell, b: GridCell): number {

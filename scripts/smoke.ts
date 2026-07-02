@@ -1,4 +1,5 @@
 /* Test de fumee headless: simule plusieurs vagues avec pieges, sbires et capacites du boss. */
+import { PARTY_SIZE } from '../src/game/constants';
 import { DungeonSimulation } from '../src/game/DungeonSimulation';
 
 const sim = new DungeonSimulation();
@@ -24,6 +25,13 @@ let abilityFired = 0;
 
 for (let wave = 1; wave <= 6; wave += 1) {
   buildPhase();
+  const buildSnapshot = sim.getSnapshot();
+
+  if (buildSnapshot.phase === 'build' && buildSnapshot.nextWaveSize !== PARTY_SIZE) {
+    console.error(`ECHEC: vague ${wave} annonce ${buildSnapshot.nextWaveSize} aventuriers au lieu de ${PARTY_SIZE}`);
+    process.exit(1);
+  }
+
   sim.launchWave();
 
   let elapsed = 0;
@@ -52,6 +60,11 @@ for (let wave = 1; wave <= 6; wave += 1) {
 
   if (!report) {
     console.error(`ECHEC: pas de rapport apres la vague ${wave} (phase=${snapshot.phase}, ${elapsed}ms)`);
+    process.exit(1);
+  }
+
+  if (report.participants.length !== PARTY_SIZE) {
+    console.error(`ECHEC: rapport vague ${wave} contient ${report.participants.length} participants au lieu de ${PARTY_SIZE}`);
     process.exit(1);
   }
 
