@@ -41,17 +41,29 @@ No server runtime is required for this V0.
 - Build phase: spend gold to place traps and minions on the dungeon grid.
 - Wave phase: launch the adventurers and watch the dungeon resolve automatically.
 - Adventurers first path to the treasure, then to the boss.
-- Traps trigger when an adventurer steps on their tile.
-- Minions and adventurers fight automatically when in range.
-- The boss attacks nearby adventurers.
-- Temporary victory: all adventurers die.
+- The treasure is a physical object: the first hero to reach it carries it (slower), drops it on death, and steals it for good by escaping with it. Stolen treasure costs gold and reputation.
+- Traps trigger when an adventurer steps on their tile. Traps are dismantled and refunded after each cleared wave; minions persist.
+- Minions are named, count their kills, and become remembered veterans.
+- The boss attacks nearby adventurers and has three player-activated abilities during waves: shockwave (area damage + stun), roar (fear), and skeleton summons.
+- Click an intruder during a wave to open their dossier (level, traits, injuries, vendetta).
+- Pause and x1/x2/x3 speed are available during waves.
+- Temporary victory: all adventurers die or flee.
 - Defeat: the boss dies.
-- After each cleared wave, you get more gold and a report.
+- After each cleared wave, you get gold, a narrative report, and a tavern rumor that shapes the next wave.
 - Adventurers adapt:
   - trap-heavy dungeons attract more thieves;
   - long fights attract more healers;
   - effective minions attract more warriors;
-  - lethal trap tiles become less attractive to future pathfinding.
+  - lethal trap tiles become less attractive to future pathfinding;
+  - fallen heroes can inspire vengeful heirs who return with their family name and grudge.
+
+## Simulation Tests
+
+```bash
+npm run smoke
+```
+
+Runs the headless simulation scripts in `scripts/` (waves, treasure theft, boss abilities, heirs, rumors) without a browser.
 
 ## Assets
 

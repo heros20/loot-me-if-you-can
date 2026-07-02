@@ -13,6 +13,7 @@ import type {
   AdventurerDefinition,
   AdventurerEntity,
   AdventurerRole,
+  BossAbilityType,
   BossEntity,
   DefenseEntity,
   DefenseStatsByType,
@@ -21,11 +22,18 @@ import type {
   GameState,
   GridCell,
   ReportEntry,
+  TreasureState,
   WaveReport,
   WaveRuntime,
   WaveStats,
 } from './types';
-import type { CountItem, DungeonSnapshot } from './uiSnapshot';
+import type {
+  BossAbilityUiItem,
+  CountItem,
+  DungeonSnapshot,
+  InspectedAdventurer,
+  NamedMinionUiItem,
+} from './uiSnapshot';
 import {
   ADVENTURER_DEFINITIONS,
   ADVENTURER_ORDER,
@@ -48,6 +56,8 @@ import {
   recordProfileDeath,
   recordProfileSurvival,
   recordProfileTrapTriggered,
+  recordTreasureTheft,
+  releaseUndeployedExpedition,
   selectProfilesForWave,
   updateDungeonReputation,
 } from '../systems/adventurerProfiles';
@@ -60,17 +70,29 @@ import {
   createPartyPlan,
   updatePartyPlan,
 } from '../systems/partyAISystem';
+import {
+  BOSS_ABILITY_DEFINITIONS,
+  BOSS_ABILITY_ORDER,
+  canUseBossAbility,
+  consumeBossAbility,
+  createBossAbilities,
+  resetBossAbilitiesForWave,
+  tickBossAbilities,
+} from '../systems/bossAbilities';
+import { applyRumorPressure, generateTavernRumor, recordRumor } from '../systems/tavernRumors';
+import { createMinionName } from '../systems/minionNaming';
 
-const BOSS_TEMPLATE: Omit<BossEntity, 'hp' | 'attackTimerMs'> = {
+const BOSS_TEMPLATE: Omit<BossEntity, 'hp' | 'attackTimerMs' | 'abilities'> = {
   homeCell: BOSS_CELL,
   x: BOSS_CELL.x,
   y: BOSS_CELL.y,
-  maxHp: 260,
-  damage: 14,
+  maxHp: 340,
+  damage: 16,
   attackRange: 1.25,
-  detectionRange: 2.65,
-  leashRange: 1.85,
-  attackCooldownMs: 820,
+  // La detection doit depasser la portee du mage (2.55 + 0.3), sinon le boss se fait kiter sans riposter.
+  detectionRange: 3.5,
+  leashRange: 3.1,
+  attackCooldownMs: 760,
   targetAdventurerId: null,
 };
 
@@ -78,6 +100,7 @@ export class DungeonSimulation {
   private state: GameState;
   private nextDefenseId = 1;
   private nextAdventurerId = 1;
+  private minionNameCounters: Partial<Record<DefenseType, number>> = {};
 
   constructor() {
     this.state = this.createInitialState();
@@ -86,14 +109,16 @@ export class DungeonSimulation {
   startNewGame(): void {
     this.nextDefenseId = 1;
     this.nextAdventurerId = 1;
+    this.minionNameCounters = {};
     this.state = this.createInitialState();
   }
 
-  update(deltaMs: number): void {
-    if (this.state.phase !== 'wave' || !this.state.runtime) {
+  update(rawDeltaMs: number): void {
+    if (this.state.phase !== 'wave' || !this.state.runtime || this.state.paused) {
       return;
     }
 
+    const deltaMs = rawDeltaMs * this.state.gameSpeed;
     const runtime = this.state.runtime;
     runtime.elapsedMs += deltaMs;
 
@@ -114,6 +139,112 @@ export class DungeonSimulation {
     if (runtime.spawnQueue.length === 0 && this.state.adventurers.length === 0) {
       this.finishWaveVictory();
     }
+  }
+
+  togglePause(): void {
+    if (this.state.phase !== 'wave') {
+      return;
+    }
+
+    this.state.paused = !this.state.paused;
+    this.state.message = this.state.paused
+      ? 'Pause. Meme le mal a besoin de reflechir.'
+      : 'Reprise. Le carnage a horreur du vide.';
+  }
+
+  setGameSpeed(speed: number): void {
+    this.state.gameSpeed = Math.min(3, Math.max(0.5, speed));
+  }
+
+  useBossAbility(type: BossAbilityType): void {
+    if (this.state.phase !== 'wave' || !this.state.runtime || this.state.paused) {
+      return;
+    }
+
+    if (!canUseBossAbility(this.state.boss, type)) {
+      this.state.message = 'Cette capacite recupere encore. Le talent a des horaires.';
+      return;
+    }
+
+    const definition = BOSS_ABILITY_DEFINITIONS[type];
+    const boss = this.state.boss;
+
+    if (type === 'shockwave') {
+      let touched = 0;
+      this.state.adventurers.forEach((adventurer) => {
+        if (!adventurer.alive || distance(boss.x, boss.y, adventurer.x, adventurer.y) > definition.radius) {
+          return;
+        }
+
+        touched += 1;
+        adventurer.stunnedTimerMs = Math.max(adventurer.stunnedTimerMs, definition.stunMs ?? 0);
+        this.damageAdventurer(adventurer, definition.damage ?? 0, 'boss', null, boss.homeCell);
+      });
+
+      this.state.message = touched > 0
+        ? `Onde de choc: ${touched} intrus apprennent la gravite.`
+        : 'Onde de choc dans le vide. Tres theatral, peu rentable.';
+    }
+
+    if (type === 'roar') {
+      let feared = 0;
+      this.state.adventurers.forEach((adventurer) => {
+        if (
+          !adventurer.alive ||
+          adventurer.targetStage === 'exit' ||
+          distance(boss.x, boss.y, adventurer.x, adventurer.y) > definition.radius
+        ) {
+          return;
+        }
+
+        feared += 1;
+        adventurer.fearTimerMs = definition.fearMs ?? 0;
+        adventurer.fearPreviousStage = adventurer.targetStage;
+        adventurer.targetStage = 'exit';
+        adventurer.path = [];
+      });
+
+      this.state.message = feared > 0
+        ? `Rugissement: ${feared} heros redecouvrent la porte d'entree.`
+        : 'Rugissement sans public. Le neant ne panique pas.';
+    }
+
+    if (type === 'summon') {
+      const spawned = this.summonSkeletons(definition.summonCount ?? 2);
+      this.state.message = spawned > 0
+        ? `${spawned} squelettes interimaires repondent a l'appel.`
+        : 'Aucune dalle libre pour les renforts. Probleme immobilier.';
+
+      if (spawned === 0) {
+        return;
+      }
+    }
+
+    consumeBossAbility(boss, type);
+    this.state.runtime.stats.abilityUses += 1;
+    this.state.runtime.stats.storyEvents.push(`Le boss utilise ${definition.name}.`);
+  }
+
+  inspectAdventurerAt(cell: GridCell): boolean {
+    if (this.state.phase !== 'wave') {
+      return false;
+    }
+
+    const found = this.state.adventurers
+      .filter((adventurer) => adventurer.alive)
+      .map((adventurer) => ({
+        adventurer,
+        distance: distance(cell.x, cell.y, adventurer.x, adventurer.y),
+      }))
+      .filter((entry) => entry.distance <= 0.75)
+      .sort((a, b) => a.distance - b.distance)[0]?.adventurer ?? null;
+
+    this.state.inspectedAdventurerId = found?.id ?? null;
+    return found !== null;
+  }
+
+  clearInspection(): void {
+    this.state.inspectedAdventurerId = null;
   }
 
   selectDefense(type: DefenseType): void {
@@ -152,10 +283,21 @@ export class DungeonSimulation {
     }
 
     this.state.gold -= definition.cost;
-    this.state.defenses.push({
+    const entity = this.createDefenseEntity(selected, cell, false);
+    this.state.defenses.push(entity);
+    this.state.message = definition.kind === 'minion'
+      ? `${entity.name} le ${definition.name} prend son poste. Il a deja des exigences.`
+      : `${definition.name} pose. C'est juridiquement discutable, donc parfait.`;
+  }
+
+  private createDefenseEntity(type: DefenseType, cell: GridCell, summoned: boolean): DefenseEntity {
+    const definition = getDefenseDefinition(type);
+    const name = definition.kind === 'minion' ? this.nextMinionName(type) : `${definition.shortName}-${this.nextDefenseId}`;
+    const entity: DefenseEntity = {
       id: `defense-${this.nextDefenseId}`,
-      type: selected,
+      type,
       kind: definition.kind,
+      name,
       cell: { ...cell },
       homeCell: { ...cell },
       x: cell.x,
@@ -167,9 +309,45 @@ export class DungeonSimulation {
       aiState: 'idle',
       targetAdventurerId: null,
       patrolAngle: this.nextDefenseId * 0.71,
-    });
+      kills: 0,
+      wavesSurvived: 0,
+      summoned,
+    };
     this.nextDefenseId += 1;
-    this.state.message = `${definition.name} pose. C'est juridiquement discutable, donc parfait.`;
+    return entity;
+  }
+
+  private nextMinionName(type: DefenseType): string {
+    const counter = this.minionNameCounters[type] ?? 0;
+    this.minionNameCounters[type] = counter + 1;
+    return createMinionName(type, counter);
+  }
+
+  private summonSkeletons(count: number): number {
+    const bossCell = { x: Math.round(this.state.boss.x), y: Math.round(this.state.boss.y) };
+    let spawned = 0;
+
+    for (let radius = 1; radius <= 2 && spawned < count; radius += 1) {
+      for (let dy = -radius; dy <= radius && spawned < count; dy += 1) {
+        for (let dx = -radius; dx <= radius && spawned < count; dx += 1) {
+          const cell = { x: bossCell.x + dx, y: bossCell.y + dy };
+
+          if (
+            !isInsideGrid(cell) ||
+            isWallCell(cell) ||
+            isProtectedCell(cell) ||
+            this.state.defenses.some((defense) => defense.alive && isSameCell(defense.cell, cell))
+          ) {
+            continue;
+          }
+
+          this.state.defenses.push(this.createDefenseEntity('skeleton', cell, true));
+          spawned += 1;
+        }
+      }
+    }
+
+    return spawned;
   }
 
   launchWave(): void {
@@ -180,6 +358,7 @@ export class DungeonSimulation {
     advanceWorldDay(this.state.world, 3 + this.state.wave);
     const roster = buildWaveRoster(this.state.wave, this.state.memory);
     const profiles = selectProfilesForWave(roster, this.state.world, this.state.wave);
+    const lastRumor = this.state.world.rumors[this.state.world.rumors.length - 1] ?? null;
 
     this.state.phase = 'wave';
     this.state.runtime = {
@@ -187,11 +366,15 @@ export class DungeonSimulation {
       spawnTimerMs: 0,
       spawnQueue: [...profiles],
       spawned: 0,
-      partyPlan: createPartyPlan(this.state.wave, this.state.world.dungeonReputation.value),
+      partyPlan: createPartyPlan(this.state.wave, this.state.world.dungeonReputation.value, lastRumor?.effect ?? null),
       stats: createEmptyWaveStats(),
     };
     this.state.report = null;
     this.state.adventurers = [];
+    this.state.paused = false;
+    this.state.inspectedAdventurerId = null;
+    this.state.treasure = createSecureTreasure();
+    resetBossAbilitiesForWave(this.state.boss);
     this.state.defenses.forEach((defense) => {
       defense.cooldownRemainingMs = 0;
     });
@@ -204,10 +387,11 @@ export class DungeonSimulation {
     }
 
     this.state.phase = 'build';
-    this.state.defenses = this.state.defenses.filter((defense) => defense.kind === 'trap' || defense.alive);
+    this.state.defenses = this.state.defenses.filter((defense) => defense.alive && !defense.summoned);
     this.state.defenses.forEach((defense) => {
       if (defense.kind === 'minion') {
         defense.hp = Math.min(defense.maxHp, defense.hp + Math.ceil(defense.maxHp * 0.28));
+        defense.wavesSurvived += 1;
       }
 
       defense.cooldownRemainingMs = 0;
@@ -260,17 +444,107 @@ export class DungeonSimulation {
       recentJournal: this.state.world.expeditionHistory.slice(-5).map((record) => record.note),
       recentChronicles: this.state.world.chronicles.slice(-5).map((entry) => `Jour ${entry.day}: ${entry.text}`),
       activeAdventurerNames: this.state.adventurers.map((adventurer) => adventurer.name),
+      bossAbilities: this.buildAbilitySnapshot(),
+      paused: this.state.paused,
+      gameSpeed: this.state.gameSpeed,
+      treasureStatus: this.state.treasure.status,
+      treasureCarrierName: this.getTreasureCarrierName(),
+      recentRumors: this.state.world.rumors.slice(-3).map((rumor) => rumor.text),
+      inspectedAdventurer: this.buildInspectedAdventurer(),
+      namedMinions: this.buildNamedMinions(),
     };
   }
 
-  getRenderState(): Pick<GameState, 'defenses' | 'adventurers' | 'boss' | 'phase' | 'selectedDefense'> {
+  getRenderState(): Pick<GameState, 'defenses' | 'adventurers' | 'boss' | 'phase' | 'selectedDefense' | 'treasure'> {
     return {
       defenses: this.state.defenses,
       adventurers: this.state.adventurers,
       boss: this.state.boss,
       phase: this.state.phase,
       selectedDefense: this.state.selectedDefense,
+      treasure: this.state.treasure,
     };
+  }
+
+  private buildAbilitySnapshot(): BossAbilityUiItem[] {
+    return BOSS_ABILITY_ORDER.map((type) => {
+      const definition = BOSS_ABILITY_DEFINITIONS[type];
+      const ability = this.state.boss.abilities[type];
+      return {
+        type,
+        name: definition.name,
+        shortName: definition.shortName,
+        description: definition.description,
+        cooldownRemainingMs: ability.cooldownRemainingMs,
+        cooldownMs: definition.cooldownMs,
+        usesLeft: Math.max(0, definition.maxUsesPerWave - ability.usesThisWave),
+        ready: this.state.phase === 'wave' && canUseBossAbility(this.state.boss, type),
+      };
+    });
+  }
+
+  private getTreasureCarrierName(): string | null {
+    if (this.state.treasure.status !== 'carried' || !this.state.treasure.holderAdventurerId) {
+      return null;
+    }
+
+    return (
+      this.state.adventurers.find((adventurer) => adventurer.id === this.state.treasure.holderAdventurerId)?.name ?? null
+    );
+  }
+
+  private buildInspectedAdventurer(): InspectedAdventurer | null {
+    if (!this.state.inspectedAdventurerId) {
+      return null;
+    }
+
+    const adventurer = this.state.adventurers.find((candidate) => candidate.id === this.state.inspectedAdventurerId);
+
+    if (!adventurer) {
+      return null;
+    }
+
+    const profile = this.state.world.profiles[adventurer.profileId];
+
+    if (!profile) {
+      return null;
+    }
+
+    const ancestor = profile.heirOfProfileId ? this.state.world.profiles[profile.heirOfProfileId] : null;
+    const lastRecord = profile.expeditionHistory[profile.expeditionHistory.length - 1] ?? null;
+
+    return {
+      name: profile.name,
+      className: profile.className,
+      level: profile.level,
+      age: profile.age,
+      personality: profile.dominantPersonality,
+      traits: profile.traits,
+      hp: Math.ceil(adventurer.hp),
+      maxHp: adventurer.maxHp,
+      expeditionCount: profile.expeditionCount,
+      survivedExpeditions: profile.survivedExpeditions,
+      monstersKilled: profile.monstersKilled,
+      trapsTriggered: profile.trapsTriggered,
+      injuries: profile.injuries.map((injury) => injury.name),
+      isHeir: adventurer.isHeir,
+      heirNote: ancestor ? `Venge ${ancestor.name} (vague ${ancestor.deathWave ?? '?'})` : null,
+      carryingTreasure: adventurer.carryingTreasure,
+      lastFeat: lastRecord?.note ?? null,
+    };
+  }
+
+  private buildNamedMinions(): NamedMinionUiItem[] {
+    return this.state.defenses
+      .filter((defense) => defense.kind === 'minion' && defense.alive && !defense.summoned)
+      .sort((a, b) => b.kills - a.kills || b.wavesSurvived - a.wavesSurvived)
+      .slice(0, 4)
+      .map((defense) => ({
+        name: defense.name,
+        typeName: getDefenseDefinition(defense.type).name,
+        kills: defense.kills,
+        wavesSurvived: defense.wavesSurvived,
+      }));
   }
 
   private createInitialState(): GameState {
@@ -285,7 +559,9 @@ export class DungeonSimulation {
         ...BOSS_TEMPLATE,
         hp: BOSS_TEMPLATE.maxHp,
         attackTimerMs: 0,
+        abilities: createBossAbilities(),
       },
+      treasure: createSecureTreasure(),
       memory: {
         trapAvoidance: 0.35,
         trapDangerByCell: {},
@@ -300,6 +576,9 @@ export class DungeonSimulation {
       runtime: null,
       report: null,
       message: 'Ton donjon attend ses premieres victimes administratives.',
+      paused: false,
+      gameSpeed: 1,
+      inspectedAdventurerId: null,
     };
   }
 
@@ -309,10 +588,22 @@ export class DungeonSimulation {
     });
 
     this.state.boss.attackTimerMs = Math.max(0, this.state.boss.attackTimerMs - deltaMs);
+    tickBossAbilities(this.state.boss, deltaMs);
 
     this.state.adventurers.forEach((adventurer) => {
       adventurer.attackTimerMs = Math.max(0, adventurer.attackTimerMs - deltaMs);
       adventurer.healTimerMs = Math.max(0, adventurer.healTimerMs - deltaMs);
+      adventurer.stunnedTimerMs = Math.max(0, adventurer.stunnedTimerMs - deltaMs);
+
+      if (adventurer.fearTimerMs > 0) {
+        adventurer.fearTimerMs = Math.max(0, adventurer.fearTimerMs - deltaMs);
+
+        if (adventurer.fearTimerMs === 0 && adventurer.fearPreviousStage) {
+          adventurer.targetStage = adventurer.fearPreviousStage;
+          adventurer.fearPreviousStage = null;
+          adventurer.path = [];
+        }
+      }
     });
   }
 
@@ -366,7 +657,7 @@ export class DungeonSimulation {
       }
 
       const damage = definition.damage ?? 1;
-      this.damageAdventurer(target, damage, 'minion', defense.type, defense.cell);
+      this.damageAdventurer(target, damage, 'minion', defense.type, defense.cell, defense);
       defense.cooldownRemainingMs = definition.attackCooldownMs ?? 900;
       runtime.stats.combatEngagementMs += deltaMs;
     });
@@ -387,7 +678,7 @@ export class DungeonSimulation {
 
   private updateAdventurers(deltaMs: number): void {
     for (const adventurer of this.state.adventurers) {
-      if (!adventurer.alive) {
+      if (!adventurer.alive || adventurer.stunnedTimerMs > 0) {
         continue;
       }
 
@@ -405,6 +696,7 @@ export class DungeonSimulation {
         continue;
       }
 
+      this.resolveTreasureStage(adventurer);
       const targetMinion = this.findTargetMinion(adventurer);
       const canAttackBoss =
         adventurer.targetStage === 'boss' &&
@@ -464,6 +756,11 @@ export class DungeonSimulation {
     const currentCell = { x: Math.round(adventurer.x), y: Math.round(adventurer.y) };
 
     if (isSameCell(currentCell, targetCell)) {
+      if (adventurer.targetStage === 'exit' && !adventurer.hasEnteredDungeon) {
+        this.withdrawUndeployedAdventurer(adventurer);
+        return;
+      }
+
       this.handleObjectiveReached(adventurer);
       return;
     }
@@ -486,7 +783,8 @@ export class DungeonSimulation {
     const dx = nextCell.x - adventurer.x;
     const dy = nextCell.y - adventurer.y;
     const remaining = Math.hypot(dx, dy);
-    const step = adventurer.speed * adventurer.speedMultiplier * deltaMs;
+    const carryPenalty = adventurer.carryingTreasure ? 0.82 : 1;
+    const step = adventurer.speed * adventurer.speedMultiplier * carryPenalty * deltaMs;
 
     if (step >= remaining) {
       adventurer.x = nextCell.x;
@@ -508,15 +806,28 @@ export class DungeonSimulation {
 
   private handleObjectiveReached(adventurer: AdventurerEntity): void {
     if (adventurer.targetStage === 'treasure') {
+      const treasure = this.state.treasure;
+
+      if (treasure.status !== 'secure' && treasure.status !== 'dropped') {
+        this.resolveTreasureStage(adventurer);
+        return;
+      }
+
+      treasure.status = 'carried';
+      treasure.holderAdventurerId = adventurer.id;
+      treasure.droppedCell = null;
+      adventurer.carryingTreasure = true;
+
       if (this.state.runtime) {
         this.state.runtime.partyPlan.treasureClaimed = true;
+        this.state.runtime.stats.storyEvents.push(`${adventurer.name} s'empare du tresor du donjon.`);
       }
 
       adventurer.targetStage = this.state.runtime
         ? choosePostTreasureGoal(this.state.runtime.partyPlan, adventurer)
         : 'boss';
       adventurer.path = [];
-      this.state.message = `${adventurer.name} atteint le Tresor du Donjon. Les assurances refusent deja le dossier.`;
+      this.state.message = `${adventurer.name} empoche le Tresor du Donjon. Rattrape-le ou paie l'addition.`;
 
       if (!this.state.world.chronicles.some((entry) => entry.text.includes('atteint la salle du boss'))) {
         addChronicle(this.state.world, 'Le premier aventurier atteint la salle du boss.');
@@ -530,6 +841,48 @@ export class DungeonSimulation {
     }
   }
 
+  private resolveTreasureStage(adventurer: AdventurerEntity): void {
+    if (adventurer.targetStage !== 'treasure') {
+      return;
+    }
+
+    const treasure = this.state.treasure;
+
+    if (treasure.status === 'secure' || treasure.status === 'dropped') {
+      return;
+    }
+
+    adventurer.targetStage = this.state.runtime
+      ? choosePostTreasureGoal(this.state.runtime.partyPlan, adventurer)
+      : 'boss';
+    adventurer.path = [];
+  }
+
+  private dropTreasure(adventurer: AdventurerEntity): void {
+    if (!adventurer.carryingTreasure) {
+      return;
+    }
+
+    adventurer.carryingTreasure = false;
+    this.state.treasure = {
+      status: 'dropped',
+      holderAdventurerId: null,
+      droppedCell: { x: Math.round(adventurer.x), y: Math.round(adventurer.y) },
+    };
+
+    this.state.adventurers.forEach((other) => {
+      if (other.alive && !other.escaped && other.targetStage === 'treasure') {
+        other.path = [];
+      }
+    });
+
+    if (this.state.runtime) {
+      this.state.runtime.stats.storyEvents.push(`${adventurer.name} lache le tresor en tombant.`);
+    }
+
+    this.state.message = `${adventurer.name} tombe et le tresor roule sur la dalle. Recuperation possible.`;
+  }
+
   private handleCellEntered(adventurer: AdventurerEntity, cell: GridCell): void {
     const key = cellKey(cell);
 
@@ -538,6 +891,11 @@ export class DungeonSimulation {
     }
 
     adventurer.lastCellKey = key;
+
+    if (!isSameCell(cell, ENTRY_CELL)) {
+      adventurer.hasEnteredDungeon = true;
+    }
+
     const trap = this.state.defenses.find(
       (defense) => defense.alive && defense.kind === 'trap' && defense.cooldownRemainingMs <= 0 && isSameCell(defense.cell, cell),
     );
@@ -550,7 +908,7 @@ export class DungeonSimulation {
     const baseDamage = definition.trapDamage ?? 0;
     const damage = Math.max(1, Math.round(baseDamage * adventurer.trapDamageMultiplier));
     recordProfileTrapTriggered(this.state.world, adventurer.profileId);
-    this.damageAdventurer(adventurer, damage, 'trap', trap.type, cell);
+    this.damageAdventurer(adventurer, damage, 'trap', trap.type, cell, trap);
     trap.cooldownRemainingMs = definition.trapCooldownMs ?? 1500;
   }
 
@@ -560,6 +918,7 @@ export class DungeonSimulation {
     source: 'trap' | 'minion' | 'boss',
     sourceType: DefenseType | null,
     sourceCell: GridCell,
+    sourceDefense: DefenseEntity | null = null,
   ): number {
     if (!this.state.runtime || !adventurer.alive) {
       return 0;
@@ -582,12 +941,22 @@ export class DungeonSimulation {
     }
 
     adventurer.alive = false;
+    this.dropTreasure(adventurer);
     this.state.runtime.stats.adventurersKilled += 1;
-    const cause = describeDeathCause(source, sourceType);
+    const cause = describeDeathCause(source, sourceType, sourceDefense);
     const deathRecord = recordProfileDeath(this.state.world, adventurer.profileId, this.state.wave, `${adventurer.name} meurt: ${cause}.`);
 
     if (deathRecord) {
       this.state.runtime.stats.deaths.push(deathRecord);
+    }
+
+    if (sourceDefense) {
+      sourceDefense.kills += 1;
+
+      if (sourceDefense.kind === 'minion') {
+        this.state.runtime.stats.minionKillsByDefenseId[sourceDefense.id] =
+          (this.state.runtime.stats.minionKillsByDefenseId[sourceDefense.id] ?? 0) + 1;
+      }
     }
 
     if (source === 'trap' && sourceType) {
@@ -599,7 +968,9 @@ export class DungeonSimulation {
 
     if (source === 'minion' && sourceType) {
       recordStats(this.state.runtime.stats.minionStats, sourceType, 0, 1);
-      this.state.message = `${adventurer.name} est neutralise par un employe sous-paye.`;
+      this.state.message = sourceDefense
+        ? `${adventurer.name} est neutralise par ${sourceDefense.name}. Prime de rendement refusee.`
+        : `${adventurer.name} est neutralise par un employe sous-paye.`;
     }
 
     if (source === 'boss') {
@@ -615,8 +986,14 @@ export class DungeonSimulation {
     if (minion.hp <= 0) {
       minion.alive = false;
       recordProfileMonsterKill(this.state.world, attacker.profileId);
-      this.state.runtime?.stats.storyEvents.push(`${attacker.name} abat ${getDefenseDefinition(minion.type).name}.`);
-      this.state.message = `${getDefenseDefinition(minion.type).name} tombe. Il sera remplace par quelqu'un de moins syndique.`;
+      const label = `${minion.name} le ${getDefenseDefinition(minion.type).name}`;
+      this.state.runtime?.stats.storyEvents.push(`${attacker.name} abat ${label}.`);
+
+      if (minion.kills >= 3 || minion.wavesSurvived >= 2) {
+        addChronicle(this.state.world, `${label} tombe apres ${minion.kills} victoires. Une minute de silence syndicale.`);
+      }
+
+      this.state.message = `${label} tombe. Il sera remplace par quelqu'un de moins syndique.`;
     }
   }
 
@@ -644,23 +1021,90 @@ export class DungeonSimulation {
     }
 
     const currentWave = this.state.wave;
+    const treasureStolen = runtime.stats.treasureStolen;
     const goldAwarded = 14 + currentWave * 4;
+    const trapRefundGold = this.dismantleRemainingTraps();
+    const treasurePenaltyGold = treasureStolen ? Math.min(goldAwarded + trapRefundGold, 8 + currentWave * 2) : 0;
+    const preparationBudget = goldAwarded + trapRefundGold - treasurePenaltyGold;
     const adaptationNotes = this.applyAdaptation(runtime.stats, runtime.elapsedMs);
+    this.recordTopMinionFeat(runtime.stats);
+
+    const rumor = generateTavernRumor({
+      wave: currentWave,
+      stats: runtime.stats,
+      trapKills: sumStats(runtime.stats.trapStats, 'kills'),
+      minionKills: sumStats(runtime.stats.minionStats, 'kills'),
+      bossKills: runtime.stats.deaths.filter((record) => record.note.includes('entretien direct')).length,
+      treasureStolen,
+      cleared: true,
+    });
+    recordRumor(this.state.world, rumor);
+    const rumorPressureNote = applyRumorPressure(rumor, this.state.memory);
+    adaptationNotes.push(`Rumeur de taverne: ${rumor.text}`);
+
+    if (rumorPressureNote) {
+      adaptationNotes.push(rumorPressureNote);
+    }
+
+    if (treasureStolen) {
+      adaptationNotes.push('Le tresor vole alimente toutes les conversations. Un tresor de remplacement est commande.');
+    }
+
+    if (this.state.treasure.status !== 'secure' && !treasureStolen) {
+      addChronicle(this.state.world, 'Le tresor est recupere sur les depouilles et remis sur son socle.');
+    }
+
     const previousTitle = this.state.world.dungeonReputation.title;
     const reputationDelta = updateDungeonReputation(
       this.state.world,
-      runtime.stats.adventurersKilled * 2 + runtime.stats.adventurersEscaped + currentWave,
-      'Les morts et survivants bavards ameliorent la notoriete du donjon.',
+      runtime.stats.adventurersKilled * 2 + runtime.stats.adventurersEscaped + currentWave - (treasureStolen ? 6 : 0),
+      treasureStolen
+        ? 'Un tresor vole fait rire les tavernes. Tres mauvais pour le prestige.'
+        : 'Les morts et survivants bavards ameliorent la notoriete du donjon.',
     );
     this.addReputationChronicle(previousTitle);
     const bossHeal = 24 + currentWave * 2;
     this.state.boss.hp = Math.min(this.state.boss.maxHp, this.state.boss.hp + bossHeal);
-    this.state.gold += goldAwarded;
-    this.state.report = this.createReport(true, currentWave, runtime, goldAwarded, adaptationNotes, reputationDelta);
+    this.state.gold += Math.max(0, preparationBudget);
+    this.state.report = this.createReport(
+      true,
+      currentWave,
+      runtime,
+      goldAwarded,
+      trapRefundGold,
+      treasurePenaltyGold,
+      Math.max(0, preparationBudget),
+      adaptationNotes,
+      reputationDelta,
+    );
     this.state.wave += 1;
     this.state.phase = 'report';
     this.state.runtime = null;
-    this.state.message = 'Vague repoussee. La paperasse de necromancie commence.';
+    this.state.inspectedAdventurerId = null;
+    this.state.message = treasureStolen
+      ? 'Vague repoussee, mais le tresor est parti en vadrouille. Humiliant.'
+      : 'Vague repoussee. La paperasse de necromancie commence.';
+  }
+
+  private recordTopMinionFeat(stats: WaveStats): void {
+    const topEntry = Object.entries(stats.minionKillsByDefenseId).sort((a, b) => b[1] - a[1])[0];
+
+    if (!topEntry || topEntry[1] < 2) {
+      return;
+    }
+
+    const defense = this.state.defenses.find((candidate) => candidate.id === topEntry[0]);
+
+    if (!defense) {
+      return;
+    }
+
+    const label = `${defense.name} le ${getDefenseDefinition(defense.type).name}`;
+    stats.storyEvents.push(`${label} signe ${topEntry[1]} eliminations cette vague.`);
+
+    if (defense.kills >= 3) {
+      addChronicle(this.state.world, `${label} devient un veteran du donjon (${defense.kills} victimes).`);
+    }
   }
 
   private finishDefeat(): void {
@@ -685,9 +1129,20 @@ export class DungeonSimulation {
       'La chute du boss fera parler les tavernes. Tres mauvais pour la confidentialite.',
     );
     this.addReputationChronicle(previousTitle);
-    this.state.report = this.createReport(false, this.state.wave, runtime, 0, adaptationNotes, reputationDelta);
+    this.state.report = this.createReport(
+      false,
+      this.state.wave,
+      runtime,
+      0,
+      0,
+      0,
+      0,
+      adaptationNotes,
+      reputationDelta,
+    );
     this.state.phase = 'defeat';
     this.state.runtime = null;
+    this.state.inspectedAdventurerId = null;
   }
 
   private createReport(
@@ -695,6 +1150,9 @@ export class DungeonSimulation {
     wave: number,
     runtime: WaveRuntime,
     goldAwarded: number,
+    trapRefundGold: number,
+    treasurePenaltyGold: number,
+    preparationBudget: number,
     adaptationNotes: string[],
     reputationDelta: number,
   ): WaveReport {
@@ -709,6 +1167,10 @@ export class DungeonSimulation {
       adventurersEscaped: runtime.stats.adventurersEscaped,
       bossDamageTaken: Math.round(runtime.stats.bossDamageTaken),
       goldAwarded,
+      trapRefundGold,
+      treasurePenaltyGold,
+      preparationBudget,
+      treasureStolen: runtime.stats.treasureStolen,
       dungeonReputation: this.state.world.dungeonReputation.value,
       reputationDelta,
       trapHighlights,
@@ -755,6 +1217,10 @@ export class DungeonSimulation {
 
   private getTargetCell(adventurer: AdventurerEntity): GridCell {
     if (adventurer.targetStage === 'treasure') {
+      if (this.state.treasure.status === 'dropped' && this.state.treasure.droppedCell) {
+        return this.state.treasure.droppedCell;
+      }
+
       return TREASURE_CELL;
     }
 
@@ -772,6 +1238,16 @@ export class DungeonSimulation {
 
     adventurer.escaped = true;
     this.state.runtime.stats.adventurersEscaped += 1;
+
+    if (adventurer.carryingTreasure) {
+      adventurer.carryingTreasure = false;
+      this.state.treasure = { status: 'stolen', holderAdventurerId: null, droppedCell: null };
+      this.state.runtime.stats.treasureStolen = true;
+      recordTreasureTheft(this.state.world, adventurer.profileId);
+      this.state.runtime.stats.storyEvents.push(`${adventurer.name} s'echappe avec le tresor du donjon.`);
+      this.state.message = `${adventurer.name} sort avec TON tresor. La comptabilite exige des represailles.`;
+    }
+
     const injury = createInjury(
       adventurer.name,
       'la derniere expedition',
@@ -801,6 +1277,7 @@ export class DungeonSimulation {
       this.state.adventurers,
       this.state.runtime.stats,
       this.state.runtime.elapsedMs,
+      this.state.runtime.spawnQueue.length,
     );
 
     if (decision) {
@@ -878,6 +1355,28 @@ export class DungeonSimulation {
     return notes;
   }
 
+  private withdrawUndeployedAdventurer(adventurer: AdventurerEntity): void {
+    releaseUndeployedExpedition(this.state.world, adventurer.profileId);
+    adventurer.alive = false;
+  }
+
+  private dismantleRemainingTraps(): number {
+    let refund = 0;
+    const remaining: DefenseEntity[] = [];
+
+    this.state.defenses.forEach((defense) => {
+      if (defense.kind === 'trap') {
+        refund += getDefenseDefinition(defense.type).cost;
+        return;
+      }
+
+      remaining.push(defense);
+    });
+
+    this.state.defenses = remaining;
+    return refund;
+  }
+
   private removeDeadMinions(): void {
     this.state.defenses = this.state.defenses.filter((defense) => defense.kind === 'trap' || defense.alive);
   }
@@ -939,6 +1438,17 @@ function createEmptyWaveStats(): WaveStats {
     bossDamageByProfile: {},
     storyEvents: [],
     chronicleEvents: [],
+    treasureStolen: false,
+    abilityUses: 0,
+    minionKillsByDefenseId: {},
+  };
+}
+
+function createSecureTreasure(): TreasureState {
+  return {
+    status: 'secure',
+    holderAdventurerId: null,
+    droppedCell: null,
   };
 }
 
@@ -997,7 +1507,15 @@ function personalityTrapAvoidance(adventurer: AdventurerEntity): number {
   return 1;
 }
 
-function describeDeathCause(source: 'trap' | 'minion' | 'boss', sourceType: DefenseType | null): string {
+function describeDeathCause(
+  source: 'trap' | 'minion' | 'boss',
+  sourceType: DefenseType | null,
+  sourceDefense: DefenseEntity | null = null,
+): string {
+  if (sourceDefense && sourceDefense.kind === 'minion') {
+    return `${sourceDefense.name} le ${getDefenseDefinition(sourceDefense.type).name}`;
+  }
+
   if (sourceType) {
     return getDefenseDefinition(sourceType).name;
   }

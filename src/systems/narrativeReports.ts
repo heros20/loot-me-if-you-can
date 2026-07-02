@@ -19,6 +19,10 @@ export function buildWaveStoryLines(input: BuildWaveStoryInput): string[] {
       : `Vague ${input.wave}: le boss tombe, ce qui est tres mauvais pour l'image de marque.`,
   );
 
+  if (input.stats.treasureStolen) {
+    lines.push('Le tresor du donjon a quitte le batiment. Les tavernes en riront pendant des semaines.');
+  }
+
   lines.push(...input.stats.storyEvents);
   lines.push(...input.stats.survivors.slice(-2).map((record) => record.note));
   lines.push(...input.stats.deaths.slice(-2).map((record) => record.note));

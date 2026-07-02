@@ -40,6 +40,7 @@ export class DungeonScene extends Phaser.Scene {
   private hoverGraphics!: Phaser.GameObjects.Graphics;
   private hpGraphics!: Phaser.GameObjects.Graphics;
   private pathGraphics!: Phaser.GameObjects.Graphics;
+  private treasureGraphics!: Phaser.GameObjects.Graphics;
   private uiPublishTimerMs = 0;
 
   constructor() {
@@ -51,6 +52,7 @@ export class DungeonScene extends Phaser.Scene {
     this.drawDungeon();
     this.hoverGraphics = this.add.graphics();
     this.pathGraphics = this.add.graphics();
+    this.treasureGraphics = this.add.graphics();
     this.hpGraphics = this.add.graphics();
     this.createBossView();
     this.bindInput();
@@ -62,6 +64,7 @@ export class DungeonScene extends Phaser.Scene {
     this.syncRenderState();
     this.drawHealthBars();
     this.drawPaths();
+    this.drawTreasure();
     this.uiPublishTimerMs -= delta;
 
     if (this.uiPublishTimerMs <= 0) {
@@ -82,7 +85,14 @@ export class DungeonScene extends Phaser.Scene {
         return;
       }
 
-      this.simulation.placeSelectedDefense(cell);
+      const phase = this.simulation.getRenderState().phase;
+
+      if (phase === 'wave') {
+        this.simulation.inspectAdventurerAt(cell);
+      } else {
+        this.simulation.placeSelectedDefense(cell);
+      }
+
       this.publishUi();
       this.syncRenderState();
     });
@@ -100,6 +110,26 @@ export class DungeonScene extends Phaser.Scene {
 
       if (action.type === 'continue-build') {
         this.simulation.continueBuild();
+        this.publishUi();
+      }
+
+      if (action.type === 'use-ability') {
+        this.simulation.useBossAbility(action.abilityType);
+        this.publishUi();
+      }
+
+      if (action.type === 'toggle-pause') {
+        this.simulation.togglePause();
+        this.publishUi();
+      }
+
+      if (action.type === 'set-speed') {
+        this.simulation.setGameSpeed(action.speed);
+        this.publishUi();
+      }
+
+      if (action.type === 'close-inspection') {
+        this.simulation.clearInspection();
         this.publishUi();
       }
 
@@ -220,8 +250,9 @@ export class DungeonScene extends Phaser.Scene {
 
     if (!view) {
       const sprite = this.add.image(0, 0, TEXTURE_KEYS.defense[defense.type]);
+      const labelText = defense.kind === 'minion' ? shortDisplayName(defense.name, definition.shortName) : definition.shortName;
       const label = this.add
-        .text(0, 20, definition.shortName, {
+        .text(0, 20, labelText, {
           color: '#fff4d8',
           fontSize: '9px',
           fontStyle: 'bold',
@@ -274,6 +305,13 @@ export class DungeonScene extends Phaser.Scene {
 
     this.previousAdventurerHp.set(adventurer.id, adventurer.hp);
     view.container.setPosition(world.x, world.y);
+    view.container.setAlpha(adventurer.stunnedTimerMs > 0 ? 0.55 : 1);
+
+    if (adventurer.fearTimerMs > 0) {
+      view.sprite.setTint(0x9fb7e8);
+    } else {
+      view.sprite.clearTint();
+    }
   }
 
   private pulseHit(container: Phaser.GameObjects.Container): void {
@@ -353,6 +391,36 @@ export class DungeonScene extends Phaser.Scene {
       });
       this.pathGraphics.strokePath();
     });
+  }
+
+  private drawTreasure(): void {
+    const renderState = this.simulation.getRenderState();
+    this.treasureGraphics.clear();
+
+    if (renderState.treasure.status === 'dropped' && renderState.treasure.droppedCell) {
+      const world = cellToWorld(renderState.treasure.droppedCell);
+      this.treasureGraphics.fillStyle(0xf6d88a, 0.95);
+      this.treasureGraphics.fillCircle(world.x, world.y, 7);
+      this.treasureGraphics.lineStyle(2, 0xa8791f, 1);
+      this.treasureGraphics.strokeCircle(world.x, world.y, 7);
+      return;
+    }
+
+    if (renderState.treasure.status === 'carried' && renderState.treasure.holderAdventurerId) {
+      const carrier = renderState.adventurers.find(
+        (adventurer) => adventurer.id === renderState.treasure.holderAdventurerId,
+      );
+
+      if (!carrier) {
+        return;
+      }
+
+      const world = gridPositionToWorld(carrier.x, carrier.y);
+      this.treasureGraphics.fillStyle(0xf6d88a, 0.95);
+      this.treasureGraphics.fillCircle(world.x + 12, world.y - 12, 5);
+      this.treasureGraphics.lineStyle(1.5, 0xa8791f, 1);
+      this.treasureGraphics.strokeCircle(world.x + 12, world.y - 12, 5);
+    }
   }
 
   private drawHover(x: number, y: number): void {

@@ -36,6 +36,29 @@ export type RelationshipKind =
 
 export type AdventurerLifeStatus = 'alive' | 'injured' | 'missing' | 'dead' | 'retired';
 
+export type BossAbilityType = 'shockwave' | 'roar' | 'summon';
+
+export type RumorEffect =
+  | 'greedSurge'
+  | 'cautionSurge'
+  | 'thiefRecruitment'
+  | 'warriorRecruitment'
+  | 'healerRecruitment';
+
+export interface TavernRumor {
+  wave: number;
+  text: string;
+  effect: RumorEffect;
+}
+
+export type TreasureStatus = 'secure' | 'carried' | 'dropped' | 'stolen';
+
+export interface TreasureState {
+  status: TreasureStatus;
+  holderAdventurerId: string | null;
+  droppedCell: GridCell | null;
+}
+
 export type AdventurerAvailability = 'available' | 'onExpedition' | 'recovering';
 
 export type ExpeditionOutcome = 'survived' | 'died' | 'bossDefeated';
@@ -130,6 +153,9 @@ export interface AdventurerProfile {
   relations: AdventurerRelation[];
   legacyHooks: AdventurerLegacyHook[];
   expeditionHistory: ExpeditionRecord[];
+  heirOfProfileId: string | null;
+  heirSpawned: boolean;
+  treasureStolenCount: number;
 }
 
 export interface GuildProfile {
@@ -177,12 +203,15 @@ export interface RunWorldMemory {
   realms: Record<string, RealmProfile>;
   currentDay: number;
   nextProfileNumber: number;
+  rumors: TavernRumor[];
+  treasuresStolen: number;
 }
 
 export interface DefenseEntity {
   id: string;
   type: DefenseType;
   kind: DefenseKind;
+  name: string;
   cell: GridCell;
   homeCell: GridCell;
   x: number;
@@ -194,6 +223,9 @@ export interface DefenseEntity {
   aiState: DefenseAIState;
   targetAdventurerId: string | null;
   patrolAngle: number;
+  kills: number;
+  wavesSurvived: number;
+  summoned: boolean;
 }
 
 export interface AdventurerEntity {
@@ -224,6 +256,18 @@ export interface AdventurerEntity {
   lastCellKey: string;
   alive: boolean;
   escaped: boolean;
+  hasEnteredDungeon: boolean;
+  carryingTreasure: boolean;
+  stunnedTimerMs: number;
+  fearTimerMs: number;
+  fearPreviousStage: AdventurerTargetStage | null;
+  isHeir: boolean;
+}
+
+export interface BossAbilityState {
+  type: BossAbilityType;
+  cooldownRemainingMs: number;
+  usesThisWave: number;
 }
 
 export interface BossEntity {
@@ -239,6 +283,7 @@ export interface BossEntity {
   attackCooldownMs: number;
   attackTimerMs: number;
   targetAdventurerId: string | null;
+  abilities: Record<BossAbilityType, BossAbilityState>;
 }
 
 export interface AdaptationMemory {
@@ -267,6 +312,9 @@ export interface WaveStats {
   bossDamageByProfile: Record<string, number>;
   storyEvents: string[];
   chronicleEvents: ChronicleEntry[];
+  treasureStolen: boolean;
+  abilityUses: number;
+  minionKillsByDefenseId: Record<string, number>;
 }
 
 export interface WaveRuntime {
@@ -301,6 +349,10 @@ export interface WaveReport {
   adventurersEscaped: number;
   bossDamageTaken: number;
   goldAwarded: number;
+  trapRefundGold: number;
+  treasurePenaltyGold: number;
+  preparationBudget: number;
+  treasureStolen: boolean;
   dungeonReputation: number;
   reputationDelta: number;
   trapHighlights: ReportEntry[];
@@ -321,9 +373,13 @@ export interface GameState {
   defenses: DefenseEntity[];
   adventurers: AdventurerEntity[];
   boss: BossEntity;
+  treasure: TreasureState;
   memory: AdaptationMemory;
   world: RunWorldMemory;
   runtime: WaveRuntime | null;
   report: WaveReport | null;
   message: string;
+  paused: boolean;
+  gameSpeed: number;
+  inspectedAdventurerId: string | null;
 }

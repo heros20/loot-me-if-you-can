@@ -1,9 +1,28 @@
-import type { DefenseType } from '../game/types';
+import type { BossAbilityType, DefenseType } from '../game/types';
 import type { CountItem, DungeonSnapshot, UiSnapshot } from '../game/uiSnapshot';
 import { emitUiAction, onUiState } from './uiEvents';
 
+const BEST_WAVE_STORAGE_KEY = 'final-boss-dungeon.best-wave';
+
+function loadBestWave(): number {
+  try {
+    return Number(window.localStorage.getItem(BEST_WAVE_STORAGE_KEY) ?? '0') || 0;
+  } catch {
+    return 0;
+  }
+}
+
+function saveBestWave(value: number): void {
+  try {
+    window.localStorage.setItem(BEST_WAVE_STORAGE_KEY, String(value));
+  } catch {
+    // Stockage indisponible: le record reste purement moral.
+  }
+}
+
 export class GameDomUi {
   private lastMarkup = '';
+  private bestWave = loadBestWave();
   private readonly unsubscribe: () => void;
 
   constructor(private readonly root: HTMLElement) {
@@ -15,6 +34,11 @@ export class GameDomUi {
   }
 
   private render(snapshot: UiSnapshot): void {
+    if (snapshot.phase !== 'menu' && snapshot.survivedWaves > this.bestWave) {
+      this.bestWave = snapshot.survivedWaves;
+      saveBestWave(this.bestWave);
+    }
+
     const markup = snapshot.phase === 'menu' ? this.renderMenu() : this.renderDungeon(snapshot);
 
     if (markup === this.lastMarkup) {
@@ -101,9 +125,12 @@ export class GameDomUi {
         <div class="message">Reputation: ${escapeHtml(snapshot.dungeonReputationTitle)} (${snapshot.dungeonReputation}).</div>
       </div>
 
+      ${this.renderNamedMinions(snapshot)}
       ${snapshot.report ? this.renderCompactReport(snapshot) : ''}
+      ${snapshot.recentRumors.length > 0 ? this.renderRumors(snapshot.recentRumors) : ''}
       ${snapshot.recentJournal.length > 0 ? this.renderJournal(snapshot.recentJournal) : ''}
       ${snapshot.recentChronicles.length > 0 ? this.renderChronicles(snapshot.recentChronicles) : ''}
+      ${this.bestWave > 0 ? `<div class="message">Record local: ${this.bestWave} vague${this.bestWave > 1 ? 's' : ''} repoussee${this.bestWave > 1 ? 's' : ''}.</div>` : ''}
 
       <div class="actions">
         <button class="button" data-action="launch-wave" ${snapshot.canLaunchWave ? '' : 'disabled'}>
@@ -113,16 +140,131 @@ export class GameDomUi {
     `;
   }
 
+  private renderNamedMinions(snapshot: DungeonSnapshot): string {
+    if (snapshot.namedMinions.length === 0) {
+      return '';
+    }
+
+    return `
+      <div class="panel-section">
+        <p class="section-title">Sbires notables</p>
+        <ul class="minion-list">
+          ${snapshot.namedMinions
+            .map(
+              (minion) => `
+                <li>
+                  <strong>${escapeHtml(minion.name)}</strong> (${escapeHtml(minion.typeName)}) -
+                  ${minion.kills} kill${minion.kills > 1 ? 's' : ''}, ${minion.wavesSurvived} vague${minion.wavesSurvived > 1 ? 's' : ''}
+                </li>
+              `,
+            )
+            .join('')}
+        </ul>
+      </div>
+    `;
+  }
+
+  private renderRumors(rumors: string[]): string {
+    return this.renderTextList('Rumeurs de taverne', rumors.slice(-2));
+  }
+
   private renderWavePanel(snapshot: DungeonSnapshot, bossPercent: number): string {
     return `
       <div class="panel-section">
         <p class="section-title">Vague en cours</p>
+        <div class="wave-controls">
+          <button class="control-button" data-action="toggle-pause">${snapshot.paused ? 'Reprendre' : 'Pause'}</button>
+          ${[1, 2, 3]
+            .map(
+              (speed) => `
+                <button class="control-button${snapshot.gameSpeed === speed ? ' is-selected' : ''}" data-speed="${speed}">
+                  x${speed}
+                </button>
+              `,
+            )
+            .join('')}
+        </div>
+        ${this.renderTreasureStatus(snapshot)}
         <div class="roster">${this.renderCounts(snapshot.adventurersByRole)}</div>
         <div class="roster">${this.renderNameTags(snapshot.activeAdventurerNames)}</div>
         <div class="report__grid">
           <div class="report__metric"><span>Boss</span><strong>${bossPercent}%</strong></div>
           <div class="report__metric"><span>Infamie</span><strong>${snapshot.dungeonReputation}</strong></div>
         </div>
+      </div>
+
+      <div class="panel-section">
+        <p class="section-title">Capacites du boss</p>
+        <div class="ability-list">
+          ${snapshot.bossAbilities
+            .map((ability) => {
+              const cooldownSeconds = Math.ceil(ability.cooldownRemainingMs / 1000);
+              const status = ability.usesLeft === 0
+                ? 'Epuise'
+                : ability.ready
+                  ? 'Pret'
+                  : `${cooldownSeconds}s`;
+              return `
+                <button
+                  class="ability-button${ability.ready ? ' is-ready' : ''}"
+                  data-ability="${ability.type}"
+                  ${ability.ready ? '' : 'disabled'}
+                  title="${escapeHtml(ability.description)}"
+                >
+                  <strong>${escapeHtml(ability.name)}</strong>
+                  <span>${escapeHtml(status)} - ${ability.usesLeft} restant${ability.usesLeft > 1 ? 's' : ''}</span>
+                </button>
+              `;
+            })
+            .join('')}
+        </div>
+      </div>
+
+      ${snapshot.inspectedAdventurer ? this.renderInspection(snapshot) : '<div class="message">Clique sur un intrus pour l\'inspecter.</div>'}
+    `;
+  }
+
+  private renderTreasureStatus(snapshot: DungeonSnapshot): string {
+    if (snapshot.treasureStatus === 'carried') {
+      return `<div class="message message--alert">Tresor porte par ${escapeHtml(snapshot.treasureCarrierName ?? 'un intrus')}. Ne le laisse pas sortir.</div>`;
+    }
+
+    if (snapshot.treasureStatus === 'dropped') {
+      return '<div class="message message--alert">Le tresor traine par terre. Quelqu\'un va forcement le ramasser.</div>';
+    }
+
+    if (snapshot.treasureStatus === 'stolen') {
+      return '<div class="message message--alert">Le tresor est VOLE. La honte sera comptabilisee au rapport.</div>';
+    }
+
+    return '';
+  }
+
+  private renderInspection(snapshot: DungeonSnapshot): string {
+    const target = snapshot.inspectedAdventurer;
+
+    if (!target) {
+      return '';
+    }
+
+    const traits = target.traits.join(', ') || 'aucun';
+    const injuries = target.injuries.length > 0 ? target.injuries.join(', ') : 'aucune';
+
+    return `
+      <div class="panel-section inspection">
+        <p class="section-title">Dossier: ${escapeHtml(target.name)}</p>
+        <ul class="inspection__facts">
+          <li>${escapeHtml(target.className)} niveau ${target.level}, ${target.age} ans</li>
+          <li>PV: ${target.hp} / ${target.maxHp}</li>
+          <li>Personnalite: ${escapeHtml(target.personality)} (traits: ${escapeHtml(traits)})</li>
+          <li>Expeditions: ${target.expeditionCount} (survies: ${target.survivedExpeditions})</li>
+          <li>Monstres tues: ${target.monstersKilled}, pieges declenches: ${target.trapsTriggered}</li>
+          <li>Blessures: ${escapeHtml(injuries)}</li>
+          ${target.isHeir && target.heirNote ? `<li class="inspection__heir">${escapeHtml(target.heirNote)}</li>` : ''}
+          ${target.carryingTreasure ? '<li class="inspection__heir">Porte le tresor du donjon.</li>' : ''}
+          ${target.lastFeat ? `<li>Dernier fait: ${escapeHtml(target.lastFeat)}</li>` : ''}
+        </ul>
+        <button class="control-button" data-action="close-inspection">Fermer le dossier</button>
       </div>
     `;
   }
@@ -137,6 +279,12 @@ export class GameDomUi {
     return `
       <div class="report">
         <h3>Rapport de la vague ${report.wave}</h3>
+        <div class="report-budget">
+          <p><span>Recompense de la vague</span><strong>+${report.goldAwarded} or</strong></p>
+          <p><span>Or recupere (demontage des pieges)</span><strong>+${report.trapRefundGold} or</strong></p>
+          ${report.treasurePenaltyGold > 0 ? `<p><span>Tresor vole (remplacement)</span><strong>-${report.treasurePenaltyGold} or</strong></p>` : ''}
+          <p class="report-budget__total"><span>Budget pour la prochaine preparation</span><strong>${report.preparationBudget} or</strong></p>
+        </div>
         ${this.renderTextList('Ce dont on se souviendra', report.storyLines)}
         <div class="actions">
           <button class="button" data-action="continue-build">Preparer la suite</button>
@@ -155,6 +303,10 @@ export class GameDomUi {
     return `
       <div class="report">
         <h3>Le boss est tombe</h3>
+        <div class="report-budget">
+          <p><span>Vagues repoussees cette fois</span><strong>${snapshot.survivedWaves}</strong></p>
+          <p class="report-budget__total"><span>Record local</span><strong>${this.bestWave}</strong></p>
+        </div>
         ${this.renderTextList('Ce dont on se souviendra', report.storyLines)}
         <div class="actions">
           <button class="button" data-action="restart">Rebatir sur les cendres</button>
@@ -237,6 +389,14 @@ export class GameDomUi {
           emitUiAction({ type: 'continue-build' });
         }
 
+        if (action === 'toggle-pause') {
+          emitUiAction({ type: 'toggle-pause' });
+        }
+
+        if (action === 'close-inspection') {
+          emitUiAction({ type: 'close-inspection' });
+        }
+
         if (action === 'restart') {
           emitUiAction({ type: 'restart' });
         }
@@ -253,6 +413,26 @@ export class GameDomUi {
 
         if (defenseType) {
           emitUiAction({ type: 'select-defense', defenseType });
+        }
+      });
+    });
+
+    this.root.querySelectorAll<HTMLButtonElement>('[data-ability]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const abilityType = button.dataset.ability as BossAbilityType | undefined;
+
+        if (abilityType) {
+          emitUiAction({ type: 'use-ability', abilityType });
+        }
+      });
+    });
+
+    this.root.querySelectorAll<HTMLButtonElement>('[data-speed]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const speed = Number(button.dataset.speed);
+
+        if (speed > 0) {
+          emitUiAction({ type: 'set-speed', speed });
         }
       });
     });

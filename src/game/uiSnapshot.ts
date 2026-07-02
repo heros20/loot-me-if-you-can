@@ -1,4 +1,13 @@
-import type { AdventurerRole, DefenseKind, DefenseType, GamePhase, WaveReport } from './types';
+import type {
+  AdventurerRole,
+  AdventurerTrait,
+  BossAbilityType,
+  DefenseKind,
+  DefenseType,
+  GamePhase,
+  TreasureStatus,
+  WaveReport,
+} from './types';
 
 export interface DefenseUiItem {
   type: DefenseType;
@@ -13,6 +22,44 @@ export interface DefenseUiItem {
 export interface CountItem {
   label: string;
   count: number;
+}
+
+export interface BossAbilityUiItem {
+  type: BossAbilityType;
+  name: string;
+  shortName: string;
+  description: string;
+  cooldownRemainingMs: number;
+  cooldownMs: number;
+  usesLeft: number;
+  ready: boolean;
+}
+
+export interface InspectedAdventurer {
+  name: string;
+  className: string;
+  level: number;
+  age: number;
+  personality: string;
+  traits: AdventurerTrait[];
+  hp: number;
+  maxHp: number;
+  expeditionCount: number;
+  survivedExpeditions: number;
+  monstersKilled: number;
+  trapsTriggered: number;
+  injuries: string[];
+  isHeir: boolean;
+  heirNote: string | null;
+  carryingTreasure: boolean;
+  lastFeat: string | null;
+}
+
+export interface NamedMinionUiItem {
+  name: string;
+  typeName: string;
+  kills: number;
+  wavesSurvived: number;
 }
 
 export interface MenuSnapshot {
@@ -40,6 +87,14 @@ export interface DungeonSnapshot {
   canLaunchWave: boolean;
   report: WaveReport | null;
   survivedWaves: number;
+  bossAbilities: BossAbilityUiItem[];
+  paused: boolean;
+  gameSpeed: number;
+  treasureStatus: TreasureStatus;
+  treasureCarrierName: string | null;
+  recentRumors: string[];
+  inspectedAdventurer: InspectedAdventurer | null;
+  namedMinions: NamedMinionUiItem[];
 }
 
 export type UiSnapshot = MenuSnapshot | DungeonSnapshot;
@@ -49,6 +104,10 @@ export type UiAction =
   | { type: 'select-defense'; defenseType: DefenseType }
   | { type: 'launch-wave' }
   | { type: 'continue-build' }
-  | { type: 'restart' };
+  | { type: 'restart' }
+  | { type: 'use-ability'; abilityType: BossAbilityType }
+  | { type: 'toggle-pause' }
+  | { type: 'set-speed'; speed: number }
+  | { type: 'close-inspection' };
 
 export type RoleCountMap = Record<AdventurerRole, number>;

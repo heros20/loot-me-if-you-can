@@ -1,4 +1,4 @@
-import type { AdventurerEntity, ExpeditionPlanType, PartyPlan, WaveStats } from '../game/types';
+import type { AdventurerEntity, ExpeditionPlanType, PartyPlan, RumorEffect, WaveStats } from '../game/types';
 
 const PLAN_LABELS: Record<ExpeditionPlanType, string> = {
   greedy: 'Expedition cupide',
@@ -10,8 +10,20 @@ const PLAN_LABELS: Record<ExpeditionPlanType, string> = {
 
 const PLAN_CYCLE: ExpeditionPlanType[] = ['greedy', 'heroic', 'cautious', 'mercenary', 'fanatic'];
 
-export function createPartyPlan(wave: number, dungeonReputation: number): PartyPlan {
-  const type = PLAN_CYCLE[(wave + Math.floor(dungeonReputation / 8)) % PLAN_CYCLE.length] ?? 'greedy';
+export function createPartyPlan(
+  wave: number,
+  dungeonReputation: number,
+  rumorBias: RumorEffect | null = null,
+): PartyPlan {
+  let type = PLAN_CYCLE[(wave + Math.floor(dungeonReputation / 8)) % PLAN_CYCLE.length] ?? 'greedy';
+
+  if (rumorBias === 'greedSurge' && wave % 2 === 0) {
+    type = 'greedy';
+  }
+
+  if (rumorBias === 'cautionSurge' && type !== 'fanatic') {
+    type = 'cautious';
+  }
   return {
     type,
     label: PLAN_LABELS[type],
@@ -27,8 +39,9 @@ export function updatePartyPlan(
   adventurers: AdventurerEntity[],
   stats: WaveStats,
   elapsedMs: number,
+  pendingSpawns: number,
 ): string | null {
-  if (plan.type === 'fanatic' || plan.retreating) {
+  if (plan.type === 'fanatic' || plan.retreating || pendingSpawns > 0) {
     return null;
   }
 

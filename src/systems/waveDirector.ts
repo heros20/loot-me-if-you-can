@@ -37,6 +37,7 @@ export function createAdventurer(profile: AdventurerProfile, id: string, wave: n
   const damageScale = 1 + (wave - 1) * 0.08;
   const speedScale = 1 + Math.min(0.22, (wave - 1) * 0.012);
   const veteranScale = 1 + profile.survivedExpeditions * 0.08 + Math.min(0.18, profile.reputation * 0.01);
+  const heirScale = profile.heirOfProfileId ? 1.12 : 1;
   const levelScale = 1 + (profile.level - 1) * 0.06;
   const courageDamage = profile.traits.includes('courageous') ? 1.05 : 1;
   const cautionHp = profile.traits.includes('cautious') ? 1.04 : 1;
@@ -58,9 +59,9 @@ export function createAdventurer(profile: AdventurerProfile, id: string, wave: n
     nemesisDefenseType: profile.nemesisDefenseType,
     x: ENTRY_CELL.x,
     y: ENTRY_CELL.y + spawnOffset,
-    hp: Math.round(definition.hp * hpScale * veteranScale * levelScale * cautionHp * injuryPerformanceMultiplier),
-    maxHp: Math.round(definition.hp * hpScale * veteranScale * levelScale * cautionHp * injuryPerformanceMultiplier),
-    damage: Math.max(1, Math.round(definition.damage * damageScale * veteranScale * levelScale * courageDamage * injuryPerformanceMultiplier)),
+    hp: Math.round(definition.hp * hpScale * veteranScale * levelScale * cautionHp * heirScale * injuryPerformanceMultiplier),
+    maxHp: Math.round(definition.hp * hpScale * veteranScale * levelScale * cautionHp * heirScale * injuryPerformanceMultiplier),
+    damage: Math.max(1, Math.round(definition.damage * damageScale * veteranScale * levelScale * courageDamage * heirScale * injuryPerformanceMultiplier)),
     speed: definition.speed * speedScale * greedSpeed * injuryPerformanceMultiplier,
     attackRange: definition.attackRange,
     attackCooldownMs: definition.attackCooldownMs,
@@ -75,6 +76,12 @@ export function createAdventurer(profile: AdventurerProfile, id: string, wave: n
     lastCellKey: cellKey(ENTRY_CELL),
     alive: true,
     escaped: false,
+    hasEnteredDungeon: false,
+    carryingTreasure: false,
+    stunnedTimerMs: 0,
+    fearTimerMs: 0,
+    fearPreviousStage: null,
+    isHeir: profile.heirOfProfileId !== null,
   };
 }
 

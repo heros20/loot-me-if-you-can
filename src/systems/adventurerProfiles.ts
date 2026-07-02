@@ -60,6 +60,8 @@ export function createInitialWorldMemory(): RunWorldMemory {
     },
     currentDay: 1,
     nextProfileNumber: 1,
+    rumors: [],
+    treasuresStolen: 0,
   };
 }
 
@@ -84,6 +86,16 @@ export function selectProfilesForWave(
       return survivor;
     }
 
+    if (index % 4 === 1) {
+      const fallen = pickFallenForHeir(world, role, wave);
+
+      if (fallen) {
+        const heir = createHeirProfile(world, fallen, wave);
+        selectedIds.add(heir.id);
+        return heir;
+      }
+    }
+
     const profile = createAdventurerProfile(role, world, wave, index);
     selectedIds.add(profile.id);
     world.profiles[profile.id] = profile;
@@ -102,6 +114,17 @@ function recoverAvailableProfiles(world: RunWorldMemory): void {
       profile.lifeStatus = 'alive';
     }
   });
+}
+
+export function releaseUndeployedExpedition(world: RunWorldMemory, profileId: string): void {
+  const profile = world.profiles[profileId];
+
+  if (!profile || profile.availability !== 'onExpedition') {
+    return;
+  }
+
+  profile.availability = 'available';
+  profile.expeditionCount = Math.max(0, profile.expeditionCount - 1);
 }
 
 export function activateProfileForExpedition(
@@ -319,7 +342,139 @@ function createAdventurerProfile(
     relations: [],
     legacyHooks: [],
     expeditionHistory: [],
+    heirOfProfileId: null,
+    heirSpawned: false,
+    treasureStolenCount: 0,
   };
+}
+
+const HEIR_FIRST_NAMES: Record<AdventurerRole, string[]> = {
+  warrior: ['Vindictus', 'Represaille', 'Serment'],
+  thief: ['Revanche', 'Ombrage', 'Rancoeur'],
+  mage: ['Memoriam', 'Cendrier', 'Requiem'],
+  healer: ['Promesse', 'Relique', 'Veillee'],
+};
+
+export function createHeirProfile(
+  world: RunWorldMemory,
+  fallen: AdventurerProfile,
+  wave: number,
+): AdventurerProfile {
+  const profileNumber = world.nextProfileNumber;
+  world.nextProfileNumber += 1;
+  const pool = HEIR_FIRST_NAMES[fallen.role];
+  const baseName = pool[profileNumber % pool.length] ?? fallen.firstName;
+  let firstName = baseName;
+  let suffix = 2;
+
+  while (world.usedNames.includes(firstName)) {
+    firstName = `${baseName}${suffix}`;
+    suffix += 1;
+  }
+
+  world.usedNames.push(firstName);
+  const familyName = fallen.name.split(' ').slice(1).join(' ') || 'Sansnom';
+  const traits: AdventurerTrait[] = ['vengeful'];
+
+  if (fallen.traits.includes('famous')) {
+    traits.push('famous');
+  }
+
+  const heir: AdventurerProfile = {
+    id: `profile-${profileNumber}`,
+    role: fallen.role,
+    firstName,
+    name: `${firstName} ${familyName}`,
+    className: ADVENTURER_DEFINITIONS[fallen.role].name,
+    age: Math.max(16, fallen.age - 12),
+    level: Math.max(1, Math.min(6, fallen.level - 1)),
+    experience: Math.max(0, Math.floor(fallen.experience / 2)),
+    dominantPersonality: 'vengeful',
+    lifeStatus: 'alive',
+    availability: 'available',
+    traits,
+    guildId: fallen.guildId,
+    realmId: fallen.realmId,
+    reputation: Math.floor(fallen.reputation / 2) + 1,
+    firstAppearanceDay: world.currentDay,
+    expeditionCount: 0,
+    survivedExpeditions: 0,
+    victories: 0,
+    defeats: 0,
+    monstersKilled: 0,
+    trapsTriggered: 0,
+    trauma: 0,
+    returnAvailableDay: world.currentDay,
+    injuries: [],
+    nemesisDefenseType: fallen.nemesisDefenseType,
+    deathWave: null,
+    relations: [
+      {
+        kind: 'parent',
+        targetProfileId: fallen.id,
+        note: `${firstName} vient venger ${fallen.name}, tombe vague ${fallen.deathWave ?? wave}.`,
+      },
+    ],
+    legacyHooks: [],
+    expeditionHistory: [],
+    heirOfProfileId: fallen.id,
+    heirSpawned: false,
+    treasureStolenCount: 0,
+  };
+
+  fallen.heirSpawned = true;
+  fallen.relations.push({
+    kind: 'child',
+    targetProfileId: heir.id,
+    note: `${heir.name} a jure vengeance.`,
+  });
+  world.profiles[heir.id] = heir;
+  addChronicle(world, `${heir.name} entre dans le donjon pour venger ${fallen.name}.`);
+  return heir;
+}
+
+export function pickFallenForHeir(
+  world: RunWorldMemory,
+  role: AdventurerRole,
+  wave: number,
+): AdventurerProfile | null {
+  if (wave < 3) {
+    return null;
+  }
+
+  return (
+    world.deadProfileIds
+      .map((id) => world.profiles[id])
+      .filter((profile): profile is AdventurerProfile => Boolean(profile))
+      .filter(
+        (profile) =>
+          profile.role === role &&
+          !profile.heirSpawned &&
+          profile.deathWave !== null &&
+          profile.deathWave <= wave - 1,
+      )
+      .sort(
+        (a, b) =>
+          b.reputation - a.reputation ||
+          b.expeditionCount - a.expeditionCount ||
+          (a.deathWave ?? 0) - (b.deathWave ?? 0),
+      )[0] ?? null
+  );
+}
+
+export function recordTreasureTheft(world: RunWorldMemory, profileId: string): void {
+  const profile = world.profiles[profileId];
+  world.treasuresStolen += 1;
+
+  if (!profile) {
+    return;
+  }
+
+  profile.treasureStolenCount += 1;
+  profile.reputation += 4;
+  profile.experience += 6;
+  updateLevel(profile);
+  addChronicle(world, `${profile.name} s'enfuit avec le tresor du donjon. Humiliation comptable.`);
 }
 
 function pickReturningSurvivor(
