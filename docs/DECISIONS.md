@@ -91,7 +91,7 @@ Chaque décision structurante obtient une entrée, numérotée dans l'ordre chro
 **Contexte** : décider si la mémoire du royaume (`RunWorldMemory`) doit survivre à une défaite (mort du boss).
 **Décision** : `startNewGame()` réinitialise entièrement la mémoire du monde ; seul le record de vagues survécues persiste (stockage local, sans effet mécanique).
 **Alternatives envisagées** : mémoire persistante entre parties dès le prototype (repoussé : risque de complexifier prématurément un système déjà central, avant que la boucle de base soit validée).
-**Conséquences** : c'est l'écart principal documenté dans le [GAME_DESIGN_DOCUMENT.md](./GAME_DESIGN_DOCUMENT.md) §19 (Progression) et une question ouverte du Milestone 2. Toute décision de rendre la mémoire trans-parties devra passer une nouvelle entrée ici et respecter D-004.
+**Conséquences** : c'est l'écart principal documenté dans le [GAME_DESIGN_DOCUMENT.md](./GAME_DESIGN_DOCUMENT.md) §26 (Progression) et une question ouverte du Milestone 2. Toute décision de rendre la mémoire trans-parties devra passer une nouvelle entrée ici et respecter D-004.
 
 ---
 
@@ -113,7 +113,29 @@ Chaque décision structurante obtient une entrée, numérotée dans l'ordre chro
 **Contexte** : implémenter une première version du système d'héritiers vengeurs sans complexifier excessivement le ciblage en combat.
 **Décision** : un héritier vindicatif priorise le *type* de défense qui a tué son ancêtre (ex. tous les gobelins), pas le monstre nommé exact.
 **Alternatives envisagées** : ciblage individuel dès le prototype (repoussé pour complexité, prévu explicitement au Milestone 2 du [ROADMAP.md](./ROADMAP.md)).
-**Conséquences** : documenté comme limitation connue dans le GDD §10 (Traits) ; ne pas considérer comme un bug, mais comme une simplification volontaire en attente d'extension.
+**Conséquences** : documenté comme limitation connue dans le GDD §13 (Traits) ; ne pas considérer comme un bug, mais comme une simplification volontaire en attente d'extension.
+
+---
+
+## D-009 — Le donjon est creusé, pas construit
+
+**Date** : 2026-07-02
+**Statut** : Actif
+**Contexte** : réunion de design #001 — clarifier l'identité du jeu par rapport aux tower defenses classiques et aux dungeon builders génériques. Le modèle actuel (« poser des murs » sur une grille vide) ne rendait pas justice au fantasme du Maître du Donjon qui façonne son repaire, et ne se distinguait pas assez d'un simple éditeur de grille.
+**Décision** : le joueur ne construit pas un donjon en posant des murs. Il **creuse** son donjon dans la roche. La carte démarre principalement comme une masse rocheuse ; le joueur creuse des couloirs, des salles, des intersections, des accès et des zones stratégiques. Les murs ne sont plus des objets que l'on pose : ce sont simplement de la roche non creusée.
+**Alternatives envisagées** : conserver le modèle actuel de pose/retrait de murs sur grille vide (écarté : moins immersif, ne distingue pas le jeu d'un tower defense générique) ; un système hybride où mur et roche coexisteraient comme deux ressources distinctes (écarté : ambiguïté inutile, contredit le principe #9 des Design Principles — un système doit s'expliquer en une phrase).
+**Conséquences** : le joueur étend son territoire au lieu de le délimiter ; la construction devient plus immersive ; chaque case creusée peut porter un coût ; le donjon progresse organiquement plutôt que de partir d'un tracé de murs prédéfini (`WALL_CELLS`) ; les salles naissent de l'espace creusé plutôt que d'un carvage générique. Documenté dans le [GAME_DESIGN_DOCUMENT.md](./GAME_DESIGN_DOCUMENT.md) §4 (Donjon creusé), §5 (Territoire du donjon) et §6 (Salles spécialisées) ; devient le cœur du Milestone 2 — *Carve Your Kingdom* (voir [ROADMAP.md](./ROADMAP.md), [MILESTONES.md](./MILESTONES.md)).
+
+---
+
+## D-010 — La guerre de l'information
+
+**Date** : 2026-07-02
+**Statut** : Actif
+**Contexte** : réunion de design #001 — clarifier *pourquoi* et *comment* le royaume « sait » ce qu'il sait du donjon, pour que son adaptation reste crédible plutôt que de ressembler à de l'omniscience (voir Design Principles #13).
+**Décision** : *Loot Me If You Can* est une guerre de l'information entre le Maître du Donjon et le Royaume. Le Royaume ne connaît pas le donjon par magie : il apprend uniquement grâce aux survivants, aux cartographes, aux rumeurs, aux rapports d'expédition, aux fragments de carte et à des observations imparfaites. Le joueur peut modifier son donjon entre deux expéditions — la carte connue du Royaume peut donc devenir obsolète.
+**Alternatives envisagées** : un royaume omniscient qui connaît en permanence l'état exact du donjon (écarté : plus simple à simuler, mais contredit Design Principles #13 et retire toute valeur stratégique à l'information elle-même) ; une carte du royaume qui se met à jour instantanément et parfaitement après chaque expédition (écarté : supprime tout intérêt à la désinformation et à l'obsolescence de la carte).
+**Conséquences** : l'information devient une ressource centrale, au même titre que l'or ou le territoire ; les survivants sont dangereux parce qu'ils rapportent des connaissances, pas seulement parce qu'ils s'échappent avec le trésor ; tuer un cartographe peut ralentir l'apprentissage du Royaume ; laisser partir un survivant peut au contraire désinformer la Guilde si son récit est incomplet ou biaisé ; les futures expéditions se préparent selon ce que la Guilde *croit* savoir, pas selon la vérité absolue du donjon. Documenté dans le [GAME_DESIGN_DOCUMENT.md](./GAME_DESIGN_DOCUMENT.md) §21 à §24 (Exploration des aventuriers, Cartographie progressive, Informations imparfaites, Cartographe) ; devient le cœur du Milestone 3 — *The Kingdom Remembers* (voir [ROADMAP.md](./ROADMAP.md), [MILESTONES.md](./MILESTONES.md)).
 
 ---
 

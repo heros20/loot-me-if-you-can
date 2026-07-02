@@ -23,6 +23,18 @@ export function buildWaveStoryLines(input: BuildWaveStoryInput): string[] {
     lines.push('Le tresor du donjon a quitte le batiment. Les tavernes en riront pendant des semaines.');
   }
 
+  if (input.stats.doorEncounters > 0) {
+    lines.push(
+      input.stats.doorDestroyedBeforeTreasure
+        ? 'Une porte renforcee a ete detruite avant que le tresor ne soit atteint.'
+        : "La porte renforcee a retarde l'expedition dans les couloirs.",
+    );
+
+    if (input.stats.doorDamageByThief > 0 && input.stats.doorDamageByThief >= input.stats.doorDamageTotal * 0.5) {
+      lines.push('Le voleur a brise la porte plus vite que prevu.');
+    }
+  }
+
   lines.push(...input.stats.storyEvents);
   lines.push(...input.stats.survivors.slice(-2).map((record) => record.note));
   lines.push(...input.stats.deaths.slice(-2).map((record) => record.note));

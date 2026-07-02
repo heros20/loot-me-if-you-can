@@ -1,5 +1,5 @@
 import type { BossAbilityType, ConstructionTool, DefenseType } from '../game/types';
-import type { CountItem, DefenseUiItem, DungeonSnapshot, UiSnapshot } from '../game/uiSnapshot';
+import type { ConstructionUiItem, CountItem, DefenseUiItem, DungeonSnapshot, UiSnapshot } from '../game/uiSnapshot';
 import { emitUiAction, onUiState } from './uiEvents';
 
 const BEST_WAVE_STORAGE_KEY = 'final-boss-dungeon.best-wave';
@@ -71,7 +71,7 @@ export class GameDomUi {
       <section class="hud">
         <div class="status-strip">
           ${this.renderStatus('Or', `${snapshot.gold}`)}
-          ${this.renderStatus('Vague', `${snapshot.wave}`)}
+          ${this.renderStatus('Expedition', `${snapshot.wave}`)}
           ${this.renderStatus('Boss', `${Math.max(0, snapshot.bossHp)} / ${snapshot.bossMaxHp}`)}
           ${this.renderStatus('Intrus', `${snapshot.liveAdventurers || snapshot.nextWaveSize}`)}
           ${this.renderStatus('Infamie', `${snapshot.dungeonReputation}`)}
@@ -96,29 +96,22 @@ export class GameDomUi {
   }
 
   private renderBuildControls(snapshot: DungeonSnapshot): string {
+    const constructionTools = snapshot.constructionTools.filter((item) => item.category === 'construction');
+    const roomTools = snapshot.constructionTools.filter((item) => item.category === 'rooms');
     const traps = snapshot.availableDefenses.filter((item) => item.kind === 'trap');
     const minions = snapshot.availableDefenses.filter((item) => item.kind === 'minion');
 
     return `
       <div class="panel-section">
         <p class="section-title">Construction</p>
-        <div class="tool-list">
-          ${snapshot.constructionTools
-            .map((item) => {
-              const selected = item.type === snapshot.selectedConstructionTool ? ' is-selected' : '';
-              return `
-                <button
-                  class="tool-button${selected}"
-                  data-construction="${item.type}"
-                  ${item.disabled ? 'disabled' : ''}
-                >
-                  <strong>${escapeHtml(item.name)}</strong>
-                  <small>${escapeHtml(item.description)}</small>
-                </button>
-              `;
-            })
-            .join('')}
-        </div>
+        <div class="tool-list">${constructionTools.map((item) => this.renderToolButton(item, snapshot)).join('')}</div>
+        <div class="roster">${this.renderCounts(snapshot.territoryByType)}</div>
+        <div class="message">Creuser coute ${snapshot.digCost} or. La roche bloque les expeditions; le sol et les salles les laissent passer.</div>
+      </div>
+
+      <div class="panel-section">
+        <p class="section-title">Salles</p>
+        <div class="tool-list">${roomTools.map((item) => this.renderToolButton(item, snapshot)).join('')}</div>
       </div>
 
       <div class="panel-section">
@@ -137,6 +130,7 @@ export class GameDomUi {
         <div class="report__grid">
           <div class="report__metric"><span>Vie</span><strong>${snapshot.bossHp}/${snapshot.bossMaxHp}</strong></div>
           <div class="report__metric"><span>Pouvoirs</span><strong>${snapshot.bossAbilities.length}</strong></div>
+          <div class="report__metric"><span>Salle</span><strong>Trone</strong></div>
         </div>
       </div>
 
@@ -164,9 +158,26 @@ export class GameDomUi {
 
       <div class="actions">
         <button class="button" data-action="launch-wave" ${snapshot.canLaunchWave ? '' : 'disabled'}>
-          Lancer la vague
+          Lancer l expedition
         </button>
       </div>
+    `;
+  }
+
+  private renderToolButton(item: ConstructionUiItem, snapshot: DungeonSnapshot): string {
+    const selected = item.type === snapshot.selectedConstructionTool ? ' is-selected' : '';
+    const cost = item.cost === null ? '' : `<em>${item.cost} or</em>`;
+
+    return `
+      <button
+        class="tool-button${selected}"
+        data-construction="${item.type}"
+        ${item.disabled ? 'disabled' : ''}
+      >
+        <strong>${escapeHtml(item.name)}</strong>
+        <small>${escapeHtml(item.description)}</small>
+        ${cost}
+      </button>
     `;
   }
 

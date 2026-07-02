@@ -2,23 +2,28 @@ import Phaser from 'phaser';
 import { TEXTURE_KEYS } from '../assets/manifest';
 import {
   BOSS_CELL,
-  ENTRY_CELL,
+  DIG_COST,
+  DOOR_COST,
   GRID_COLS,
   GRID_OFFSET_X,
   GRID_OFFSET_Y,
   GRID_ROWS,
   TILE_SIZE,
-  TREASURE_CELL,
   cellKey,
   cellToWorld,
   gridPositionToWorld,
-  isProtectedCell,
   isSameCell,
   worldToCell,
 } from '../game/constants';
+import {
+  getTileAt,
+  hasAdjacentDugTile,
+} from '../game/dungeonTiles';
 import { DungeonSimulation } from '../game/DungeonSimulation';
-import type { AdventurerEntity, DefenseEntity, GridCell } from '../game/types';
+import type { AdventurerEntity, DefenseEntity, DungeonDoor, DungeonTile } from '../game/types';
 import { getAdventurerDefinition, getDefenseDefinition } from '../entities/definitions';
+import { canBuildDefenseOnTile, canMarkRoomTile } from '../systems/dungeonConstruction';
+import { canPlaceDoorAt, findActiveDoorAt } from '../systems/doorSystem';
 import { emitUiState, onUiAction } from '../ui/uiEvents';
 
 interface RenderedEntity {
@@ -27,13 +32,21 @@ interface RenderedEntity {
   label: Phaser.GameObjects.Text;
 }
 
+interface RenderedDoor {
+  container: Phaser.GameObjects.Container;
+  shape: Phaser.GameObjects.Rectangle;
+  label: Phaser.GameObjects.Text;
+}
+
 export class DungeonScene extends Phaser.Scene {
   private simulation = new DungeonSimulation();
   private unsubscribeActions: (() => void) | null = null;
   private defenseViews = new Map<string, RenderedEntity>();
   private adventurerViews = new Map<string, RenderedEntity>();
+  private doorViews = new Map<string, RenderedDoor>();
   private previousDefenseHp = new Map<string, number>();
   private previousAdventurerHp = new Map<string, number>();
+  private previousDoorHp = new Map<string, number>();
   private bossView: RenderedEntity | null = null;
   private previousBossHp = 0;
   private hoverGraphics!: Phaser.GameObjects.Graphics;
@@ -153,18 +166,17 @@ export class DungeonScene extends Phaser.Scene {
     const grid = this.add.graphics();
     grid.fillStyle(0x181519, 1);
     grid.fillRect(0, 0, this.scale.width, this.scale.height);
+    const renderState = this.simulation.getRenderState();
 
     for (let y = 0; y < GRID_ROWS; y += 1) {
       for (let x = 0; x < GRID_COLS; x += 1) {
         const cell = { x, y };
         const worldX = GRID_OFFSET_X + x * TILE_SIZE;
         const worldY = GRID_OFFSET_Y + y * TILE_SIZE;
+        const tile = getTileAt(renderState.tiles, cell);
 
-        const texture = this.simulation.getRenderState().wallKeys.includes(cellKey(cell))
-          ? TEXTURE_KEYS.tileWall
-          : specialTileTexture(cell);
-        const tile = this.add.image(worldX, worldY, texture).setOrigin(0).setDisplaySize(TILE_SIZE, TILE_SIZE);
-        this.tileViews.set(cellKey(cell), tile);
+        const image = this.add.image(worldX, worldY, tileTexture(tile)).setOrigin(0).setDisplaySize(TILE_SIZE, TILE_SIZE);
+        this.tileViews.set(cellKey(cell), image);
       }
     }
 
@@ -202,7 +214,7 @@ export class DungeonScene extends Phaser.Scene {
 
   private syncRenderState(): void {
     const renderState = this.simulation.getRenderState();
-    this.syncDungeonTiles(renderState.wallKeys);
+    this.syncDungeonTiles(renderState.tiles);
     const aliveDefenseIds = new Set(renderState.defenses.map((defense) => defense.id));
     const aliveAdventurerIds = new Set(renderState.adventurers.map((adventurer) => adventurer.id));
 
@@ -226,6 +238,16 @@ export class DungeonScene extends Phaser.Scene {
       }
     });
 
+    const activeDoorIds = new Set(renderState.doors.map((door) => door.id));
+    renderState.doors.forEach((door) => this.syncDoor(door));
+    this.doorViews.forEach((view, id) => {
+      if (!activeDoorIds.has(id)) {
+        view.container.destroy(true);
+        this.doorViews.delete(id);
+        this.previousDoorHp.delete(id);
+      }
+    });
+
     if (this.bossView) {
       const bossWorld = gridPositionToWorld(renderState.boss.x, renderState.boss.y);
       this.bossView.container.setPosition(bossWorld.x, bossWorld.y);
@@ -240,18 +262,16 @@ export class DungeonScene extends Phaser.Scene {
     }
   }
 
-  private syncDungeonTiles(wallKeys: string[]): void {
-    const walls = new Set(wallKeys);
-
+  private syncDungeonTiles(tiles: DungeonTile[]): void {
     for (let y = 0; y < GRID_ROWS; y += 1) {
       for (let x = 0; x < GRID_COLS; x += 1) {
         const cell = { x, y };
         const key = cellKey(cell);
-        const tile = this.tileViews.get(key);
-        const texture = walls.has(key) ? TEXTURE_KEYS.tileWall : specialTileTexture(cell);
+        const tileView = this.tileViews.get(key);
+        const texture = tileTexture(getTileAt(tiles, cell));
 
-        if (tile && tile.texture.key !== texture) {
-          tile.setTexture(texture).setDisplaySize(TILE_SIZE, TILE_SIZE);
+        if (tileView && tileView.texture.key !== texture) {
+          tileView.setTexture(texture).setDisplaySize(TILE_SIZE, TILE_SIZE);
         }
       }
     }
@@ -330,6 +350,46 @@ export class DungeonScene extends Phaser.Scene {
     }
   }
 
+  private syncDoor(door: DungeonDoor): void {
+    let view = this.doorViews.get(door.id);
+    const world = cellToWorld(door.cell);
+
+    if (!view) {
+      const shape = this.add
+        .rectangle(0, 0, TILE_SIZE - 8, TILE_SIZE - 8, 0x8a5a34, 1)
+        .setStrokeStyle(2, 0x2c1810, 1);
+      const label = this.add
+        .text(0, 0, 'P', {
+          color: '#fff4d8',
+          fontSize: '11px',
+          fontStyle: 'bold',
+          fontFamily: 'monospace',
+        })
+        .setOrigin(0.5);
+      const container = this.add.container(world.x, world.y, [shape, label]);
+      view = { container, shape, label };
+      this.doorViews.set(door.id, view);
+    }
+
+    const previousHp = this.previousDoorHp.get(door.id);
+
+    if (previousHp !== undefined && door.hp < previousHp) {
+      this.pulseHit(view.container);
+    }
+
+    if (previousHp !== undefined && previousHp > 0 && door.hp <= 0) {
+      this.spawnDeathPuff(world.x, world.y, 0xc8a25a);
+    }
+
+    this.previousDoorHp.set(door.id, door.hp);
+    view.container.setPosition(world.x, world.y);
+    const damagedRatio = door.hp / door.maxHp;
+    view.shape.setFillStyle(door.destroyed ? 0x3a2c22 : 0x8a5a34, door.destroyed ? 0.35 : 1);
+    view.shape.setStrokeStyle(2, !door.destroyed && damagedRatio < 0.4 ? 0xd85a32 : 0x2c1810, 1);
+    view.label.setText(door.destroyed ? 'X' : 'P');
+    view.container.setAlpha(door.destroyed ? 0.5 : 1);
+  }
+
   private pulseHit(container: Phaser.GameObjects.Container): void {
     this.tweens.add({
       targets: container,
@@ -371,6 +431,13 @@ export class DungeonScene extends Phaser.Scene {
       const world = gridPositionToWorld(adventurer.x, adventurer.y);
       this.drawBar(world.x - 14, world.y - 24, 28, adventurer.hp / adventurer.maxHp, 0xc88b4a);
     });
+
+    renderState.doors
+      .filter((door) => !door.destroyed)
+      .forEach((door) => {
+        const world = cellToWorld(door.cell);
+        this.drawBar(world.x - 12, world.y - 20, 24, door.hp / door.maxHp, 0xd8a24a);
+      });
 
     const bossWorld = gridPositionToWorld(renderState.boss.x, renderState.boss.y);
     this.drawBar(bossWorld.x - 22, bossWorld.y - 32, 44, renderState.boss.hp / renderState.boss.maxHp, 0x8f2631);
@@ -448,11 +515,18 @@ export class DungeonScene extends Phaser.Scene {
     }
 
     const renderState = this.simulation.getRenderState();
-    const wall = renderState.wallKeys.includes(cellKey(cell));
+    const tile = getTileAt(renderState.tiles, cell);
     const constructionTool = renderState.selectedConstructionTool;
-    const invalid = isProtectedCell(cell) ||
-      (constructionTool === 'wall' && wall) ||
-      (constructionTool !== 'floor' && constructionTool !== 'room' && wall);
+    const invalid = constructionTool === 'dig'
+      ? tile?.type !== 'rock' || !hasAdjacentDugTile(renderState.tiles, cell) || renderState.gold < DIG_COST
+      : constructionTool === 'guardRoom' || constructionTool === 'crypt'
+        ? !canMarkRoomTile(tile)
+        : constructionTool === 'door'
+          ? !canPlaceDoorAt(renderState.tiles, cell)
+            || Boolean(findActiveDoorAt(renderState.doors, cell))
+            || renderState.defenses.some((defense) => defense.alive && isSameCell(defense.cell, cell))
+            || renderState.gold < DOOR_COST
+          : !canBuildDefenseOnTile(tile);
     const color = invalid ? 0x8f2631 : 0xe1b35a;
     this.hoverGraphics.lineStyle(3, color, 0.86);
     this.hoverGraphics.strokeRect(
@@ -468,17 +542,45 @@ export class DungeonScene extends Phaser.Scene {
   }
 }
 
-function specialTileTexture(cell: GridCell): string {
-  if (isSameCell(cell, ENTRY_CELL)) {
+function tileTexture(tile: DungeonTile | null): string {
+  if (!tile) {
+    return TEXTURE_KEYS.tileRock;
+  }
+
+  if (tile.type === 'rock') {
+    return TEXTURE_KEYS.tileRock;
+  }
+
+  if (tile.type === 'entrance') {
     return TEXTURE_KEYS.tileEntry;
   }
 
-  if (isSameCell(cell, TREASURE_CELL)) {
+  if (tile.type === 'treasure') {
     return TEXTURE_KEYS.tileTreasure;
   }
 
-  if (isSameCell(cell, BOSS_CELL)) {
+  if (tile.type === 'throne') {
     return TEXTURE_KEYS.tileBoss;
+  }
+
+  if (tile.roomType === 'guardRoom') {
+    return TEXTURE_KEYS.tileGuardRoom;
+  }
+
+  if (tile.roomType === 'crypt') {
+    return TEXTURE_KEYS.tileCrypt;
+  }
+
+  if (tile.roomType === 'treasureRoom') {
+    return TEXTURE_KEYS.tileTreasureRoom;
+  }
+
+  if (tile.roomType === 'throneRoom') {
+    return TEXTURE_KEYS.tileThroneRoom;
+  }
+
+  if (tile.type === 'room') {
+    return TEXTURE_KEYS.tileRoom;
   }
 
   return TEXTURE_KEYS.tileFloor;

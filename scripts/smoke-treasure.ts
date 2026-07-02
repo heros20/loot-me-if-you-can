@@ -16,13 +16,13 @@ for (let wave = 1; wave <= 8; wave += 1) {
   }
 
   sim.selectDefense('spikeTrap');
-  sim.placeSelectedDefense({ x: 3, y: 4 });
-  sim.placeSelectedDefense({ x: 4, y: 4 });
-  sim.placeSelectedDefense({ x: 8, y: 2 });
+  sim.placeSelectedDefense({ x: 3, y: 7 });
+  sim.placeSelectedDefense({ x: 4, y: 7 });
+  sim.placeSelectedDefense({ x: 10, y: 4 });
   sim.selectDefense('skeleton');
-  sim.placeSelectedDefense({ x: 7, y: 3 });
+  sim.placeSelectedDefense({ x: 8, y: 4 });
   sim.selectDefense('goblin');
-  sim.placeSelectedDefense({ x: 5, y: 2 });
+  sim.placeSelectedDefense({ x: 6, y: 6 });
   sim.launchWave();
 
   let t = 0;

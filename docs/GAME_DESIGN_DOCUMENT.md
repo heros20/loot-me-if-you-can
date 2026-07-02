@@ -23,30 +23,46 @@ Chaque section est indépendante et porte une étiquette de statut :
 
 Quand un chiffre change dans le code, cette section doit être mise à jour dans la même pull request. Toute divergence entre ce document et le code est un bug de documentation.
 
+**Note de terminologie** (réunion de design #001) : dans le vocabulaire de design, on préfère désormais *expédition* (ou *raid*, *groupe d'aventuriers*, *débriefing d'expédition*) à *vague*. Le mot *vague* subsiste dans le code (`GamePhase.wave`, `WaveReport`, `waveNumber`, scripts `smoke`) et reste utilisé ici quand ce document nomme précisément un identifiant de code existant ; le reste de ce document privilégie *expédition*.
+
 ---
 
-## 1. Présentation générale 🟢
+## 1. Les 5 piliers du jeu 🟢
+
+Actés lors de la réunion de design #001, ces cinq piliers résument l'identité du jeu et orientent toute décision de contenu future. Ils sont la version condensée des Piliers d'expérience du [GAME_VISION.md](./GAME_VISION.md) et des [Design Principles](./DESIGN_PRINCIPLES.md).
+
+1. **Le joueur est le Maître du Donjon.** Il ne subit pas un système : il façonne son repaire — aujourd'hui en posant des murs, demain en creusant la roche (voir [§4 Donjon creusé](#4-donjon-creusé-), [DECISIONS.md](./DECISIONS.md) D-009).
+2. **Le Royaume apprend.** Jamais par magie : uniquement via les survivants, les cartographes, les rumeurs et les rapports d'expédition (voir [§18 Royaume](#18-royaume-), [§20 Intelligence collective](#20-intelligence-collective-), [DECISIONS.md](./DECISIONS.md) D-010).
+3. **Chaque expédition raconte une histoire.** Les noms, les morts, les héritiers et les débriefings sont la matière première du jeu, pas un habillage (voir [§16 Chroniques](#16-chroniques-), [§25 Débriefing](#25-débriefing-)).
+4. **La difficulté vient de l'intelligence, jamais du nombre.** L'expédition reste fixée à 5 aventuriers ; toute montée en puissance passe par les statistiques, les rôles et l'adaptation (voir [DECISIONS.md](./DECISIONS.md) D-001, D-002).
+5. **L'information est une ressource.** Elle se gagne, se perd, se désinforme et s'use — au même titre que l'or ou le territoire (voir [§21](#21-exploration-des-aventuriers-) à [§24](#24-cartographe-), [DECISIONS.md](./DECISIONS.md) D-010).
+
+> « Chaque nouvelle mécanique doit rendre les expéditions plus mémorables, pas simplement plus difficiles. »
+
+---
+
+## 2. Présentation générale 🟢
 
 | Élément | Valeur |
 |---|---|
 | **Titre** | Loot Me If You Can *(nom de projet interne : Final Boss Dungeon)* |
-| **Genre** | Stratégie / gestion en temps réel, boucle de défense par vagues, narration émergente |
+| **Genre** | Stratégie / gestion en temps réel, boucle de défense par expéditions, narration émergente |
 | **Point de vue** | Le joueur incarne le boss final et gardien du donjon |
 | **Moteur** | Phaser 3.90 (rendu), TypeScript, Vite (build) |
 | **Plateforme** | Web (navigateur), PC en priorité |
 | **Format** | Partie unique continue, sans reset caché, jusqu'à la mort du boss |
 
-**Résumé en un paragraphe** : le joueur prépare un donjon en dépensant de l'or sur une grille, puis lance une vague de cinq aventuriers qui tentent de voler un trésor et de tuer le boss. Le combat se résout automatiquement ; le joueur peut activer des capacités de boss. Après chaque vague, un rapport narratif explique ce qui s'est passé, et le royaume adapte sa prochaine escouade en fonction de ce qui a fonctionné contre lui.
+**Résumé en un paragraphe** : le joueur prépare un donjon en dépensant de l'or sur une grille (vision cible : en creusant la roche, voir [§4](#4-donjon-creusé-)), puis lance une expédition de cinq aventuriers qui tentent de voler un trésor et de tuer le boss. Le combat se résout automatiquement ; le joueur peut activer des capacités de boss. Après chaque expédition, un débriefing narratif explique ce qui s'est passé, et le royaume adapte sa prochaine expédition en fonction de ce qu'il croit avoir appris (voir [DECISIONS.md](./DECISIONS.md) D-010).
 
 ---
 
-## 2. Gameplay Loop 🟢
+## 3. Gameplay Loop 🟢
 
 ```
    MENU
      │  (Commencer)
      ▼
-┌─────────┐   lancer vague    ┌─────────┐   vague résolue   ┌──────────┐
+┌─────────┐  lancer expédition ┌─────────┐ expédition résolue┌──────────┐
 │  BUILD  │ ────────────────▶ │  WAVE   │ ────────────────▶ │  REPORT  │
 │ (prépa) │                   │(combat) │                    │ (bilan)  │
 └─────────┘ ◀──────────────── └─────────┘                    └──────────┘
@@ -60,16 +76,20 @@ Quand un chiffre change dans le code, cette section doit être mise à jour dans
 
 **Détail des phases** (`GamePhase` : `menu | build | wave | report | defeat`) :
 
-1. **Build** — Le joueur pose pièges et monstres sur la grille avec son or disponible, modifie les murs/sols du donjon, consulte l'aperçu de la prochaine escouade et les rumeurs de taverne, puis lance la vague.
-2. **Wave** — Les cinq aventuriers entrent, pathfindent vers le trésor puis vers le boss, combattent en temps réel. Le joueur peut activer les capacités du boss, mettre en pause, accélérer (x1/x2/x3), et inspecter un aventurier en cliquant dessus.
-3. **Report** — Bilan économique, rapport narratif, changements de la guilde, rumeur générée pour la prochaine vague, aperçu du prochain recrutement.
-4. **Defeat** — Déclenché uniquement par la mort du boss. Écran de clôture narrative ; **redémarre une nouvelle partie complète** (réinitialisation totale de la mémoire du monde — voir [§9 Mémoire](#9-mémoire-)).
+1. **Build** — Le joueur pose pièges et monstres sur la grille avec son or disponible, modifie les murs/sols du donjon (vision cible : creuse la roche, voir [§4](#4-donjon-creusé-)), consulte l'aperçu de la prochaine expédition et les rumeurs de taverne, puis lance l'expédition.
+2. **Wave** — Les cinq aventuriers de l'expédition entrent, pathfindent vers le trésor puis vers le boss, combattent en temps réel. Le joueur peut activer les capacités du boss, mettre en pause, accélérer (x1/x2/x3), et inspecter un aventurier en cliquant dessus.
+3. **Report** — Bilan économique, débriefing narratif, changements de la guilde, rumeur générée pour la prochaine expédition, aperçu du prochain recrutement.
+4. **Defeat** — Déclenché uniquement par la mort du boss. Écran de clôture narrative ; **redémarre une nouvelle partie complète** (réinitialisation totale de la mémoire du monde — voir [§15 Mémoire](#15-mémoire-)).
 
-Il n'existe pas de victoire permanente : survivre à une vague ne fait que renvoyer en Build pour préparer la suivante, indéfiniment, jusqu'à la Defeat.
+Il n'existe pas de victoire permanente : survivre à une expédition ne fait que renvoyer en Build pour préparer la suivante, indéfiniment, jusqu'à la Defeat.
 
 ---
 
-## 3. Construction du donjon 🟡
+## 4. Donjon creusé 🟡
+
+**Vision (D-009)** — le joueur ne construit pas son donjon en posant des murs sur une grille vide : il **creuse** son donjon dans la roche. La carte démarre principalement comme une masse rocheuse ; creuser un couloir, une salle, une intersection ou un accès étend le territoire exploitable du joueur. Les murs ne sont plus des objets que l'on pose : ils **sont** la roche qui n'a pas encore été creusée. Voir [DECISIONS.md](./DECISIONS.md) D-009.
+
+🟢 **IMPLÉMENTÉ (état du code, v0.5.0)** — le modèle actuel, que D-009 remplace progressivement :
 
 | Élément | Valeur |
 |---|---|
@@ -79,31 +99,77 @@ Il n'existe pas de victoire permanente : survivre à une vague ne fait que renvo
 | Outils actuels | **Mur** (bloque le passage), **Sol** (retire un mur), **Salle** (dégage un carré 3×3 de murs) |
 | Contrainte de validation | Toute modification qui casserait le chemin entrée → trésor → boss est refusée |
 
-Le donjon démarre avec un tracé de murs prédéfini (`WALL_CELLS`) qui impose un premier couloir logique. Le joueur peut ensuite densifier ou simplifier ce tracé, tant qu'un chemin reste possible.
+Le donjon démarre aujourd'hui avec un tracé de murs prédéfini (`WALL_CELLS`) qui impose un premier couloir logique ; le joueur densifie ou simplifie ce tracé, tant qu'un chemin reste possible.
 
-🔵 **CIBLE** — Système de salles et de portes distinctes (au lieu d'un simple carvage de murs), permettant des typologies de salles avec effets propres (voir [IDEAS.md](./IDEAS.md)). Les portes ouvriraient des décisions tactiques supplémentaires (ralentir, forcer un détour, créer un goulot d'étranglement payant).
+🔵 **CIBLE (Milestone 2 — Carve Your Kingdom)** :
+- La carte démarre **majoritairement rocheuse**, plutôt qu'avec un tracé de murs prédéfini.
+- Le joueur **creuse** des couloirs, des salles, des intersections, des accès et des zones stratégiques, au lieu de poser/retirer des murs.
+- Chaque case creusée peut porter un **coût** (or et/ou temps).
+- Les salles naissent de l'espace creusé plutôt que d'un carvage 3×3 générique (voir [§6 Salles spécialisées](#6-salles-spécialisées-)).
+- Le territoire creusé devient une ressource lisible en soi (voir [§5 Territoire du donjon](#5-territoire-du-donjon-)).
+- La validation de chemin entrée → trésor → boss s'applique à toute opération de creusement, exactement comme elle s'applique aujourd'hui à la pose de murs.
+
+Ce chantier est le cœur du Milestone 2 (voir [ROADMAP.md](./ROADMAP.md), [MILESTONES.md](./MILESTONES.md)).
 
 ---
 
-## 4. Système économique 🟢
+## 5. Territoire du donjon 🔵
+
+Le joueur ne gagne pas seulement de l'or à chaque expédition repoussée : il gagne, potentiellement, de l'**espace exploitable**. Creuser la roche (voir [§4](#4-donjon-creusé-)) transforme une case inerte en territoire — un couloir traversable, une salle où poser un piège ou un monstre, un accès vers une nouvelle zone stratégique.
+
+🔵 **CIBLE** :
+- Le territoire (nombre de cases creusées, ou surface des salles ouvertes) devient une **ressource lisible**, distincte de l'or, affichée dans l'UI de préparation.
+- Certaines décisions doivent arbitrer entre **creuser plus** (plus d'options tactiques, plus de surface à défendre) et **creuser moins** (donjon compact, plus facile à couvrir avec le même or).
+- Un donjon immense mais vide n'est pas automatiquement plus fort qu'un donjon compact et dense : le territoire est un espace à exploiter, pas un score à maximiser.
+
+⚪ **EXPLORATOIRE** — un lien entre la taille du territoire et l'alarme du royaume ou la réputation (un donjon manifestement plus grand attire-t-il plus d'attention ?), voir [IDEAS.md](./IDEAS.md).
+
+Cette section prépare la structure du concept ; le détail numérique (coût, formule de valeur du territoire) reste à trancher au Milestone 2.
+
+---
+
+## 6. Salles spécialisées 🔵
+
+Une fois le donjon creusé (voir [§4](#4-donjon-creusé-)), certaines zones peuvent devenir des **salles spécialisées** : des espaces qui offrent un effet ou une fonction propre, au-delà du simple carvage 3×3 générique actuel. Cette section prépare uniquement la **structure** de la typologie ; le détail des effets de chaque salle sera conçu au Milestone 2, pas ici (ne pas surdévelopper avant que le système de creusement existe).
+
+⚪ **EXPLORATOIRE** — typologie envisagée, aucune n'est implémentée ni figée :
+
+| Salle | Intention pressentie |
+|---|---|
+| Salle de garde | Renforce ou concentre les défenses (monstres, pièges) à proximité |
+| Crypte | Liée à la mémoire du donjon, aux monstres vétérans ou aux morts passées |
+| Laboratoire | Salle d'expérimentation ou d'amélioration (pièges, monstres) |
+| Temple | Salle à effet de soin ou de buff pour les défenses du joueur |
+| Prison | Capture ou ralentit des aventuriers plutôt que de les tuer directement |
+| Arsenal | Stockage/amélioration d'équipement, lié à de futurs objets (voir [IDEAS.md](./IDEAS.md)) |
+| Salle du trésor | Salle spécialisée dédiée à la protection du trésor, distincte de la cellule fixe actuelle |
+| Salle du trône | Salle spécialisée dédiée au boss, distincte de la cellule fixe actuelle |
+
+🔵 **CIBLE (Milestone 2)** — au minimum, la salle du trésor et la salle du trône du boss existent comme premières salles spécialisées jouables, avec portes associées (voir [MILESTONES.md](./MILESTONES.md)).
+
+---
+
+## 7. Système économique 🟢
 
 | Flux | Formule / valeur |
 |---|---|
 | Or de départ | 30 |
-| Récompense de vague repoussée | `14 + vague × 4` |
-| Remboursement des pièges | Coût plein des pièges restants (les pièges sont démontés après chaque vague) |
+| Récompense d'expédition repoussée | `14 + vague × 4` |
+| Remboursement des pièges | Coût plein des pièges restants (les pièges sont démontés après chaque expédition) |
 | Pénalité de trésor volé | `min(or gagné + remboursement pièges, 8 + vague × 2)` |
-| Soin du boss entre vagues | `24 + vague × 2` PV |
-| Soin des monstres entre vagues | `+28 %` des PV max |
+| Soin du boss entre expéditions | `24 + vague × 2` PV |
+| Soin des monstres entre expéditions | `+28 %` des PV max |
+
+*(la variable `vague` dans les formules correspond au numéro d'expédition — voir la note de terminologie en tête de document)*
 
 **Principes économiques** :
-- Les **pièges** sont un investissement à usage unique par vague : posés, potentiellement rentabilisés, puis remboursés — le coût réel d'un piège est nul sur la durée s'il n'est jamais détruit, mais il occupe une décision de placement à chaque cycle.
-- Les **monstres** sont un investissement permanent : ils survivent, se soignent, gagnent en réputation individuelle (voir [§14 Réputation](#14-réputation-)), mais aucune mécanique actuelle ne les fait mourir définitivement de vieillesse — seule leur mort en combat compte.
+- Les **pièges** sont un investissement à usage unique par expédition : posés, potentiellement rentabilisés, puis remboursés — le coût réel d'un piège est nul sur la durée s'il n'est jamais détruit, mais il occupe une décision de placement à chaque cycle.
+- Les **monstres** sont un investissement permanent : ils survivent, se soignent, gagnent en réputation individuelle (voir [§17 Réputation](#17-réputation-)), mais aucune mécanique actuelle ne les fait mourir définitivement de vieillesse — seule leur mort en combat compte.
 - Le **trésor volé** est la seule perte nette du joueur : elle est plafonnée pour éviter une spirale économique impossible à rattraper, mais reste toujours douloureuse.
 
 ---
 
-## 5. Pièges 🟢
+## 8. Pièges 🟢
 
 | Piège | Coût | Dégâts | Cooldown |
 |---|---|---|---|
@@ -112,15 +178,15 @@ Le donjon démarre avec un tracé de murs prédéfini (`WALL_CELLS`) qui impose 
 
 **Règles** :
 - Un piège s'active quand un aventurier entre sur sa case, avec un temps de recharge avant de pouvoir refrapper.
-- Les pièges sont **démontés et intégralement remboursés** à la fin de chaque vague résolue : le joueur repart d'une page blanche de pièges à chaque préparation.
-- Le multiplicateur de dégâts de piège dépend du rôle de l'aventurier qui marche dessus (voir [§8 Aventuriers](#8-aventuriers-)) — un voleur encaisse moitié moins qu'un guerrier.
-- Chaque mort causée par un piège sur une case donnée **augmente durablement la dangerosité apprise de cette case** dans le pathfinding adverse (`trapDangerByCell`, +1.25 par kill) : les vagues suivantes évitent activement les cases qui ont déjà tué.
+- Les pièges sont **démontés et intégralement remboursés** à la fin de chaque expédition résolue : le joueur repart d'une page blanche de pièges à chaque préparation.
+- Le multiplicateur de dégâts de piège dépend du rôle de l'aventurier qui marche dessus (voir [§12 Aventuriers](#12-aventuriers-)) — un voleur encaisse moitié moins qu'un guerrier.
+- Chaque mort causée par un piège sur une case donnée **augmente durablement la dangerosité apprise de cette case** dans le pathfinding adverse (`trapDangerByCell`, +1.25 par kill) : les expéditions suivantes évitent activement les cases qui ont déjà tué.
 
-🔵 **CIBLE** — Upgrades de pièges entre les vagues (financés par la réputation ou l'or), pour que l'investissement dans un piège efficace puisse s'accumuler au lieu de repartir de zéro à coût identique.
+🔵 **CIBLE** — Upgrades de pièges entre les expéditions (financés par la réputation ou l'or), pour que l'investissement dans un piège efficace puisse s'accumuler au lieu de repartir de zéro à coût identique.
 
 ---
 
-## 6. Monstres 🟢
+## 9. Monstres 🟢
 
 | Monstre | Coût | PV | Dégâts | Portée d'attaque | Cooldown | Comportement |
 |---|---|---|---|---|---|---|
@@ -129,15 +195,15 @@ Le donjon démarre avec un tracé de murs prédéfini (`WALL_CELLS`) qui impose 
 | Gobelin (`goblin`) | 6 or | 32 | 7 | 1.15 | 560 ms | Patrouille puis poursuit activement |
 
 **Règles** :
-- Les monstres, contrairement aux pièges, **persistent d'une vague à l'autre** et récupèrent `+28 %` de PV max entre deux vagues.
-- Chaque monstre est **nommé individuellement** (ex. *Clavicule*, *Grattouille*) dès sa pose, comptabilise ses kills, et devient un **vétéran** consigné dans les chroniques du donjon (voir [§13 Chroniques](#13-chroniques-)).
+- Les monstres, contrairement aux pièges, **persistent d'une expédition à l'autre** et récupèrent `+28 %` de PV max entre deux expéditions.
+- Chaque monstre est **nommé individuellement** (ex. *Clavicule*, *Grattouille*) dès sa pose, comptabilise ses kills, et devient un **vétéran** consigné dans les chroniques du donjon (voir [§16 Chroniques](#16-chroniques-)).
 - L'IA de chaque type est distincte (patrouille/poursuite pour le gobelin, garde de position pour le squelette, ralentissement de zone pour le slime) plutôt qu'un comportement générique partagé.
 
-🔵 **CIBLE** — Types de monstres supplémentaires, traits d'équipement débloqués après des morts répétées, monstres nommés capables de devenir la cible spécifique d'un héritier vengeur (au lieu d'une vengeance par *type* de défense uniquement, voir [§10](#10-traits-)).
+🔵 **CIBLE** — Types de monstres supplémentaires, traits d'équipement débloqués après des morts répétées, monstres nommés capables de devenir la cible spécifique d'un héritier vengeur (au lieu d'une vengeance par *type* de défense uniquement, voir [§13](#13-traits-)).
 
 ---
 
-## 7. Boss 🟢
+## 10. Boss 🟢
 
 | Statistique | Valeur |
 |---|---|
@@ -145,11 +211,11 @@ Le donjon démarre avec un tracé de murs prédéfini (`WALL_CELLS`) qui impose 
 | Dégâts (attaque de base) | 16 |
 | Portée de détection | 3.5 |
 | Distance de laisse (leash) | 3.1 |
-| Soin entre vagues | `24 + vague × 2` PV |
+| Soin entre expéditions | `24 + vague × 2` PV |
 
-**Capacités activables par le joueur pendant une vague** :
+**Capacités activables par le joueur pendant une expédition** :
 
-| Capacité | Effet | Cooldown | Usages max / vague |
+| Capacité | Effet | Cooldown | Usages max / expédition |
 |---|---|---|---|
 | Onde de choc | 22 dégâts de zone + étourdissement 900 ms, rayon 2.9 | 9 s | 3 |
 | Rugissement | Peur : les cibles fuient vers la sortie pendant 2600 ms, rayon 4.2 | 14 s | 2 |
@@ -157,13 +223,13 @@ Le donjon démarre avec un tracé de murs prédéfini (`WALL_CELLS`) qui impose 
 
 Le boss attaque automatiquement les aventuriers à portée entre les activations de capacités ; le joueur ne le déplace pas directement, il l'assiste tactiquement.
 
-🔵 **CIBLE** — Capacités supplémentaires et chemin d'amélioration financé par l'infamie/réputation du donjon, pour que le boss évolue lui aussi entre les paliers de menace (voir [§16 Royaume](#16-royaume-) et [ROADMAP.md](./ROADMAP.md)).
+🔵 **CIBLE** — Capacités supplémentaires et chemin d'amélioration financé par l'infamie/réputation du donjon, pour que le boss évolue lui aussi entre les paliers de menace (voir [§18 Royaume](#18-royaume-) et [ROADMAP.md](./ROADMAP.md)).
 
 ---
 
-## 8. Combat 🟢
+## 11. Combat 🟢
 
-Le combat se résout **en temps réel et automatiquement** : chaque unité (aventurier, monstre, boss) possède une portée d'attaque, un cooldown, et cible l'ennemi valide le plus pertinent selon ses règles propres (le boss cible le plus faible ; certains aventuriers priorisent leur nemesis — voir [§10](#10-traits-)).
+Le combat se résout **en temps réel et automatiquement** : chaque unité (aventurier, monstre, boss) possède une portée d'attaque, un cooldown, et cible l'ennemi valide le plus pertinent selon ses règles propres (le boss cible le plus faible ; certains aventuriers priorisent leur nemesis — voir [§13](#13-traits-)).
 
 **Éléments clés** :
 - Chaque rôle d'aventurier a un **multiplicateur de dégâts de piège** propre (`trapDamageMultiplier`), rendant certains rôles beaucoup plus vulnérables aux pièges que d'autres.
@@ -171,11 +237,11 @@ Le combat se résout **en temps réel et automatiquement** : chaque unité (aven
 - Un aventurier mort lâche le trésor s'il le portait (`dropped`), permettant à un autre membre de l'escouade de le ramasser.
 - Le soigneur applique des soins de zone (`healAmount`, `healRange`) plutôt qu'un ciblage unique.
 
-🟡 **PARTIEL** — La résolution de combat vit aujourd'hui directement dans la simulation principale (`DungeonSimulation.ts`). Une extraction en système dédié est prévue une fois le nombre de règles de combat suffisamment grand (voir architecture, [§21](#21-architecture-gameplay-)).
+🟡 **PARTIEL** — La résolution de combat vit aujourd'hui directement dans la simulation principale (`DungeonSimulation.ts`). Une extraction en système dédié est prévue une fois le nombre de règles de combat suffisamment grand (voir architecture, [§30](#30-architecture-gameplay-)).
 
 ---
 
-## 9. Aventuriers 🟢
+## 12. Aventuriers 🟢
 
 | Rôle | PV | Dégâts | Vitesse | Portée | Particularité |
 |---|---|---|---|---|---|
@@ -184,21 +250,21 @@ Le combat se résout **en temps réel et automatiquement** : chaque unité (aven
 | Mage (`mage`) | 34 | 13 | 0.00162 | 2.55 | Dégâts élevés à distance, aucune résistance aux pièges |
 | Soigneur (`healer`) | 40 | 3 | 0.00172 | 1.8 | Soigne (`healAmount` 10, `healRange` 2.4) |
 
-**Composition de l'escouade** : fixe à **5 aventuriers** par vague (décision de design, voir [DECISIONS.md](./DECISIONS.md)). La répartition des rôles n'est pas aléatoire : elle est pondérée par la **pression de rôle** apprise (`rolePressure`), c'est-à-dire par ce qui a fonctionné ou échoué lors des vagues précédentes (voir [§17 Intelligence collective](#17-intelligence-collective-)).
+**Composition de l'expédition** : fixe à **5 aventuriers** (décision de design, voir [DECISIONS.md](./DECISIONS.md) D-001). La répartition des rôles n'est pas aléatoire : elle est pondérée par la **pression de rôle** apprise (`rolePressure`), c'est-à-dire par ce qui a fonctionné ou échoué lors des expéditions précédentes (voir [§20 Intelligence collective](#20-intelligence-collective-)).
 
-**Progression par vague** (appliquée à chaque nouvelle escouade) :
+**Progression par expédition** (appliquée à chaque nouvelle escouade) :
 
 | Statistique | Scaling |
 |---|---|
-| PV | +13 % par numéro de vague |
-| Dégâts | +8 % par numéro de vague |
+| PV | +13 % par numéro d'expédition |
+| Dégâts | +8 % par numéro d'expédition |
 | Vitesse | jusqu'à +22 % (plafonné) |
 | Vétérans (ont survécu à une expédition précédente) | +8 % par expédition survécue, plus bonus de réputation |
 | Héritiers | ×1.12 sur l'ensemble des statistiques |
 
 ---
 
-## 10. Traits 🟢
+## 13. Traits 🟢
 
 | Trait | Effet comportemental |
 |---|---|
@@ -211,13 +277,13 @@ Le combat se résout **en temps réel et automatiquement** : chaque unité (aven
 
 Ces traits alimentent des **plans d'expédition** (`ExpeditionPlanType`) tirés par l'IA de groupe : *greedy, heroic, cautious, fanatic, mercenary* — chacun avec un objectif primaire (trésor ou boss) et ses propres seuils de repli (ex. : un plan prudent se replie après 2 morts ; un plan cupide se replie après avoir sécurisé le trésor si des pertes ont eu lieu ; un survivant solitaire bat en retraite sauf en plan héroïque).
 
-Les rumeurs de taverne (voir [§17](#17-intelligence-collective-)) peuvent biaiser le choix du plan de la prochaine expédition (`greedSurge` → plan cupide, `cautionSurge` → plan prudent).
+Les rumeurs de taverne (voir [§20](#20-intelligence-collective-)) peuvent biaiser le choix du plan de la prochaine expédition (`greedSurge` → plan cupide, `cautionSurge` → plan prudent).
 
-🟡 **PARTIEL** — Le ciblage vindicatif se fait aujourd'hui par *type* de monstre (ex. tous les gobelins), pas par individu nommé. Cibler l'individu exact responsable de la mort de l'ancêtre est une cible du roadmap (voir [IDEAS.md](./IDEAS.md)).
+🟡 **PARTIEL** — Le ciblage vindicatif se fait aujourd'hui par *type* de monstre (ex. tous les gobelins), pas par individu nommé. Cibler l'individu exact responsable de la mort de l'ancêtre est une cible du Milestone 3 — *The Kingdom Remembers* (voir [IDEAS.md](./IDEAS.md)).
 
 ---
 
-## 11. Blessures 🟡
+## 14. Blessures 🟡
 
 | Statut de vie (`lifeStatus`) | alive · injured · missing · dead · retired |
 |---|---|
@@ -229,7 +295,7 @@ L'état actuel couvre la persistance des statuts et un système de traumatisme b
 
 ---
 
-## 12. Mémoire 🟢
+## 15. Mémoire 🟢
 
 Le cœur technique de la promesse « le royaume apprend ». Deux structures de données portent cette mémoire :
 
@@ -245,7 +311,7 @@ Ces valeurs modifient directement le **pathfinding** (une case qui a déjà tué
 
 **`RunWorldMemory`** (mémoire narrative persistante) : profils d'aventuriers individuels, morts/survies enregistrées, chroniques, réputation, guilde et royaume associés.
 
-**Déclencheurs d'adaptation post-vague** (`applyAdaptation`) :
+**Déclencheurs d'adaptation post-expédition** (`applyAdaptation`) :
 
 | Situation observée | Réaction du royaume |
 |---|---|
@@ -257,13 +323,15 @@ Ces valeurs modifient directement le **pathfinding** (une case qui a déjà tué
 | Quasi-anéantissement rapide de l'escouade | Plus de soigneurs et de voleurs |
 | Cas par défaut | Plus de mages |
 
-⚠️ **Important** — Cette mémoire est **entièrement réinitialisée** à chaque nouvelle partie (`startNewGame()` appelle `createInitialWorldMemory()`). Le royaume apprend *à l'intérieur* d'une partie continue, mais pas encore *entre* deux parties distinctes après une Defeat. Voir [§16 Royaume](#16-royaume-) pour la cible d'une mémoire trans-parties.
+⚠️ **Important** — Cette mémoire est **entièrement réinitialisée** à chaque nouvelle partie (`startNewGame()` appelle `createInitialWorldMemory()`). Le royaume apprend *à l'intérieur* d'une partie continue, mais pas encore *entre* deux parties distinctes après une Defeat. Voir [§18 Royaume](#18-royaume-) pour la cible d'une mémoire trans-parties.
+
+Cette mémoire tactique est aujourd'hui alimentée par une observation directe et complète de la simulation — elle ne simule pas encore la guerre de l'information décrite par [DECISIONS.md](./DECISIONS.md) D-010 (le royaume connaît tout ce qui s'est passé, pas seulement ce que des survivants auraient pu rapporter). Voir [§21](#21-exploration-des-aventuriers-) à [§24](#24-cartographe-) pour la cible d'une mémoire construite à partir d'informations imparfaites.
 
 ---
 
-## 13. Chroniques 🟢
+## 16. Chroniques 🟢
 
-Après chaque vague, un `WaveReport` est généré et contient :
+Après chaque expédition, un rapport (`WaveReport`) est généré et contient :
 - un résumé économique (or gagné, remboursements, pénalités) ;
 - un ou plusieurs **fils narratifs** générés (`narrativeReports.ts`) décrivant les faits marquants ;
 - les **chroniques des monstres vétérans** (kills cumulés, surnoms) ;
@@ -273,9 +341,9 @@ Ces chroniques sont la matière première de la mémorabilité recherchée par l
 
 ---
 
-## 14. Réputation 🟢
+## 17. Réputation 🟢
 
-**Réputation du donjon** — six paliers, recalculés après chaque vague :
+**Réputation du donjon** — six paliers, recalculés après chaque expédition :
 
 | Seuil | Titre |
 |---|---|
@@ -286,100 +354,159 @@ Ces chroniques sont la matière première de la mémorabilité recherchée par l
 | 42–59 | Le Donjon Noir |
 | 60+ | Fléau du Royaume |
 
-**Formule** : `kills × 2 + évasions + numéro de vague − (6 si trésor volé)`.
+**Formule** : `kills × 2 + évasions + numéro de vague − (6 si trésor volé)` *(le « numéro de vague » désigne le numéro d'expédition, voir la note de terminologie en tête de document)*.
 
 **Réputation individuelle des aventuriers** : un champ `reputation` et un titre associé (`reputationTitle`) suivent chaque profil, indépendamment de la réputation du donjon.
 
-🟡 **PARTIEL** — La réputation de la **guilde** existe comme champ de donnée (`guilds[...].reputation`) mais n'est **jamais mise à jour** en jeu actuellement (voir [§16](#16-royaume-)).
+🟡 **PARTIEL** — La réputation de la **guilde** existe comme champ de donnée (`guilds[...].reputation`) mais n'est **jamais mise à jour** en jeu actuellement (voir [§19 Guilde](#19-guilde-)).
 
 ---
 
-## 15. Royaume 🟡
+## 18. Royaume 🟡
 
 État actuel : un royaume unique et statique, **Royaume de Ciremarque**, portant un champ `alarm` qui n'est **jamais modifié** par le gameplay (voir [LORE.md](./LORE.md) pour le contexte narratif).
 
-🔵 **CIBLE** — Un royaume vivant avec des pressions régionales (peur, cupidité, gloire, prime) qui influencent concrètement la fréquence et la composition des vagues, plusieurs royaumes ou territoires, et une alarme qui a un effet mesurable en jeu. Cette section est volontairement en retrait par rapport à la vision du jeu ([GAME_VISION.md](./GAME_VISION.md)) — c'est l'écart principal identifié pour le Milestone 2 *Living Kingdom* (voir [ROADMAP.md](./ROADMAP.md)).
+🔵 **CIBLE** — Un royaume vivant avec des pressions régionales (peur, cupidité, gloire, prime) qui influencent concrètement la fréquence et la composition des expéditions, plusieurs royaumes ou territoires, et une alarme qui a un effet mesurable en jeu. Conformément à D-010 (voir [DECISIONS.md](./DECISIONS.md)), ce royaume vivant ne devra jamais connaître le donjon par magie : son alarme et ses pressions devront rester déduites des informations rapportées par les expéditions (voir [§21](#21-exploration-des-aventuriers-) à [§24](#24-cartographe-)). Cette section est volontairement en retrait par rapport à la vision du jeu ([GAME_VISION.md](./GAME_VISION.md)) — c'est l'écart principal identifié pour le Milestone 3 *The Kingdom Remembers* (voir [ROADMAP.md](./ROADMAP.md)).
 
 ---
 
-## 16. Guilde 🟡
+## 19. Guilde 🟡
 
 État actuel : une guilde unique et statique, **Guilde du Contrat Cendreux**, à laquelle tous les profils d'aventuriers sont rattachés. Aucun recrutement limité, aucune rivalité, aucun changement de tactique propre à la guilde.
 
-🔵 **CIBLE** — Système de guilde vivant : recruteurs actifs, tactiques préférées propres à la guilde, rancunes accumulées, effectif limité (perte réelle et durable d'un type de profil si trop d'aventuriers meurent), possibilité de guildes concurrentes.
+🔵 **CIBLE** — Système de guilde vivant : recruteurs actifs, tactiques préférées propres à la guilde, rancunes accumulées, effectif limité (perte réelle et durable d'un type de profil si trop d'aventuriers meurent), possibilité de guildes concurrentes. Voir Milestone 3 — *The Kingdom Remembers* ([ROADMAP.md](./ROADMAP.md)).
 
 ---
 
-## 17. Intelligence collective 🟢
+## 20. Intelligence collective 🟢
 
 Deux mécanismes produisent l'adaptation perçue par le joueur :
 
-1. **Pression de rôle** (`rolePressure`, voir [§12](#12-mémoire-)) — modifie la composition de l'escouade suivante selon les déclencheurs listés plus haut.
-2. **Rumeurs de taverne** (`tavernRumors.ts`) — un effet narratif et mécanique choisi après chaque vague :
+1. **Pression de rôle** (`rolePressure`, voir [§15](#15-mémoire-)) — modifie la composition de l'expédition suivante selon les déclencheurs listés plus haut.
+2. **Rumeurs de taverne** (`tavernRumors.ts`) — un effet narratif et mécanique choisi après chaque expédition :
 
 | Rumeur | Déclencheur | Effet mécanique |
 |---|---|---|
-| Vague de cupidité (`greedSurge`) | Trésor volé, ou par défaut | Biaise le plan d'expédition vers *greedy* |
+| Poussée de cupidité (`greedSurge`) | Trésor volé, ou par défaut | Biaise le plan d'expédition vers *greedy* |
 | Recrutement de voleurs (`thiefRecruitment`) | 2+ kills sur pièges | `rolePressure.thief += 1` |
 | Recrutement de guerriers (`warriorRecruitment`) | 2+ kills de monstres | `rolePressure.warrior += 1` |
 | Recrutement de soigneurs (`healerRecruitment`) | 30+ points de soin prodigués | `rolePressure.healer += 1` |
-| Vague de prudence (`cautionSurge`) | 2+ kills de boss ou 3+ usages de capacité | Biaise le plan d'expédition vers *cautious* |
+| Poussée de prudence (`cautionSurge`) | 2+ kills de boss ou 3+ usages de capacité | Biaise le plan d'expédition vers *cautious* |
 
-🔵 **CIBLE** — Apprentissage collectif au-delà du comptage de rôles : cartes de pièges partagées entre aventuriers d'une même guilde, mémoire de chemin collective, écran de taverne dédié avec plusieurs rumeurs concurrentes plutôt qu'une seule retenue par vague.
+🔵 **CIBLE** — Apprentissage collectif au-delà du comptage de rôles : cartes de pièges partagées entre aventuriers d'une même guilde, mémoire de chemin collective, écran de taverne dédié avec plusieurs rumeurs concurrentes plutôt qu'une seule retenue par expédition. Voir Milestone 3 — *The Kingdom Remembers*, et [§21](#21-exploration-des-aventuriers-) à [§24](#24-cartographe-) pour la dimension « guerre de l'information » de cet apprentissage.
 
 ---
 
-## 18. Débriefing 🟢
+## 21. Exploration des aventuriers ⚪
+
+Aujourd'hui, une expédition connaît implicitement tout le donjon dès son entrée : le pathfinding utilise la carte réelle et complète pour se déplacer et éviter les cases dangereuses apprises (voir [§15 Mémoire](#15-mémoire-)). Ce n'est pas encore remis en question par le code.
+
+⚪ **EXPLORATOIRE** — piste envisagée pour rendre la guerre de l'information (voir [DECISIONS.md](./DECISIONS.md) D-010) crédible côté aventuriers, pas seulement côté royaume :
+- Les aventuriers d'une expédition ne connaîtraient pas nécessairement l'intégralité du donjon avant d'y entrer, seulement ce que la Guilde leur a transmis (voir [§22 Cartographie progressive](#22-cartographie-progressive-)).
+- Une expédition pourrait devoir explorer une zone jamais cartographiée avant de savoir si elle est piégée, ce qui changerait la nature du pathfinding actuel (omniscient) vers un pathfinding partiellement informé.
+- Un aventurier prudent pourrait ralentir dans une zone inconnue ; un aventurier cupide pourrait s'y précipiter malgré tout (lien avec [§13 Traits](#13-traits-)).
+
+Cette piste n'est pas encore rattachée à un milestone précis ; elle dépend des fondations posées par [§4 Donjon creusé](#4-donjon-creusé-) et [§22 Cartographie progressive](#22-cartographie-progressive-).
+
+---
+
+## 22. Cartographie progressive 🔵
+
+Conséquence directe de D-010 (voir [DECISIONS.md](./DECISIONS.md)) : le Royaume ne connaît pas le donjon par magie. Il apprend uniquement via les survivants, les cartographes, les rumeurs, les rapports d'expédition et des fragments de carte.
+
+🔵 **CIBLE (Milestone 3 — The Kingdom Remembers)** :
+- Chaque expédition ne rapporte, au mieux, que ce qu'elle a effectivement traversé ou observé — pas une carte complète du donjon.
+- Les fragments rapportés par des expéditions successives s'accumulent pour former la carte *connue par le Royaume*, potentiellement très différente du donjon *réel* au moment où une future expédition est planifiée.
+- Le joueur peut modifier son donjon entre deux expéditions (voir [§4 Donjon creusé](#4-donjon-creusé-)) : la carte du Royaume peut donc devenir **obsolète**, et une expédition préparée sur des informations périmées peut se tromper de chemin ou ignorer un piège récemment posé.
+- Tuer un cartographe (voir [§24 Cartographe](#24-cartographe-)) ou empêcher un survivant précis de s'échapper ralentit concrètement cet apprentissage.
+
+Cette mécanique est ce qui rend la promesse *« le royaume apprend »* (voir [DESIGN_PRINCIPLES.md](./DESIGN_PRINCIPLES.md) #11) compatible avec le principe *« l'IA doit surprendre par sa logique, pas par son omniscience »* (#13) : le joueur peut, en observant les expéditions suivantes, déduire ce que le royaume croit savoir — et exploiter l'écart avec la vérité.
+
+---
+
+## 23. Informations imparfaites 🔵
+
+Toute information qui remonte au Royaume via une expédition (voir [§22](#22-cartographie-progressive-)) n'est pas nécessairement fiable. Pour que la guerre de l'information (D-010) ait un sens mécanique, une information rapportée peut être :
+
+| Nature de l'information | Effet attendu |
+|---|---|
+| **Exacte** | Le Royaume prépare correctement la prochaine expédition sur ce point précis |
+| **Incomplète** | Le Royaume ne connaît qu'une partie du donjon (une salle, un couloir), pas l'ensemble |
+| **Ancienne** | L'information était vraie au moment du rapport, mais le donjon a changé depuis (voir [§4 Donjon creusé](#4-donjon-creusé-)) |
+| **Mal interprétée** | Un survivant paniqué ou blessé rapporte un fait déformé (ex. surestime le nombre de pièges) |
+| **Contradictoire** | Deux rapports d'expéditions différentes se contredisent, forçant la Guilde à arbitrer ou à envoyer une reconnaissance |
+
+🔵 **CIBLE (Milestone 3)** — ces catégories qualifient les fragments de carte et les rapports d'expédition consommés par l'apprentissage du Royaume (voir [§15 Mémoire](#15-mémoire-), [§20 Intelligence collective](#20-intelligence-collective-)), en remplacement ou en complément d'une mémoire parfaite.
+
+⚪ **EXPLORATOIRE** — faire varier la fiabilité d'un rapport selon le trait du survivant qui le porte (un aventurier traumatisé rapporte-t-il moins fidèlement qu'un aventurier prudent ? voir [§13 Traits](#13-traits-)) — voir [IDEAS.md](./IDEAS.md).
+
+---
+
+## 24. Cartographe ⚪
+
+Le **Cartographe** est une future classe stratégique, préparée dès maintenant dans la vision du jeu mais **non implémentée**. Il n'est pas nécessairement prioritaire à construire immédiatement — cette section documente son rôle pressenti pour que toute mécanique liée à la guerre de l'information (D-010) reste cohérente avec son existence future.
+
+⚪ **EXPLORATOIRE** — intentions pressenties, aucune n'est tranchée :
+- Le Cartographe est le rôle d'aventurier qui **produit** l'information la plus fiable pour le Royaume : il cartographie activement le donjon pendant l'expédition plutôt que de se contenter de le traverser.
+- Un Cartographe qui survit et s'échappe fait progresser la connaissance du Royaume plus vite qu'un survivant ordinaire (voir [§22 Cartographie progressive](#22-cartographie-progressive-)).
+- Un Cartographe tué ou capturé **ralentit** délibérément l'apprentissage du Royaume — ce qui en fait une cible tactique prioritaire pour le joueur, symétrique au soigneur qui est une cible prioritaire pour l'IA défensive actuelle.
+- Sa présence dans une expédition pourrait elle-même être une information que le joueur peut détecter, ouvrant une décision : le laisser cartographier pour désinformer plus tard (voir [§23 Informations imparfaites](#23-informations-imparfaites-)), ou l'éliminer en priorité.
+
+**Ne pas implémenter avant que [§22 Cartographie progressive](#22-cartographie-progressive-) et [§23 Informations imparfaites](#23-informations-imparfaites-) aient une première version fonctionnelle** — le Cartographe n'a de sens mécanique que si le Royaume peut effectivement avoir une carte incomplète à améliorer.
+
+---
+
+## 25. Débriefing 🟢
 
 Écran affiché en phase **Report**, construit à partir du `WaveReport` :
 - gain d'or et détail (récompense, remboursement, pénalité) ;
-- texte narratif de la vague ;
+- texte narratif de l'expédition ;
 - rumeur de taverne générée ;
 - notes d'adaptation (ce qui a changé et pourquoi, en langage clair) ;
-- aperçu de la composition de la prochaine escouade ;
-- compteur de vagues survécues et **record local** (stocké en `localStorage`, purement déclaratif — *« le record reste purement moral »*, cf. code).
+- aperçu de la composition de la prochaine expédition ;
+- compteur d'expéditions survécues et **record local** (stocké en `localStorage`, purement déclaratif — *« le record reste purement moral »*, cf. code ; le stockage utilise encore le terme historique « vague »).
 
-🔵 **CIBLE** — Écran de taverne étendu avec plusieurs rumeurs visibles simultanément et concurrentes (voir [§17](#17-intelligence-collective-)).
-
----
-
-## 19. Progression 🟡
-
-**Progression intra-partie** (🟢 implémentée) : scaling par vague (voir [§9](#9-aventuriers-)), soin du boss et des monstres entre les vagues, accumulation de mémoire tactique (voir [§12](#12-mémoire-)).
-
-**Progression trans-parties** (🟡 partielle) : à ce jour, seul le **record de vagues survécues** persiste après une Defeat (stockage local, sans effet sur le gameplay). Toute la mémoire du monde repart de zéro à chaque nouvelle partie.
-
-🔵 **CIBLE** — Une forme de méta-progression compatible avec le principe *« le joueur finit toujours par perdre »* (voir [DESIGN_PRINCIPLES.md](./DESIGN_PRINCIPLES.md) #18) : par exemple, un royaume qui commence légèrement différent (mais jamais plus facile) à chaque nouvelle partie, informé par le souvenir collectif des parties précédentes plutôt que par un bonus de puissance pour le joueur. Cette question est ouverte — voir [IDEAS.md](./IDEAS.md), section « À explorer ».
+🔵 **CIBLE** — Écran de taverne étendu avec plusieurs rumeurs visibles simultanément et concurrentes (voir [§20](#20-intelligence-collective-)).
 
 ---
 
-## 20. Conditions de victoire et de défaite 🟢
+## 26. Progression 🟡
+
+**Progression intra-partie** (🟢 implémentée) : scaling par expédition (voir [§12](#12-aventuriers-)), soin du boss et des monstres entre les expéditions, accumulation de mémoire tactique (voir [§15](#15-mémoire-)).
+
+**Progression trans-parties** (🟡 partielle) : à ce jour, seul le **record d'expéditions survécues** persiste après une Defeat (stockage local, sans effet sur le gameplay). Toute la mémoire du monde repart de zéro à chaque nouvelle partie.
+
+🔵 **CIBLE** — Une forme de méta-progression compatible avec le principe *« le joueur finit toujours par perdre »* (voir [DESIGN_PRINCIPLES.md](./DESIGN_PRINCIPLES.md) #18) : par exemple, un royaume qui commence légèrement différent (mais jamais plus facile) à chaque nouvelle partie, informé par le souvenir collectif — nécessairement imparfait (voir [DECISIONS.md](./DECISIONS.md) D-010, [§23](#23-informations-imparfaites-)) — des parties précédentes plutôt que par un bonus de puissance pour le joueur. Cette question est ouverte — voir [IDEAS.md](./IDEAS.md), section « À explorer ».
+
+---
+
+## 27. Conditions de victoire et de défaite 🟢
 
 | Condition | Résultat |
 |---|---|
-| Tous les aventuriers de l'escouade meurent ou fuient | **Victoire temporaire** : retour en phase Build pour préparer la vague suivante |
+| Tous les aventuriers de l'expédition meurent ou fuient | **Victoire temporaire** : retour en phase Build pour préparer l'expédition suivante |
 | Le boss meurt | **Défaite** : fin de la partie, réinitialisation complète |
 
 Il n'existe **aucune condition de victoire finale**. C'est un choix de design assumé (voir [DESIGN_PRINCIPLES.md](./DESIGN_PRINCIPLES.md) #3) : la seule fin possible du jeu est la mort du boss.
 
 ---
 
-## 21. Interface 🟢
+## 28. Interface 🟢
 
 Interface hybride : rendu de jeu via Phaser (`#game-canvas`) et interface HTML/DOM (`#ui-root`) synchronisée par un instantané en lecture seule (`UiSnapshot`) publié périodiquement (~120 ms) par la scène active.
 
 **Éléments principaux de l'UI** :
 - Panneau de construction (sélection de piège/monstre, coût, or restant) ;
 - Aperçu de la prochaine escouade et rumeurs actives ;
-- Barre de vagues, PV du boss, contrôles pause/vitesse ;
-- Panneau d'inspection d'un aventurier (niveau, traits, blessures, vendetta) au clic pendant une vague ;
-- Écran de débriefing (voir [§18](#18-débriefing-)).
+- Barre d'expéditions, PV du boss, contrôles pause/vitesse ;
+- Panneau d'inspection d'un aventurier (niveau, traits, blessures, vendetta) au clic pendant une expédition ;
+- Écran de débriefing (voir [§25](#25-débriefing-)).
 
 L'interface texte du jeu est actuellement en français.
 
 ---
 
-## 22. Contrôles 🟢
+## 29. Contrôles 🟢
 
 | Action | Contrôle actuel |
 |---|---|
@@ -392,7 +519,7 @@ L'interface texte du jeu est actuellement en français.
 
 ---
 
-## 23. Architecture gameplay 🟢
+## 30. Architecture gameplay 🟢
 
 **Principe directeur** : *la simulation possède les règles ; Phaser affiche l'état et transmet les entrées.*
 
@@ -415,10 +542,11 @@ Cette séparation garantit que toute règle de jeu peut être testée en simulat
 
 ---
 
-## 24. Objectifs long terme 🔵
+## 31. Objectifs long terme 🔵
 
-1. Faire du royaume une entité qui apprend **entre** les parties, pas seulement à l'intérieur d'une partie, sans jamais permettre une victoire permanente.
+1. Faire du royaume une entité qui apprend **entre** les parties, pas seulement à l'intérieur d'une partie, sans jamais permettre une victoire permanente, et sans jamais lui prêter une connaissance qu'il n'a pas légitimement acquise (voir [DECISIONS.md](./DECISIONS.md) D-010).
 2. Donner à la guilde et au royaume une vie propre (recrutement limité, rivalités, pressions régionales).
-3. Étendre le vocabulaire tactique du joueur (salles typées, portes, upgrades de pièges) sans jamais perdre la lisibilité de la grille.
-4. Remplacer les placeholders visuels et sonores par une direction artistique cohérente avec le ton du jeu (voir [ROADMAP.md](./ROADMAP.md), Milestone 4).
-5. Garantir que chaque nouvelle fonctionnalité renforce au moins un des piliers définis dans [GAME_VISION.md](./GAME_VISION.md).
+3. Transformer la construction du donjon en un véritable système de creusement (salles typées, portes, territoire — voir [§4](#4-donjon-creusé-) à [§6](#6-salles-spécialisées-)) sans jamais perdre la lisibilité de l'espace.
+4. Remplacer les placeholders visuels et sonores par une direction artistique cohérente avec le ton du jeu (voir [ROADMAP.md](./ROADMAP.md), Milestone 5).
+5. Faire de l'information une ressource stratégique à part entière, aussi précieuse que l'or ou le territoire (voir [§21](#21-exploration-des-aventuriers-) à [§24](#24-cartographe-)).
+6. Garantir que chaque nouvelle fonctionnalité renforce au moins un des [5 piliers du jeu](#1-les-5-piliers-du-jeu-) et rende les expéditions plus mémorables, pas simplement plus difficiles.

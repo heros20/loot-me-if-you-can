@@ -6,16 +6,16 @@ const sim = new DungeonSimulation();
 sim.startNewGame();
 
 const BUILD_SPOTS: Array<{ type: DefenseType; cell: GridCell }> = [
-  { type: 'skeleton', cell: { x: 10, y: 6 } },
-  { type: 'skeleton', cell: { x: 10, y: 8 } },
-  { type: 'goblin', cell: { x: 7, y: 3 } },
-  { type: 'slime', cell: { x: 1, y: 4 } },
-  { type: 'fireTrap', cell: { x: 3, y: 4 } },
-  { type: 'spikeTrap', cell: { x: 4, y: 4 } },
-  { type: 'spikeTrap', cell: { x: 5, y: 4 } },
-  { type: 'spikeTrap', cell: { x: 7, y: 2 } },
-  { type: 'spikeTrap', cell: { x: 8, y: 2 } },
-  { type: 'spikeTrap', cell: { x: 10, y: 3 } },
+  { type: 'skeleton', cell: { x: 11, y: 6 } },
+  { type: 'skeleton', cell: { x: 12, y: 6 } },
+  { type: 'goblin', cell: { x: 10, y: 3 } },
+  { type: 'slime', cell: { x: 2, y: 8 } },
+  { type: 'fireTrap', cell: { x: 3, y: 7 } },
+  { type: 'spikeTrap', cell: { x: 4, y: 7 } },
+  { type: 'spikeTrap', cell: { x: 6, y: 5 } },
+  { type: 'spikeTrap', cell: { x: 11, y: 4 } },
+  { type: 'spikeTrap', cell: { x: 14, y: 4 } },
+  { type: 'spikeTrap', cell: { x: 18, y: 6 } },
 ];
 
 for (let wave = 1; wave <= 10; wave += 1) {

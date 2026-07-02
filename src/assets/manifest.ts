@@ -2,7 +2,12 @@ import type { AdventurerRole, DefenseType } from '../game/types';
 
 export const TEXTURE_KEYS = {
   tileFloor: 'tile-floor',
-  tileWall: 'tile-wall',
+  tileRock: 'tile-rock',
+  tileRoom: 'tile-room',
+  tileGuardRoom: 'tile-guard-room',
+  tileCrypt: 'tile-crypt',
+  tileTreasureRoom: 'tile-treasure-room',
+  tileThroneRoom: 'tile-throne-room',
   tileEntry: 'tile-entry',
   tileTreasure: 'tile-treasure',
   tileBoss: 'tile-boss',

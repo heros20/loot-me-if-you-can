@@ -10,7 +10,8 @@
 
 ## Gameplay
 
-- Add doors, room ownership, and named room behaviors on top of the new basic wall/floor/room construction.
+- Doors V1 (reinforced door) are in: placement rules, gold cost, HP, thief bonus damage, and debrief mentions. Not yet built: lockpicking, one-way doors, portcullises, magic/secret doors, or any partial-repair economy (see Technical limits below).
+- Add room ownership and named room behaviors on top of the Carve Your Kingdom V1 tile model.
 - Add trap upgrades between waves.
 - Add more boss abilities and an ability upgrade path funded by infamy.
 - Add adventurer equipment traits after repeated deaths.
@@ -32,6 +33,8 @@
 - Split combat resolution into a dedicated system when the rule set grows.
 - Add asset loading from a JSON manifest once external art is introduced.
 - Split profile memory, expedition resolution, and report generation into smaller simulation modules if they grow.
+- Doors V1 persistence limit: a damaged-but-not-destroyed door is fully repaired for free at the next build phase, and a destroyed door simply disappears (no partial-repair economy, no gold cost to fix). This keeps the first pass simple and stable; a real repair/upgrade economy is a deliberate follow-up, not an oversight.
+- Doors V1 pathfinding limit: doors are fully traversable for the A* cost model (no extra weight), so on layouts with multiple equal-length routes the guild may occasionally path around a door instead of through it. Fine for V1 corridors/choke points; revisit if the Royaume's future pathing needs to actively avoid or route through known doors.
 
 ## Done in 0.5.0
 
@@ -48,8 +51,15 @@
 
 - Fixed every expedition at exactly 5 adventurers.
 - Added adaptive class composition without increasing party size.
-- Enlarged the dungeon and made walls editable during build phase.
-- Added wall, floor/path, and simple room construction tools.
-- Added route validation before wall placement and wave launch.
-- Reorganized build UI by construction, traps, monsters, boss, and expedition.
+- Replaced wall editing with a mostly-rock 23x16 dungeon and explicit rock/floor/room/special tile semantics.
+- Added paid adjacent digging with no-gold feedback.
+- Stabilized constructibility around treasure and throne rooms while keeping exact entrance, treasure, and boss cells protected.
+- Added distinct treasure-room and throne-room placeholders.
+- Routed short boss and minion movement through carved tiles when direct movement would cross rock.
+- Extracted construction validation helpers into `src/systems/dungeonConstruction.ts`.
+- Added independent `npm run smoke-treasure` and `npm run smoke-longrun` scripts.
+- Added simple guard-room and crypt marking on carved tiles.
+- Added route validation and pathfinding over rock-blocked, carved-walkable tiles.
+- Reorganized build UI by construction, rooms, traps, monsters, boss, and expedition.
 - Added a full post-wave debrief screen with participants, learning, rumors, adaptation, and economy.
+- Added Portes V1 (reinforced door): a tactical, non-tile construction overlay that slows expeditions, gives the thief a clear role, and reinforces the treasure/throne rooms.

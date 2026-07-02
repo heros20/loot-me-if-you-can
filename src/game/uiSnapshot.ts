@@ -3,14 +3,16 @@ import type {
   AdventurerTrait,
   BossAbilityType,
   ConstructionTool,
+  DungeonTile,
   DefenseKind,
   DefenseType,
   DungeonValidation,
   GamePhase,
-  GridCell,
   TreasureStatus,
   WaveReport,
 } from './types';
+
+export type ConstructionCategory = 'construction' | 'rooms';
 
 export interface DefenseUiItem {
   type: DefenseType;
@@ -26,6 +28,8 @@ export interface ConstructionUiItem {
   type: ConstructionTool;
   name: string;
   description: string;
+  category: ConstructionCategory;
+  cost: number | null;
   disabled: boolean;
 }
 
@@ -89,7 +93,9 @@ export interface DungeonSnapshot {
   dungeonReputationTitle: string;
   constructionTools: ConstructionUiItem[];
   availableDefenses: DefenseUiItem[];
-  wallCells: GridCell[];
+  dungeonTiles: DungeonTile[];
+  territoryByType: CountItem[];
+  digCost: number;
   dungeonValidation: DungeonValidation;
   expeditionLabel: string;
   expeditionPrimaryGoal: string;

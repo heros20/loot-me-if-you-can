@@ -4,12 +4,25 @@
 
 - Fixed expedition size at exactly 5 adventurers via the new `PARTY_SIZE` constant; difficulty now shifts through class composition, levels, memory, and tactics instead of larger waves.
 - Reworked class composition into a fixed-size adaptive roster: traps push the guild toward thieves, long fights toward healers, lethal minions toward warriors, boss pressure toward tanks/healers, and treasure theft toward more aggressive boss-capable teams.
-- Enlarged the dungeon grid from 12x9 to 18x12 and moved wall layout into mutable simulation state.
-- Added build-phase construction tools for walls, floor/path tiles, and simple 3x3 room carving.
-- Added dungeon route validation: entry, treasure, and boss must remain connected; wall placement is rejected and wave launch disabled when the dungeon would become impossible.
-- Reorganized build UI into Construction, Traps, Monsters, Boss, and Expedition sections.
+- Replaced wall placement with the first Carve Your Kingdom vertical slice: the 23x16 dungeon now starts mostly as rock, with an initial carved route, treasure room, throne room, and branch rooms.
+- Added explicit tile semantics (`rock`, `floor`, `room`, `entrance`, `treasure`, `throne`) and tile helpers for walkability, territory counts, room marking, and blocked pathfinding cells.
+- Added the Creuser tool: adjacent rock can be dug into floor for `DIG_COST` (10 gold), with no-gold and invalid-dig feedback.
+- Added a Salles UI category with visual guard-room and crypt marking on carved territory, plus a disabled door placeholder for later.
+- Updated defense validation so traps, minions, and summoned skeletons require valid carved floor/room cells and cannot be placed on rock, entrance, treasure, or throne tiles.
+- Stabilized special-room constructibility: the exact entrance, treasure, and boss/throne tiles stay protected, while carved tiles around the treasure and boss can now hold defenses.
+- Added distinct placeholder textures for treasure rooms and throne rooms so strategic rooms are readable at a glance.
+- Prevented boss and minion movement from cutting through rock by routing blocked short moves through the existing grid pathfinder.
+- Extracted player construction helpers into `src/systems/dungeonConstruction.ts` for digging cost, placement validation, room marking, and build rejection messages.
+- Updated dungeon route validation and adventurer pathfinding so rock blocks movement while floor, room, entrance, treasure, and throne tiles are traversable.
+- Reorganized build UI into Construction, Salles, Traps, Monsters, Boss, and Expedition sections, including territory counts and dig cost.
 - Replaced the small sidebar report with a full debrief overlay covering summary, all 5 participants, learned dangers, shared rumors, gains/losses, guild adaptation, and dungeon economy.
-- Added smoke assertions for fixed 5-adventurer reports.
+- Added independent `smoke-treasure` and `smoke-longrun` npm scripts while keeping `npm run smoke` as the aggregate.
+- Added smoke assertions for fixed 5-adventurer reports, paid digging, no-gold digging refusal, protected exact tiles, special-room defense placement, and rock placement refusal.
+- Added Portes V1: a Porte renforcee construction (20 gold, 60 HP) placeable on any dug floor/room cell, including around the treasure and throne rooms, but never on rock, the exact entrance/treasure/throne cells, or a cell already holding a trap, minion, or another door.
+- Doors stay traversable for pathfinding but block movement at runtime: adventurers stop and attack a closed door until it breaks, then the expedition continues; thieves deal double damage to doors (`THIEF_DOOR_DAMAGE_MULTIPLIER`).
+- Doors render as a distinct placeholder with their own HP bar, hit feedback, and a broken-door marker on destruction; undamaged doors persist between expeditions and damaged (non-destroyed) doors are fully repaired at the next build phase, while destroyed doors must be rebuilt.
+- Debriefs now mention a door's impact (delay, thief efficiency, destruction before the treasure) when it mattered during the expedition.
+- Added door smoke assertions: placement refusals on rock/entrance/treasure/throne, acceptance on floor and around the treasure room, gold cost and disabled-button feedback, occupied-cell refusal, thief damage multiplier, and end-to-end door damage/destruction across a full multi-wave run.
 
 ## 0.5.0 - Le boss devient un vrai boss
 

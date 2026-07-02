@@ -9,14 +9,68 @@ export function createPlaceholderTextures(scene: Phaser.Scene): void {
     graphics.strokeRect(0.5, 0.5, 47, 47);
   });
 
-  makeTexture(scene, TEXTURE_KEYS.tileWall, 48, (graphics) => {
-    graphics.fillStyle(0x3a3431, 1);
+  makeTexture(scene, TEXTURE_KEYS.tileRock, 48, (graphics) => {
+    graphics.fillStyle(0x24272b, 1);
     graphics.fillRect(0, 0, 48, 48);
-    graphics.fillStyle(0x51473e, 1);
-    graphics.fillRect(0, 7, 48, 5);
-    graphics.fillRect(0, 25, 48, 5);
+    graphics.fillStyle(0x343a3d, 1);
+    graphics.fillTriangle(2, 10, 18, 3, 12, 22);
+    graphics.fillTriangle(24, 5, 47, 13, 32, 28);
+    graphics.fillTriangle(6, 34, 25, 24, 42, 44);
     graphics.lineStyle(2, 0x161315, 0.9);
     graphics.strokeRect(1, 1, 46, 46);
+  });
+
+  makeTexture(scene, TEXTURE_KEYS.tileRoom, 48, (graphics) => {
+    graphics.fillStyle(0x2c2522, 1);
+    graphics.fillRect(0, 0, 48, 48);
+    graphics.lineStyle(2, 0x6f5b45, 0.8);
+    graphics.strokeRect(7, 7, 34, 34);
+    graphics.lineStyle(1, 0x1a1616, 0.85);
+    graphics.strokeRect(0.5, 0.5, 47, 47);
+  });
+
+  makeTexture(scene, TEXTURE_KEYS.tileGuardRoom, 48, (graphics) => {
+    graphics.fillStyle(0x25332d, 1);
+    graphics.fillRect(0, 0, 48, 48);
+    graphics.lineStyle(2, 0x79c7a1, 0.82);
+    graphics.strokeRect(8, 8, 32, 32);
+    graphics.lineStyle(2, 0x3d725d, 0.72);
+    graphics.lineBetween(15, 33, 33, 15);
+    graphics.lineBetween(15, 15, 33, 33);
+  });
+
+  makeTexture(scene, TEXTURE_KEYS.tileCrypt, 48, (graphics) => {
+    graphics.fillStyle(0x2b2a32, 1);
+    graphics.fillRect(0, 0, 48, 48);
+    graphics.lineStyle(2, 0x9f947e, 0.82);
+    graphics.strokeCircle(24, 24, 13);
+    graphics.lineStyle(1, 0x161315, 0.9);
+    graphics.strokeRect(0.5, 0.5, 47, 47);
+  });
+
+  makeTexture(scene, TEXTURE_KEYS.tileTreasureRoom, 48, (graphics) => {
+    graphics.fillStyle(0x342b1c, 1);
+    graphics.fillRect(0, 0, 48, 48);
+    graphics.fillStyle(0x5a4521, 1);
+    graphics.fillRect(6, 6, 36, 36);
+    graphics.lineStyle(2, 0xe1b35a, 0.92);
+    graphics.strokeRect(8, 8, 32, 32);
+    graphics.fillStyle(0xe1b35a, 0.9);
+    graphics.fillCircle(24, 24, 4);
+    graphics.fillCircle(16, 16, 2);
+    graphics.fillCircle(32, 32, 2);
+  });
+
+  makeTexture(scene, TEXTURE_KEYS.tileThroneRoom, 48, (graphics) => {
+    graphics.fillStyle(0x351b24, 1);
+    graphics.fillRect(0, 0, 48, 48);
+    graphics.lineStyle(2, 0x8f2631, 0.95);
+    graphics.strokeRect(7, 7, 34, 34);
+    graphics.lineStyle(2, 0xd85a32, 0.72);
+    graphics.lineBetween(12, 34, 24, 12);
+    graphics.lineBetween(24, 12, 36, 34);
+    graphics.fillStyle(0xe1b35a, 0.88);
+    graphics.fillTriangle(17, 21, 24, 12, 31, 21);
   });
 
   makeTexture(scene, TEXTURE_KEYS.tileEntry, 48, (graphics) => {

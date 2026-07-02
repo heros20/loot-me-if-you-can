@@ -5,53 +5,22 @@ export const CANVAS_HEIGHT = 640;
 
 export const PARTY_SIZE = 5;
 
-export const GRID_COLS = 18;
-export const GRID_ROWS = 12;
-export const TILE_SIZE = 36;
-export const GRID_OFFSET_X = 18;
-export const GRID_OFFSET_Y = 96;
+export const GRID_COLS = 23;
+export const GRID_ROWS = 16;
+export const TILE_SIZE = 28;
+export const GRID_OFFSET_X = 14;
+export const GRID_OFFSET_Y = 92;
 
-export const ENTRY_CELL: GridCell = { x: 0, y: 5 };
-export const TREASURE_CELL: GridCell = { x: 14, y: 3 };
-export const BOSS_CELL: GridCell = { x: 17, y: 9 };
+export const ENTRY_CELL: GridCell = { x: 0, y: 7 };
+export const TREASURE_CELL: GridCell = { x: 16, y: 4 };
+export const BOSS_CELL: GridCell = { x: 22, y: 12 };
 
 export const STARTING_GOLD = 30;
+export const DIG_COST = 10;
 
-export const WALL_CELLS: GridCell[] = [
-  { x: 3, y: 1 },
-  { x: 3, y: 2 },
-  { x: 3, y: 3 },
-  { x: 3, y: 7 },
-  { x: 3, y: 8 },
-  { x: 3, y: 9 },
-  { x: 3, y: 10 },
-  { x: 6, y: 0 },
-  { x: 6, y: 1 },
-  { x: 6, y: 2 },
-  { x: 6, y: 4 },
-  { x: 6, y: 6 },
-  { x: 6, y: 7 },
-  { x: 6, y: 8 },
-  { x: 6, y: 10 },
-  { x: 9, y: 2 },
-  { x: 9, y: 3 },
-  { x: 9, y: 4 },
-  { x: 9, y: 6 },
-  { x: 9, y: 7 },
-  { x: 9, y: 8 },
-  { x: 12, y: 1 },
-  { x: 12, y: 2 },
-  { x: 12, y: 5 },
-  { x: 12, y: 6 },
-  { x: 12, y: 7 },
-  { x: 12, y: 10 },
-  { x: 15, y: 5 },
-  { x: 15, y: 6 },
-  { x: 15, y: 7 },
-  { x: 15, y: 11 },
-];
-
-const WALL_KEYS = new Set(WALL_CELLS.map((cell) => cellKey(cell)));
+export const DOOR_COST = 20;
+export const DOOR_HP = 60;
+export const THIEF_DOOR_DAMAGE_MULTIPLIER = 2;
 
 export function cellKey(cell: GridCell): string {
   return `${cell.x},${cell.y}`;
@@ -63,10 +32,6 @@ export function isSameCell(a: GridCell, b: GridCell): boolean {
 
 export function isInsideGrid(cell: GridCell): boolean {
   return cell.x >= 0 && cell.y >= 0 && cell.x < GRID_COLS && cell.y < GRID_ROWS;
-}
-
-export function isWallCell(cell: GridCell): boolean {
-  return WALL_KEYS.has(cellKey(cell));
 }
 
 export function isProtectedCell(cell: GridCell): boolean {

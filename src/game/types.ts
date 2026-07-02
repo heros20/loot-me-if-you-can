@@ -9,7 +9,11 @@ export type DefenseType =
   | 'skeleton'
   | 'goblin';
 
-export type ConstructionTool = 'wall' | 'floor' | 'room';
+export type TileType = 'rock' | 'floor' | 'room' | 'entrance' | 'treasure' | 'throne';
+
+export type RoomSpecialization = 'guardRoom' | 'crypt' | 'treasureRoom' | 'throneRoom';
+
+export type ConstructionTool = 'dig' | 'guardRoom' | 'crypt' | 'door';
 
 export type AdventurerRole = 'warrior' | 'thief' | 'mage' | 'healer';
 
@@ -70,6 +74,20 @@ export type InjurySeverity = 'minor' | 'serious';
 export interface GridCell {
   x: number;
   y: number;
+}
+
+export interface DungeonTile {
+  cell: GridCell;
+  type: TileType;
+  roomType: RoomSpecialization | null;
+}
+
+export interface DungeonDoor {
+  id: string;
+  cell: GridCell;
+  hp: number;
+  maxHp: number;
+  destroyed: boolean;
 }
 
 export interface DefenseDefinition {
@@ -317,6 +335,11 @@ export interface WaveStats {
   treasureStolen: boolean;
   abilityUses: number;
   minionKillsByDefenseId: Record<string, number>;
+  doorEncounters: number;
+  doorsDestroyed: number;
+  doorDamageTotal: number;
+  doorDamageByThief: number;
+  doorDestroyedBeforeTreasure: boolean;
 }
 
 export interface WaveRuntime {
@@ -327,6 +350,7 @@ export interface WaveRuntime {
   spawned: number;
   partyPlan: PartyPlan;
   stats: WaveStats;
+  doorsEngagedIds: Set<string>;
 }
 
 export interface PartyPlan {
@@ -396,7 +420,8 @@ export interface GameState {
   gold: number;
   selectedDefense: DefenseType | null;
   selectedConstructionTool: ConstructionTool | null;
-  wallKeys: string[];
+  tiles: DungeonTile[];
+  doors: DungeonDoor[];
   defenses: DefenseEntity[];
   adventurers: AdventurerEntity[];
   boss: BossEntity;

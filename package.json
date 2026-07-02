@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "smoke": "tsx scripts/smoke.ts && tsx scripts/smoke-treasure.ts && tsx scripts/smoke-longrun.ts"
+    "smoke": "tsx scripts/smoke.ts && npm run smoke-treasure && npm run smoke-longrun",
+    "smoke-treasure": "tsx scripts/smoke-treasure.ts",
+    "smoke-longrun": "tsx scripts/smoke-longrun.ts"
   },
   "dependencies": {
     "phaser": "^3.90.0"

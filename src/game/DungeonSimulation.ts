@@ -1,15 +1,23 @@
 import {
   BOSS_CELL,
+  DIG_COST,
+  DOOR_COST,
+  DOOR_HP,
   ENTRY_CELL,
   PARTY_SIZE,
   STARTING_GOLD,
+  THIEF_DOOR_DAMAGE_MULTIPLIER,
   TREASURE_CELL,
-  WALL_CELLS,
   cellKey,
   isInsideGrid,
-  isProtectedCell,
   isSameCell,
 } from './constants';
+import {
+  canEntityMoveBetween,
+  createInitialDungeonTiles,
+  getBlockedCellKeys,
+  summarizeTiles,
+} from './dungeonTiles';
 import type {
   AdventurerDefinition,
   AdventurerEntity,
@@ -20,6 +28,7 @@ import type {
   DefenseEntity,
   DefenseStatsByType,
   DefenseType,
+  DungeonDoor,
   DungeonValidation,
   EffectStats,
   ExpeditionParticipantReport,
@@ -34,6 +43,7 @@ import type {
 } from './types';
 import type {
   BossAbilityUiItem,
+  ConstructionCategory,
   CountItem,
   DungeonSnapshot,
   InspectedAdventurer,
@@ -86,6 +96,19 @@ import {
 } from '../systems/bossAbilities';
 import { applyRumorPressure, generateTavernRumor, recordRumor } from '../systems/tavernRumors';
 import { createMinionName } from '../systems/minionNaming';
+import {
+  buildRejectionReason,
+  canBuildDefenseAt,
+  digRockTile,
+  hasDefenseOnCell,
+  markPlayerRoom,
+} from '../systems/dungeonConstruction';
+import {
+  computeDoorDamage,
+  findActiveDoorAt,
+  placeDoorAt,
+  repairDoors,
+} from '../systems/doorSystem';
 
 const BOSS_TEMPLATE: Omit<BossEntity, 'hp' | 'attackTimerMs' | 'abilities'> = {
   homeCell: BOSS_CELL,
@@ -101,21 +124,46 @@ const BOSS_TEMPLATE: Omit<BossEntity, 'hp' | 'attackTimerMs' | 'abilities'> = {
   targetAdventurerId: null,
 };
 
-const CONSTRUCTION_TOOLS: Array<{ type: ConstructionTool; name: string; description: string }> = [
+const ROOM_TOOL_LABELS: Record<'guardRoom' | 'crypt', string> = {
+  guardRoom: 'Salle de garde',
+  crypt: 'Crypte',
+};
+
+const CONSTRUCTION_TOOLS: Array<{
+  type: ConstructionTool;
+  name: string;
+  description: string;
+  category: ConstructionCategory;
+  cost: number | null;
+  disabled?: boolean;
+}> = [
   {
-    type: 'wall',
-    name: 'Mur',
-    description: 'Bloque les aventuriers si le donjon reste praticable.',
+    type: 'dig',
+    name: 'Creuser',
+    description: `Transforme une roche adjacente en sol. ${DIG_COST} or.`,
+    category: 'construction',
+    cost: DIG_COST,
   },
   {
-    type: 'floor',
-    name: 'Sol / chemin',
-    description: 'Ouvre une dalle et restaure une route.',
+    type: 'door',
+    name: 'Porte renforcee',
+    description: `Ralentit une expedition dans un couloir et donne un role cle au voleur. ${DOOR_HP} PV, x${THIEF_DOOR_DAMAGE_MULTIPLIER} degats de voleur.`,
+    category: 'construction',
+    cost: DOOR_COST,
   },
   {
-    type: 'room',
-    name: 'Salle',
-    description: 'Creuse une petite zone de 3 par 3 dalles.',
+    type: 'guardRoom',
+    name: ROOM_TOOL_LABELS.guardRoom,
+    description: 'Marque une zone creusee autour de la case.',
+    category: 'rooms',
+    cost: null,
+  },
+  {
+    type: 'crypt',
+    name: ROOM_TOOL_LABELS.crypt,
+    description: 'Marque une zone creusee comme crypte.',
+    category: 'rooms',
+    cost: null,
   },
 ];
 
@@ -123,6 +171,7 @@ export class DungeonSimulation {
   private state: GameState;
   private nextDefenseId = 1;
   private nextAdventurerId = 1;
+  private nextDoorId = 1;
   private minionNameCounters: Partial<Record<DefenseType, number>> = {};
 
   constructor() {
@@ -132,6 +181,7 @@ export class DungeonSimulation {
   startNewGame(): void {
     this.nextDefenseId = 1;
     this.nextAdventurerId = 1;
+    this.nextDoorId = 1;
     this.minionNameCounters = {};
     this.state = this.createInitialState();
   }
@@ -271,9 +321,15 @@ export class DungeonSimulation {
   }
 
   selectConstructionTool(type: ConstructionTool): void {
+    const definition = CONSTRUCTION_TOOLS.find((tool) => tool.type === type);
+
+    if (definition?.disabled) {
+      this.state.message = `${definition.name} est prevue, mais pas encore taillee dans la pierre.`;
+      return;
+    }
+
     this.state.selectedConstructionTool = type;
     this.state.selectedDefense = null;
-    const definition = CONSTRUCTION_TOOLS.find((tool) => tool.type === type);
     this.state.message = `${definition?.name ?? 'Construction'} selectionne. Le donjon commence a ressembler a une mauvaise idee structuree.`;
   }
 
@@ -301,13 +357,18 @@ export class DungeonSimulation {
       return;
     }
 
-    if (!isInsideGrid(cell) || this.isWallCell(cell) || isProtectedCell(cell)) {
-      this.state.message = 'Cette dalle refuse ton autorite. Tres insolent.';
+    if (!canBuildDefenseAt(this.state.tiles, cell)) {
+      this.state.message = buildRejectionReason(this.state.tiles, cell);
       return;
     }
 
-    if (this.state.defenses.some((defense) => defense.alive && isSameCell(defense.cell, cell))) {
+    if (hasDefenseOnCell(this.state.defenses, cell)) {
       this.state.message = 'Une defense occupe deja cette dalle. Meme les monstres ont besoin de place.';
+      return;
+    }
+
+    if (findActiveDoorAt(this.state.doors, cell)) {
+      this.state.message = 'Une porte renforcee occupe deja cette case.';
       return;
     }
 
@@ -327,88 +388,66 @@ export class DungeonSimulation {
   }
 
   private placeConstructionTool(cell: GridCell, tool: ConstructionTool): void {
-    if (!isInsideGrid(cell) || isProtectedCell(cell)) {
-      this.state.message = 'Cette dalle est structurellement syndiquee: entree, tresor et boss restent intouchables.';
+    if (!isInsideGrid(cell)) {
+      this.state.message = 'Cette case est hors du domaine. Meme le donjon a des limites cadastrales.';
       return;
     }
 
-    if (tool === 'wall') {
-      this.placeWall(cell);
+    if (tool === 'dig') {
+      this.digTile(cell);
       return;
     }
 
-    if (tool === 'floor') {
-      this.placeFloor(cell);
+    if (tool === 'guardRoom' || tool === 'crypt') {
+      this.markRoom(cell, tool);
       return;
     }
 
-    this.carveRoom(cell);
+    if (tool === 'door') {
+      this.placeDoor(cell);
+      return;
+    }
   }
 
-  private placeWall(cell: GridCell): void {
-    if (this.isWallCell(cell)) {
-      this.state.message = 'Il y a deja un mur ici. Meme le beton a ses limites narratives.';
+  private digTile(cell: GridCell): void {
+    const result = digRockTile(this.state.tiles, cell, this.state.gold);
+    this.state.message = result.message;
+
+    if (!result.ok) {
       return;
     }
 
-    if (this.state.defenses.some((defense) => defense.alive && isSameCell(defense.cell, cell))) {
-      this.state.message = 'Impossible de murer une defense en poste. Les RH du donjon protesteraient.';
-      return;
-    }
-
-    const previousWallKeys = this.state.wallKeys;
-    const nextWallKeys = new Set(previousWallKeys);
-    nextWallKeys.add(cellKey(cell));
-    this.state.wallKeys = sortWallKeys([...nextWallKeys]);
-
-    const validation = this.validateDungeonLayout();
-
-    if (!validation.valid) {
-      this.state.wallKeys = previousWallKeys;
-      this.state.message = validation.reason ?? 'Ce mur condamnerait le donjon. Les aventuriers doivent encore pouvoir se perdre dedans.';
-      return;
-    }
-
-    this.state.message = 'Mur ajoute. Les architectes hostiles applaudissent en silence.';
+    this.state.gold -= result.cost;
+    this.state.tiles = result.tiles;
   }
 
-  private placeFloor(cell: GridCell): void {
-    if (!this.isWallCell(cell)) {
-      this.state.message = 'Cette dalle est deja praticable. On appelle ca du sol, concept audacieux.';
-      return;
-    }
+  private markRoom(center: GridCell, tool: 'guardRoom' | 'crypt'): void {
+    const result = markPlayerRoom(this.state.tiles, center, tool, ROOM_TOOL_LABELS[tool]);
+    this.state.message = result.message;
 
-    this.state.wallKeys = this.state.wallKeys.filter((key) => key !== cellKey(cell));
-    this.state.message = 'Chemin ouvert. Les aventuriers auront moins d excuses et plus de problemes.';
+    if (result.ok) {
+      this.state.tiles = result.tiles;
+    }
   }
 
-  private carveRoom(center: GridCell): void {
-    const nextWallKeys = new Set(this.state.wallKeys);
-    let cleared = 0;
+  private placeDoor(cell: GridCell): void {
+    const result = placeDoorAt(
+      this.state.tiles,
+      this.state.doors,
+      cell,
+      this.state.gold,
+      hasDefenseOnCell(this.state.defenses, cell),
+      `door-${this.nextDoorId}`,
+    );
+    this.state.message = result.message;
 
-    for (let y = center.y - 1; y <= center.y + 1; y += 1) {
-      for (let x = center.x - 1; x <= center.x + 1; x += 1) {
-        const cell = { x, y };
-
-        if (!isInsideGrid(cell) || isProtectedCell(cell)) {
-          continue;
-        }
-
-        const key = cellKey(cell);
-
-        if (nextWallKeys.delete(key)) {
-          cleared += 1;
-        }
-      }
-    }
-
-    if (cleared === 0) {
-      this.state.message = 'La salle est deja ouverte. Luxueux, pour une ruine.';
+    if (!result.ok) {
       return;
     }
 
-    this.state.wallKeys = sortWallKeys([...nextWallKeys]);
-    this.state.message = `Salle creusee: ${cleared} mur${cleared > 1 ? 's' : ''} retire${cleared > 1 ? 's' : ''}.`;
+    this.state.gold -= result.cost;
+    this.state.doors = result.doors;
+    this.nextDoorId += 1;
   }
 
   private createDefenseEntity(type: DefenseType, cell: GridCell, summoned: boolean): DefenseEntity {
@@ -454,10 +493,9 @@ export class DungeonSimulation {
           const cell = { x: bossCell.x + dx, y: bossCell.y + dy };
 
           if (
-            !isInsideGrid(cell) ||
-            this.isWallCell(cell) ||
-            isProtectedCell(cell) ||
-            this.state.defenses.some((defense) => defense.alive && isSameCell(defense.cell, cell))
+            !canBuildDefenseAt(this.state.tiles, cell) ||
+            hasDefenseOnCell(this.state.defenses, cell) ||
+            findActiveDoorAt(this.state.doors, cell)
           ) {
             continue;
           }
@@ -497,6 +535,7 @@ export class DungeonSimulation {
       spawned: 0,
       partyPlan: createPartyPlan(this.state.wave, this.state.world.dungeonReputation.value, lastRumor?.effect ?? null),
       stats: createEmptyWaveStats(),
+      doorsEngagedIds: new Set<string>(),
     };
     this.state.report = null;
     this.state.adventurers = [];
@@ -525,6 +564,7 @@ export class DungeonSimulation {
 
       defense.cooldownRemainingMs = 0;
     });
+    this.state.doors = repairDoors(this.state.doors);
     this.state.message = 'Nouvelle preparation. Les survivants racontent deja des mensonges tactiques.';
   }
 
@@ -554,7 +594,10 @@ export class DungeonSimulation {
       message: this.state.message,
       constructionTools: CONSTRUCTION_TOOLS.map((tool) => ({
         ...tool,
-        disabled: this.state.phase !== 'build',
+        disabled:
+          this.state.phase !== 'build' ||
+          tool.disabled === true ||
+          (tool.cost !== null && this.state.gold < tool.cost),
       })),
       availableDefenses: DEFENSE_ORDER.map((type) => {
         const definition = getDefenseDefinition(type);
@@ -568,7 +611,9 @@ export class DungeonSimulation {
           disabled: this.state.phase !== 'build' || this.state.gold < definition.cost,
         };
       }),
-      wallCells: this.wallCells(),
+      dungeonTiles: this.state.tiles,
+      territoryByType: this.buildTerritorySummary(),
+      digCost: DIG_COST,
       dungeonValidation,
       expeditionLabel: expeditionPlan.label,
       expeditionPrimaryGoal: expeditionPlan.primaryGoal === 'boss' ? 'Boss' : 'Tresor',
@@ -595,16 +640,18 @@ export class DungeonSimulation {
     };
   }
 
-  getRenderState(): Pick<GameState, 'defenses' | 'adventurers' | 'boss' | 'phase' | 'selectedDefense' | 'selectedConstructionTool' | 'treasure' | 'wallKeys'> {
+  getRenderState(): Pick<GameState, 'defenses' | 'adventurers' | 'boss' | 'phase' | 'gold' | 'selectedDefense' | 'selectedConstructionTool' | 'treasure' | 'tiles' | 'doors'> {
     return {
       defenses: this.state.defenses,
       adventurers: this.state.adventurers,
       boss: this.state.boss,
       phase: this.state.phase,
+      gold: this.state.gold,
       selectedDefense: this.state.selectedDefense,
       selectedConstructionTool: this.state.selectedConstructionTool,
       treasure: this.state.treasure,
-      wallKeys: this.state.wallKeys,
+      tiles: this.state.tiles,
+      doors: this.state.doors,
     };
   }
 
@@ -617,23 +664,8 @@ export class DungeonSimulation {
     return createPartyPlan(this.state.wave, this.state.world.dungeonReputation.value, lastRumor?.effect ?? null);
   }
 
-  private isWallCell(cell: GridCell): boolean {
-    return this.state.wallKeys.includes(cellKey(cell));
-  }
-
-  private wallKeySet(): Set<string> {
-    return new Set(this.state.wallKeys);
-  }
-
-  private wallCells(): GridCell[] {
-    return this.state.wallKeys.map((key) => {
-      const [x, y] = key.split(',').map(Number);
-      return { x, y };
-    });
-  }
-
   private validateDungeonLayout(): DungeonValidation {
-    const blockedCellKeys = this.wallKeySet();
+    const blockedCellKeys = getBlockedCellKeys(this.state.tiles);
     const entryToTreasure = hasWalkablePath(ENTRY_CELL, TREASURE_CELL, blockedCellKeys);
     const treasureToBoss = hasWalkablePath(TREASURE_CELL, BOSS_CELL, blockedCellKeys);
     const valid = entryToTreasure && treasureToBoss;
@@ -738,7 +770,8 @@ export class DungeonSimulation {
       gold: STARTING_GOLD,
       selectedDefense: 'spikeTrap',
       selectedConstructionTool: null,
-      wallKeys: sortWallKeys(WALL_CELLS.map((cell) => cellKey(cell))),
+      tiles: createInitialDungeonTiles(),
+      doors: [],
       defenses: [],
       adventurers: [],
       boss: {
@@ -849,7 +882,7 @@ export class DungeonSimulation {
     });
 
     const bossTarget = chooseBossTarget(this.state.boss, this.state.adventurers);
-    updateBossMovement(this.state.boss, bossTarget, deltaMs);
+    updateBossMovement(this.state.boss, bossTarget, deltaMs, this.entityMovementGuard());
 
     if (
       bossTarget &&
@@ -957,13 +990,20 @@ export class DungeonSimulation {
         trapAvoidance: this.state.memory.trapAvoidance * personalityTrapAvoidance(adventurer),
         trapDangerByCell: this.state.memory.trapDangerByCell,
         knownTrapCells: this.getKnownTrapCells(),
-        blockedCellKeys: this.wallKeySet(),
+        blockedCellKeys: getBlockedCellKeys(this.state.tiles),
       });
     }
 
     const nextCell = adventurer.path[0];
 
     if (!nextCell) {
+      return;
+    }
+
+    const blockingDoor = findActiveDoorAt(this.state.doors, nextCell);
+
+    if (blockingDoor) {
+      this.engageDoor(adventurer, blockingDoor);
       return;
     }
 
@@ -989,6 +1029,45 @@ export class DungeonSimulation {
 
     adventurer.x += (dx / remaining) * step;
     adventurer.y += (dy / remaining) * step;
+  }
+
+  private engageDoor(adventurer: AdventurerEntity, door: DungeonDoor): void {
+    if (adventurer.attackTimerMs > 0 || !this.state.runtime) {
+      return;
+    }
+
+    const damage = computeDoorDamage(adventurer.damage, adventurer.role);
+    door.hp = Math.max(0, door.hp - damage);
+    adventurer.attackTimerMs = adventurer.attackCooldownMs;
+
+    const stats = this.state.runtime.stats;
+    stats.doorDamageTotal += damage;
+
+    if (adventurer.role === 'thief') {
+      stats.doorDamageByThief += damage;
+    }
+
+    if (!this.state.runtime.doorsEngagedIds.has(door.id)) {
+      this.state.runtime.doorsEngagedIds.add(door.id);
+      stats.doorEncounters += 1;
+      this.state.message = `${adventurer.name} se heurte a une porte renforcee et commence a la forcer.`;
+    }
+
+    if (door.hp <= 0 && !door.destroyed) {
+      door.destroyed = true;
+      stats.doorsDestroyed += 1;
+
+      if (this.state.treasure.status === 'secure') {
+        stats.doorDestroyedBeforeTreasure = true;
+      }
+
+      stats.storyEvents.push(
+        adventurer.role === 'thief'
+          ? `${adventurer.name} fracasse une porte renforcee en un temps record.`
+          : `${adventurer.name} finit par briser une porte renforcee.`,
+      );
+      this.state.message = `${adventurer.name} detruit la porte renforcee. La voie est libre.`;
+    }
   }
 
   private handleObjectiveReached(adventurer: AdventurerEntity): void {
@@ -1627,7 +1706,7 @@ export class DungeonSimulation {
   }
 
   private updateMonsterMovement(deltaMs: number): void {
-    const result = updateMonsterAI(this.state.defenses, this.state.adventurers, deltaMs);
+    const result = updateMonsterAI(this.state.defenses, this.state.adventurers, deltaMs, this.entityMovementGuard());
     const slowedIds = new Set(result.slowedAdventurerIds);
 
     this.state.adventurers.forEach((adventurer) => {
@@ -1639,6 +1718,31 @@ export class DungeonSimulation {
 
       adventurer.speedMultiplier = adventurer.slowedTimerMs > 0 ? 0.58 : 1;
     });
+  }
+
+  private entityMovementGuard(): {
+    canMoveBetween: (fromX: number, fromY: number, toX: number, toY: number) => boolean;
+    getNextWaypoint: (fromX: number, fromY: number, targetX: number, targetY: number) => GridCell | null;
+  } {
+    return {
+      canMoveBetween: (fromX, fromY, toX, toY) => canEntityMoveBetween(this.state.tiles, fromX, fromY, toX, toY),
+      getNextWaypoint: (fromX, fromY, targetX, targetY) => {
+        const start = { x: Math.round(fromX), y: Math.round(fromY) };
+        const goal = { x: Math.round(targetX), y: Math.round(targetY) };
+
+        if (isSameCell(start, goal)) {
+          return goal;
+        }
+
+        return findPath(start, goal, {
+          role: 'warrior',
+          trapAvoidance: 0,
+          trapDangerByCell: {},
+          knownTrapCells: new Set(),
+          blockedCellKeys: getBlockedCellKeys(this.state.tiles),
+        })[0] ?? null;
+      },
+    };
   }
 
   private describeSurvival(adventurer: AdventurerEntity, injured: boolean): string {
@@ -1775,9 +1879,17 @@ export class DungeonSimulation {
     const minions = this.state.defenses.filter((defense) => defense.kind === 'minion').length;
 
     return [
-      { label: 'Murs', count: this.state.wallKeys.length },
       { label: 'Pieges', count: traps },
       { label: 'Sbires', count: minions },
+    ];
+  }
+
+  private buildTerritorySummary(): CountItem[] {
+    const summary = summarizeTiles(this.state.tiles);
+    return [
+      { label: 'Roche', count: summary.rock },
+      { label: 'Sol creuse', count: summary.floor },
+      { label: 'Salles', count: summary.rooms + summary.special },
     ];
   }
 }
@@ -1799,6 +1911,11 @@ function createEmptyWaveStats(): WaveStats {
     treasureStolen: false,
     abilityUses: 0,
     minionKillsByDefenseId: {},
+    doorEncounters: 0,
+    doorsDestroyed: 0,
+    doorDamageTotal: 0,
+    doorDamageByThief: 0,
+    doorDestroyedBeforeTreasure: false,
   };
 }
 
@@ -1808,14 +1925,6 @@ function createSecureTreasure(): TreasureState {
     holderAdventurerId: null,
     droppedCell: null,
   };
-}
-
-function sortWallKeys(keys: string[]): string[] {
-  return [...new Set(keys)].sort((a, b) => {
-    const [ax, ay] = a.split(',').map(Number);
-    const [bx, by] = b.split(',').map(Number);
-    return (ay ?? 0) - (by ?? 0) || (ax ?? 0) - (bx ?? 0);
-  });
 }
 
 function formatRoster(roles: AdventurerRole[]): string {

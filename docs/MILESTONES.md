@@ -42,7 +42,7 @@
 - [x] Une adaptation observable du royaume est visible d'une vague à l'autre.
 - [x] Une partie peut être décrite après coup comme une anecdote (mort nommée, héritier, rumeur).
 
-**Enseignements** : la boucle centrale tient sans art final, confirmant le principe *« le gameplay avant les graphismes »*. Le principal écart identifié est l'absence de vie réelle de la guilde et du royaume au-delà de champs de données statiques — d'où la priorité donnée au Milestone 2 avant l'expansion de contenu.
+**Enseignements** : la boucle centrale tient sans art final, confirmant le principe *« le gameplay avant les graphismes »*. Le principal écart identifié est l'absence de vie réelle de la guilde et du royaume au-delà de champs de données statiques — d'où la priorité donnée au Milestone 3 (*The Kingdom Remembers*) avant l'expansion de contenu. La réunion de design #001 a par ailleurs identifié un second écart, tout aussi central : le donjon lui-même reste un carvage de murs plutôt qu'un véritable espace creusé — d'où l'introduction du Milestone 2 (*Carve Your Kingdom*).
 
 ---
 
@@ -55,16 +55,16 @@
 **Fonctionnalités** :
 | Fonctionnalité | Description |
 |---|---|
-| Salles et portes | Remplace le carvage 3×3 par une véritable typologie de salles et de portes |
-| Upgrades de pièges | Un piège peut progresser entre les vagues au lieu de repartir à coût identique |
+| Upgrades de pièges | Un piège peut progresser entre les expéditions au lieu de repartir à coût identique |
 | Extraction du système de combat | Sortir la résolution de combat de `DungeonSimulation.ts` vers un module dédié |
 | Blessures approfondies | Minuteurs de convalescence, cicatrices permanentes, effets comportementaux visibles |
 | Aperçus de placement | Visualisation de la portée des pièges/monstres avant pose |
 | Raccourcis clavier | Capacités de boss (1/2/3), pause (espace) |
 | Runner de tests déterministe | Remplace les scripts `smoke` ad hoc par des assertions automatisées |
 
+⚠️ **Note (réunion de design #001)** : l'item « Salles et portes » initialement prévu ici est retiré de ce milestone et absorbé par le Milestone 2 — *Carve Your Kingdom*, qui devient le foyer unique du système de creusement (voir [DECISIONS.md](./DECISIONS.md) D-009).
+
 **Critères de validation** :
-- [ ] Construire une salle typée et sa porte ne casse jamais la validation de chemin entrée → trésor → boss.
 - [ ] Aucune règle de dégâts/soins majeure ne reste écrite en dur dans la scène de rendu ou dans un fichier non dédié au combat.
 - [ ] La suite de tests échoue de manière déterministe si une régression de règle de jeu est introduite.
 - [ ] Un piège amélioré est visuellement et mécaniquement distinct de sa version de base.
@@ -76,36 +76,75 @@
 
 ---
 
-## Milestone 2 — Living Kingdom
+## Milestone 2 — Carve Your Kingdom
 
 **Statut** : ⏳ Planifié
 
-**Objectif** : faire du royaume et de la guilde des systèmes vivants, cohérents avec la promesse centrale du jeu.
+**Objectif** : transformer la construction actuelle en un vrai système de donjon creusé (voir [DECISIONS.md](./DECISIONS.md) D-009).
+
+**Question centrale** : *Comment faire en sorte que chaque donjon soit unique, lisible et stratégiquement intéressant ?*
+
+**Fonctionnalités** :
+| Fonctionnalité | Description |
+|---|---|
+| Carte majoritairement rocheuse au départ | La grille démarre en roche pleine plutôt qu'avec un tracé de murs prédéfini (`WALL_CELLS`) |
+| Creusement de couloirs et de salles | Le joueur agrandit son territoire case par case au lieu de poser/retirer des murs |
+| Salles spécialisables | Typologie de salles à effets propres (garde, crypte, laboratoire, temple, prison, arsenal…) |
+| Salle du trône du boss | Salle spécialisée dédiée au boss, distincte de la cellule fixe actuelle |
+| Salle du trésor | Salle spécialisée dédiée au trésor, distincte de la cellule fixe actuelle |
+| Portes | Élément tactique distinct du couloir (ralentir, forcer un détour, goulot d'étranglement payant) |
+| Validation du chemin | Étendue au creusement : toute opération doit préserver un chemin entrée → trésor → boss |
+| Coût de creusement | Chaque case creusée peut porter un coût en or et/ou en temps |
+| Territoire du donjon | L'espace exploitable devient une ressource à part entière, pas seulement l'or |
+| Meilleure lisibilité de l'espace | Distinction visuelle claire entre roche, couloir creusé, salle spécialisée, porte |
+
+**Critères de validation** :
+- [ ] Creuser une case de roche, une salle spécialisée et sa porte ne casse jamais la validation de chemin entrée → trésor → boss.
+- [ ] Un joueur peut distinguer visuellement la roche non creusée, un couloir et une salle spécialisée sans lire l'UI.
+- [ ] Le territoire creusé est mesurable comme une ressource propre, distincte de l'or.
+
+**Dépendances** : Milestone 1 (le système de combat extrait et les tests déterministes sécurisent le refactor de la grille).
+
+**Risques** :
+- Migrer les donjons existants (`WALL_CELLS`) vers le nouveau modèle roche/creusement sans casser les parties en cours.
+- Équilibrer le coût de creusement pour qu'il reste une décision intéressante (Design Principles #8) sans ralentir excessivement le rythme de préparation.
+
+---
+
+## Milestone 3 — The Kingdom Remembers
+
+**Statut** : ⏳ Planifié
+
+**Objectif** : implémenter progressivement la mémoire du Royaume, la cartographie imparfaite, les survivants qui rapportent des informations, et l'adaptation des futures expéditions à ce que la Guilde *croit* savoir plutôt qu'à la vérité absolue du donjon (voir [DECISIONS.md](./DECISIONS.md) D-010).
 
 **Fonctionnalités** :
 | Fonctionnalité | Description |
 |---|---|
 | Guilde vivante | Recruteurs, tactiques préférées propres, rancunes accumulées, effectif limité |
 | Réputation de guilde active | Le champ existant est enfin mis à jour et a un effet |
-| Alarme du royaume | Le champ `alarm` influence fréquence et composition des vagues |
+| Alarme du royaume | Le champ `alarm` influence fréquence et composition des expéditions |
 | Pressions régionales | Peur, cupidité, gloire, prime — influencent rumeurs et plans d'expédition |
-| Apprentissage collectif étendu | Cartes de pièges partagées, mémoire de chemin collective entre aventuriers |
+| Cartographie progressive | Les expéditions ne rapportent que des fragments d'information, pas une carte complète |
+| Informations imparfaites | Les rapports peuvent être exacts, incomplets, anciens, mal interprétés ou contradictoires |
+| Survivants et cartographes | Deviennent la source principale de connaissance du Royaume sur le donjon |
 | Ciblage vindicatif individuel | Un héritier cible le monstre nommé exact responsable, pas seulement son type |
 | Écran de taverne dédié | Plusieurs rumeurs concurrentes visibles simultanément |
 
 **Critères de validation** :
-- [ ] Un joueur peut attribuer un changement de comportement de vague à l'alarme du royaume ou à une pression régionale spécifique, distincte de la pression de rôle existante.
+- [ ] La carte du donjon connue par le Royaume peut être objectivement différente de la carte réelle après une modification du joueur entre deux expéditions.
+- [ ] Un joueur peut attribuer un changement de comportement d'expédition à l'alarme du royaume ou à une pression régionale spécifique, distincte de la pression de rôle existante.
 - [ ] La guilde peut manquer temporairement d'un rôle après des pertes répétées de ce rôle.
 - [ ] Un héritier peut viser nommément le monstre qui a tué son ancêtre, si celui-ci est toujours vivant.
 
-**Dépendances** : Milestone 1 (le système de combat extrait facilite l'ajout de règles de ciblage individuel).
+**Dépendances** : Milestone 2 (la cartographie imparfaite n'a de sens que si le donjon a une géométrie creusée et évolutive à cartographier).
 
 **Risques** :
-- Complexité de simulation accrue : surveiller les performances (voir Milestone 5) dès l'introduction des pressions régionales.
+- Complexité de simulation accrue : surveiller les performances (voir Milestone 6) dès l'introduction de la cartographie et des pressions régionales.
+- Lisibilité pour le joueur : une information imparfaite doit rester compréhensible a posteriori (Design Principles #13), pas juste aléatoire.
 
 ---
 
-## Milestone 3 — Content Expansion
+## Milestone 4 — Content Expansion
 
 **Statut** : ⏳ Planifié
 
@@ -125,11 +164,11 @@
 - [ ] Chaque nouvel élément est validé individuellement contre les Design Principles #7 et #8 (pas de contenu sans décision).
 - [ ] Le nombre de configurations tactiques viables augmente sans ajouter de complexité visible à l'interface de base.
 
-**Dépendances** : Milestone 2 (le contenu doit s'insérer dans un royaume déjà vivant pour avoir du sens narratif).
+**Dépendances** : Milestone 3 (le contenu doit s'insérer dans un royaume qui se souvient déjà pour avoir du sens narratif).
 
 ---
 
-## Milestone 4 — Art Direction
+## Milestone 5 — Art Direction
 
 **Statut** : ⏳ Planifié
 
@@ -148,11 +187,11 @@
 - [ ] Plus aucune texture générée procéduralement en dehors des outils de développement interne.
 - [ ] Chaque piège/monstre/rôle est identifiable visuellement sans lire l'UI.
 
-**Dépendances** : Milestone 3 (éviter de produire de l'art pour du contenu encore instable).
+**Dépendances** : Milestone 4 (éviter de produire de l'art pour du contenu encore instable).
 
 ---
 
-## Milestone 5 — Polish
+## Milestone 6 — Polish
 
 **Statut** : ⏳ Planifié
 
@@ -171,11 +210,11 @@
 - [ ] Un joueur néophyte comprend la boucle centrale sans aide externe en moins de 5 minutes.
 - [ ] Aucune dégradation de performance mesurable jusqu'au seuil de vague défini par les tests de charge.
 
-**Dépendances** : Milestones 1 à 4 (le polish porte sur un périmètre fonctionnel et artistique stabilisé).
+**Dépendances** : Milestones 1 à 5 (le polish porte sur un périmètre fonctionnel et artistique stabilisé).
 
 ---
 
-## Milestone 6 — Release Candidate
+## Milestone 7 — Release Candidate
 
 **Statut** : ⏳ Planifié
 
@@ -193,4 +232,4 @@
 - [ ] Zéro bug bloquant ou majeur ouvert.
 - [ ] Session de test à l'aveugle confirmant l'adéquation avec les piliers de [GAME_VISION.md](./GAME_VISION.md).
 
-**Dépendances** : Milestone 5.
+**Dépendances** : Milestone 6.
