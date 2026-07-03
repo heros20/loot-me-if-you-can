@@ -1,4 +1,5 @@
 import type { GridCell } from './types';
+import { ECONOMY_BALANCE } from '../systems/economyBalance';
 
 export const CANVAS_WIDTH = 960;
 export const CANVAS_HEIGHT = 640;
@@ -15,11 +16,11 @@ export const ENTRY_CELL: GridCell = { x: 0, y: 7 };
 export const TREASURE_CELL: GridCell = { x: 16, y: 4 };
 export const BOSS_CELL: GridCell = { x: 22, y: 12 };
 
-export const STARTING_GOLD = 30;
-export const DIG_COST = 10;
+export const STARTING_GOLD = ECONOMY_BALANCE.startingGold;
+export const DIG_COST = ECONOMY_BALANCE.digCost;
 
-export const DOOR_COST = 20;
-export const DOOR_HP = 60;
+export const DOOR_COST = ECONOMY_BALANCE.doorCost;
+export const DOOR_HP = ECONOMY_BALANCE.doorHp;
 export const THIEF_DOOR_DAMAGE_MULTIPLIER = 2;
 
 export function cellKey(cell: GridCell): string {

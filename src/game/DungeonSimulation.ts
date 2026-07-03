@@ -6,7 +6,6 @@ import {
   ENTRY_CELL,
   PARTY_SIZE,
   STARTING_GOLD,
-  THIEF_DOOR_DAMAGE_MULTIPLIER,
   TREASURE_CELL,
   cellKey,
   isInsideGrid,
@@ -45,6 +44,7 @@ import type {
   BossAbilityUiItem,
   ConstructionCategory,
   CountItem,
+  DoorSummary,
   DungeonSnapshot,
   InspectedAdventurer,
   NamedMinionUiItem,
@@ -94,6 +94,17 @@ import {
   resetBossAbilitiesForWave,
   tickBossAbilities,
 } from '../systems/bossAbilities';
+import { chooseBossAutopilotAbility } from '../systems/bossAutopilotSystem';
+import {
+  evaluateLocalAdventurerDecision,
+  findVisibleTrap,
+} from '../systems/adventurerDecisionSystem';
+import {
+  computeExpeditionEconomy,
+  computeDoorRemovalRefund,
+} from '../systems/economyBalance';
+import { tickAdventurerBarks, tickGlobalBarks, tryBark } from '../systems/barkSystem';
+import { assignGroupRetreat } from '../systems/partyRetreatSystem';
 import { applyRumorPressure, generateTavernRumor, recordRumor } from '../systems/tavernRumors';
 import { createMinionName } from '../systems/minionNaming';
 import {
@@ -104,10 +115,10 @@ import {
   markPlayerRoom,
 } from '../systems/dungeonConstruction';
 import {
-  computeDoorDamage,
   findActiveDoorAt,
   placeDoorAt,
   repairDoors,
+  removeDoorAt,
 } from '../systems/doorSystem';
 
 const BOSS_TEMPLATE: Omit<BossEntity, 'hp' | 'attackTimerMs' | 'abilities'> = {
@@ -147,9 +158,16 @@ const CONSTRUCTION_TOOLS: Array<{
   {
     type: 'door',
     name: 'Porte renforcee',
-    description: `Ralentit une expedition dans un couloir et donne un role cle au voleur. ${DOOR_HP} PV, x${THIEF_DOOR_DAMAGE_MULTIPLIER} degats de voleur.`,
+    description: `Bloque un couloir jusqu'a crochetage par un voleur. ${DOOR_HP} solidite, serrure reinitialisee entre expeditions.`,
     category: 'construction',
     cost: DOOR_COST,
+  },
+  {
+    type: 'removeDoor',
+    name: 'Retirer porte',
+    description: `Demonte volontairement une porte placee et recupere ${computeDoorRemovalRefund()} or.`,
+    category: 'construction',
+    cost: null,
   },
   {
     type: 'guardRoom',
@@ -198,6 +216,7 @@ export class DungeonSimulation {
     this.tickTimers(deltaMs);
     this.spawnAdventurers(deltaMs);
     this.updatePartyDecisions();
+    this.updateBossAutopilot(deltaMs);
     this.updateMonsterMovement(deltaMs);
     this.updateDefenders(deltaMs);
     this.updateAdventurers(deltaMs);
@@ -229,14 +248,14 @@ export class DungeonSimulation {
     this.state.gameSpeed = Math.min(3, Math.max(0.5, speed));
   }
 
-  useBossAbility(type: BossAbilityType): void {
+  useBossAbility(type: BossAbilityType): boolean {
     if (this.state.phase !== 'wave' || !this.state.runtime || this.state.paused) {
-      return;
+      return false;
     }
 
     if (!canUseBossAbility(this.state.boss, type)) {
       this.state.message = 'Cette capacite recupere encore. Le talent a des horaires.';
-      return;
+      return false;
     }
 
     const definition = BOSS_ABILITY_DEFINITIONS[type];
@@ -289,13 +308,16 @@ export class DungeonSimulation {
         : 'Aucune dalle libre pour les renforts. Probleme immobilier.';
 
       if (spawned === 0) {
-        return;
+        return false;
       }
     }
 
     consumeBossAbility(boss, type);
+    this.state.bossLastAbilityName = definition.name;
     this.state.runtime.stats.abilityUses += 1;
     this.state.runtime.stats.storyEvents.push(`Le boss utilise ${definition.name}.`);
+    this.createPartyBark('bossAbility');
+    return true;
   }
 
   inspectAdventurerAt(cell: GridCell): boolean {
@@ -407,6 +429,10 @@ export class DungeonSimulation {
       this.placeDoor(cell);
       return;
     }
+
+    if (tool === 'removeDoor') {
+      this.removeDoor(cell);
+    }
   }
 
   private digTile(cell: GridCell): void {
@@ -450,6 +476,19 @@ export class DungeonSimulation {
     this.nextDoorId += 1;
   }
 
+  private removeDoor(cell: GridCell): void {
+    const refund = computeDoorRemovalRefund();
+    const result = removeDoorAt(this.state.doors, cell, refund);
+    this.state.message = result.message;
+
+    if (!result.ok) {
+      return;
+    }
+
+    this.state.doors = result.doors;
+    this.state.gold += result.refundGold;
+  }
+
   private createDefenseEntity(type: DefenseType, cell: GridCell, summoned: boolean): DefenseEntity {
     const definition = getDefenseDefinition(type);
     const name = definition.kind === 'minion' ? this.nextMinionName(type) : `${definition.shortName}-${this.nextDefenseId}`;
@@ -469,6 +508,10 @@ export class DungeonSimulation {
       aiState: 'idle',
       targetAdventurerId: null,
       patrolAngle: this.nextDefenseId * 0.71,
+      chaseTimerMs: 0,
+      stuckTimerMs: 0,
+      lastX: cell.x,
+      lastY: cell.y,
       kills: 0,
       wavesSurvived: 0,
       summoned,
@@ -522,7 +565,7 @@ export class DungeonSimulation {
     }
 
     advanceWorldDay(this.state.world, 3 + this.state.wave);
-    const roster = buildWaveRoster(this.state.wave, this.state.memory);
+    const roster = buildWaveRoster(this.state.wave, this.state.memory, this.hasActiveDoor());
     const profiles = selectProfilesForWave(roster, this.state.world, this.state.wave);
     const lastRumor = this.state.world.rumors[this.state.world.rumors.length - 1] ?? null;
 
@@ -536,12 +579,15 @@ export class DungeonSimulation {
       partyPlan: createPartyPlan(this.state.wave, this.state.world.dungeonReputation.value, lastRumor?.effect ?? null),
       stats: createEmptyWaveStats(),
       doorsEngagedIds: new Set<string>(),
+      bossAutopilotTimerMs: 0,
     };
     this.state.report = null;
     this.state.adventurers = [];
     this.state.paused = false;
     this.state.inspectedAdventurerId = null;
     this.state.treasure = createSecureTreasure();
+    this.state.bossAutopilotIntent = 'Attend une ouverture.';
+    this.state.bossLastAbilityName = null;
     resetBossAbilitiesForWave(this.state.boss);
     this.state.defenses.forEach((defense) => {
       defense.cooldownRemainingMs = 0;
@@ -575,7 +621,7 @@ export class DungeonSimulation {
   getSnapshot(): DungeonSnapshot {
     const previewRoster = this.state.phase === 'wave' && this.state.runtime
       ? this.state.runtime.spawnQueue.map((profile) => profile.role)
-      : buildWaveRoster(this.state.wave, this.state.memory);
+      : buildWaveRoster(this.state.wave, this.state.memory, this.hasActiveDoor());
     const allRoles = [
       ...this.state.adventurers.map((adventurer) => adventurer.role),
       ...previewRoster,
@@ -614,6 +660,7 @@ export class DungeonSimulation {
       dungeonTiles: this.state.tiles,
       territoryByType: this.buildTerritorySummary(),
       digCost: DIG_COST,
+      doorSummary: this.buildDoorSummary(),
       dungeonValidation,
       expeditionLabel: expeditionPlan.label,
       expeditionPrimaryGoal: expeditionPlan.primaryGoal === 'boss' ? 'Boss' : 'Tresor',
@@ -637,6 +684,8 @@ export class DungeonSimulation {
       recentRumors: this.state.world.rumors.slice(-3).map((rumor) => rumor.text),
       inspectedAdventurer: this.buildInspectedAdventurer(),
       namedMinions: this.buildNamedMinions(),
+      bossAutopilotIntent: this.state.bossAutopilotIntent,
+      bossLastAbilityName: this.state.bossLastAbilityName,
     };
   }
 
@@ -798,10 +847,14 @@ export class DungeonSimulation {
       paused: false,
       gameSpeed: 1,
       inspectedAdventurerId: null,
+      bossAutopilotIntent: null,
+      bossLastAbilityName: null,
     };
   }
 
   private tickTimers(deltaMs: number): void {
+    tickGlobalBarks(deltaMs);
+
     this.state.defenses.forEach((defense) => {
       defense.cooldownRemainingMs = Math.max(0, defense.cooldownRemainingMs - deltaMs);
     });
@@ -813,6 +866,9 @@ export class DungeonSimulation {
       adventurer.attackTimerMs = Math.max(0, adventurer.attackTimerMs - deltaMs);
       adventurer.healTimerMs = Math.max(0, adventurer.healTimerMs - deltaMs);
       adventurer.stunnedTimerMs = Math.max(0, adventurer.stunnedTimerMs - deltaMs);
+      adventurer.hesitationTimerMs = Math.max(0, adventurer.hesitationTimerMs - deltaMs);
+      adventurer.retreatIntentTimerMs = Math.max(0, adventurer.retreatIntentTimerMs - deltaMs);
+      tickAdventurerBarks(adventurer, deltaMs);
 
       if (adventurer.fearTimerMs > 0) {
         adventurer.fearTimerMs = Math.max(0, adventurer.fearTimerMs - deltaMs);
@@ -904,7 +960,17 @@ export class DungeonSimulation {
       const definition = getAdventurerDefinition(adventurer.role);
       this.maybeStartRetreat(adventurer);
 
-      if (adventurer.targetStage === 'exit') {
+      if (adventurer.hesitationTimerMs > 0) {
+        continue;
+      }
+
+      this.applyLocalDecision(adventurer);
+
+      if (adventurer.hesitationTimerMs > 0) {
+        continue;
+      }
+
+      if (adventurer.targetStage === 'exit' && adventurer.retreatIntentTimerMs <= 0) {
         this.moveAdventurer(adventurer, deltaMs);
         continue;
       }
@@ -1000,10 +1066,14 @@ export class DungeonSimulation {
       return;
     }
 
+    if (this.tryAvoidLethalRetreatTrap(adventurer, currentCell, targetCell, nextCell)) {
+      return;
+    }
+
     const blockingDoor = findActiveDoorAt(this.state.doors, nextCell);
 
     if (blockingDoor) {
-      this.engageDoor(adventurer, blockingDoor);
+      this.engageDoor(adventurer, blockingDoor, deltaMs);
       return;
     }
 
@@ -1011,7 +1081,13 @@ export class DungeonSimulation {
     const dy = nextCell.y - adventurer.y;
     const remaining = Math.hypot(dx, dy);
     const carryPenalty = adventurer.carryingTreasure ? 0.82 : 1;
-    const step = adventurer.speed * adventurer.speedMultiplier * carryPenalty * deltaMs;
+    const retreatSpeed =
+      adventurer.targetStage === 'exit' && adventurer.retreatIntent === 'panicRetreat'
+        ? 1.18
+        : adventurer.targetStage === 'exit' && adventurer.retreatIntent === 'coverRetreat'
+          ? 0.86
+          : 1;
+    const step = adventurer.speed * adventurer.speedMultiplier * adventurer.decisionSpeedMultiplier * retreatSpeed * carryPenalty * deltaMs;
 
     if (step >= remaining) {
       adventurer.x = nextCell.x;
@@ -1031,43 +1107,172 @@ export class DungeonSimulation {
     adventurer.y += (dy / remaining) * step;
   }
 
-  private engageDoor(adventurer: AdventurerEntity, door: DungeonDoor): void {
-    if (adventurer.attackTimerMs > 0 || !this.state.runtime) {
+  private tryAvoidLethalRetreatTrap(
+    adventurer: AdventurerEntity,
+    currentCell: GridCell,
+    targetCell: GridCell,
+    nextCell: GridCell,
+  ): boolean {
+    if (!this.state.runtime || adventurer.targetStage !== 'exit' || adventurer.hp / adventurer.maxHp > 0.38) {
+      return false;
+    }
+
+    const trap = this.state.defenses.find(
+      (defense) => defense.alive && defense.kind === 'trap' && defense.cooldownRemainingMs <= 0 && isSameCell(defense.cell, nextCell),
+    );
+
+    if (!trap) {
+      adventurer.lastAvoidedTrapKey = null;
+      return false;
+    }
+
+    const trapKey = cellKey(nextCell);
+
+    if (adventurer.lastAvoidedTrapKey === trapKey) {
+      return false;
+    }
+
+    const definition = getDefenseDefinition(trap.type);
+    const expectedDamage = Math.max(1, Math.round((definition.trapDamage ?? 0) * adventurer.trapDamageMultiplier));
+    const shouldAvoid =
+      expectedDamage >= adventurer.hp ||
+      adventurer.personality === 'cautious' ||
+      adventurer.personality === 'traumatized' ||
+      adventurer.role === 'thief';
+
+    if (!shouldAvoid) {
+      return false;
+    }
+
+    const blockedCellKeys = getBlockedCellKeys(this.state.tiles);
+    blockedCellKeys.add(cellKey(nextCell));
+    const alternative = findPath(currentCell, targetCell, {
+      role: adventurer.role,
+      trapAvoidance: this.state.memory.trapAvoidance * personalityTrapAvoidance(adventurer) * 1.6,
+      trapDangerByCell: this.state.memory.trapDangerByCell,
+      knownTrapCells: this.getKnownTrapCells(),
+      blockedCellKeys,
+    });
+
+    if (alternative.length > 0 && alternative.length <= Math.max(3, adventurer.path.length + 3)) {
+      adventurer.path = alternative;
+      adventurer.lastAvoidedTrapKey = trapKey;
+      this.state.runtime.stats.fleeingTrapAvoidances += 1;
+      tryBark(adventurer, 'fleeTrap', this.visibleBarkCount());
+      this.state.message = `${adventurer.name} evite un piege visible pendant sa fuite. Instinct de survie tardif, mais appreciable.`;
+      return true;
+    }
+
+    if (adventurer.barkCooldownMs <= 0) {
+      adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, 520);
+      this.state.runtime.stats.tacticalHesitations += 1;
+      tryBark(adventurer, 'fleeTrap', this.visibleBarkCount());
+      return true;
+    }
+
+    return false;
+  }
+
+  private engageDoor(adventurer: AdventurerEntity, door: DungeonDoor, deltaMs: number): void {
+    if (!this.state.runtime || door.openedForExpedition) {
       return;
     }
 
-    const damage = computeDoorDamage(adventurer.damage, adventurer.role);
-    door.hp = Math.max(0, door.hp - damage);
-    adventurer.attackTimerMs = adventurer.attackCooldownMs;
-
     const stats = this.state.runtime.stats;
-    stats.doorDamageTotal += damage;
-
-    if (adventurer.role === 'thief') {
-      stats.doorDamageByThief += damage;
-    }
 
     if (!this.state.runtime.doorsEngagedIds.has(door.id)) {
       this.state.runtime.doorsEngagedIds.add(door.id);
       stats.doorEncounters += 1;
-      this.state.message = `${adventurer.name} se heurte a une porte renforcee et commence a la forcer.`;
+      this.state.message = `${adventurer.name} trouve une porte verrouillee. La force brute signe sa demission.`;
     }
 
-    if (door.hp <= 0 && !door.destroyed) {
-      door.destroyed = true;
-      stats.doorsDestroyed += 1;
+    const livingThief = this.state.adventurers.find((candidate) => candidate.alive && !candidate.escaped && candidate.role === 'thief') ?? null;
 
-      if (this.state.treasure.status === 'secure') {
-        stats.doorDestroyedBeforeTreasure = true;
+    if (!livingThief) {
+      this.retreatFromDoorWithoutThief(adventurer);
+      return;
+    }
+
+    if (adventurer.role !== 'thief') {
+      adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, 260);
+      tryBark(adventurer, 'doorBlocked', this.visibleBarkCount());
+      return;
+    }
+
+    door.beingPickedById = adventurer.id;
+    door.pickProgressMs = Math.min(door.pickRequiredMs, door.pickProgressMs + deltaMs);
+    adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, 80);
+    stats.thiefDoorLeads += 1;
+    tryBark(adventurer, 'doorThief', this.visibleBarkCount());
+    this.state.message = `${adventurer.name} crochète la porte verrouillee...`;
+
+    if (door.pickProgressMs >= door.pickRequiredMs) {
+      door.locked = false;
+      door.openedForExpedition = true;
+      door.beingPickedById = null;
+      door.pickProgressMs = door.pickRequiredMs;
+      stats.doorsPicked += 1;
+      stats.storyEvents.push(`${adventurer.name} crochete une porte verrouillee et ouvre le passage.`);
+      tryBark(adventurer, 'doorOpened', this.visibleBarkCount());
+      this.state.message = `${adventurer.name} ouvre la porte. Le groupe peut passer.`;
+    }
+  }
+
+  private retreatFromDoorWithoutThief(adventurer: AdventurerEntity): void {
+    if (!this.state.runtime) {
+      return;
+    }
+
+    if (this.state.runtime.stats.doorNoThiefRetreats === 0) {
+      this.state.runtime.stats.storyEvents.push("L'expedition abandonne devant une porte verrouillee faute de voleur.");
+      this.state.memory.rolePressure.thief += 3;
+      this.state.runtime.stats.doorNoThiefRetreats = 1;
+      this.startGroupRetreat('Porte verrouillee sans voleur.', 'lockedDoorNoThief');
+    }
+
+    adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, 900);
+    tryBark(adventurer, 'doorNoThief', this.visibleBarkCount());
+    this.state.message = 'Sans voleur, la serrure gagne par forfait. Retraite.';
+  }
+
+  private startGroupRetreat(reason: string, kind: 'lockedDoorNoThief' | 'danger' | 'treasure'): void {
+    if (!this.state.runtime) {
+      return;
+    }
+
+    this.state.runtime.partyPlan.retreating = true;
+    this.state.runtime.partyPlan.retreatReason = reason;
+    this.state.runtime.stats.groupRetreats += 1;
+
+    const assignments = assignGroupRetreat(
+      this.state.adventurers,
+      this.state.runtime.partyPlan.type,
+      kind,
+    );
+
+    assignments.forEach((assignment) => {
+      const adventurer = this.state.adventurers.find((candidate) => candidate.id === assignment.adventurerId);
+
+      if (!adventurer) {
+        return;
       }
 
-      stats.storyEvents.push(
-        adventurer.role === 'thief'
-          ? `${adventurer.name} fracasse une porte renforcee en un temps record.`
-          : `${adventurer.name} finit par briser une porte renforcee.`,
-      );
-      this.state.message = `${adventurer.name} detruit la porte renforcee. La voie est libre.`;
-    }
+      if (assignment.intent === 'coverRetreat') {
+        this.state.runtime!.stats.coverRetreats += 1;
+      }
+
+      if (assignment.intent === 'panicRetreat') {
+        this.state.runtime!.stats.panicRetreats += 1;
+      }
+
+      if (assignment.intent === 'disobey') {
+        this.state.runtime!.stats.disobeys += 1;
+      }
+
+      if (assignment.bark) {
+        tryBark(adventurer, assignment.bark, this.visibleBarkCount());
+      }
+    });
   }
 
   private handleObjectiveReached(adventurer: AdventurerEntity): void {
@@ -1094,6 +1299,7 @@ export class DungeonSimulation {
         : 'boss';
       adventurer.path = [];
       this.state.message = `${adventurer.name} empoche le Tresor du Donjon. Rattrape-le ou paie l'addition.`;
+      this.createPartyBark('treasureTaken');
 
       if (!this.state.world.chronicles.some((entry) => entry.text.includes('atteint la salle du boss'))) {
         addChronicle(this.state.world, 'Le premier aventurier atteint la salle du boss.');
@@ -1288,10 +1494,19 @@ export class DungeonSimulation {
 
     const currentWave = this.state.wave;
     const treasureStolen = runtime.stats.treasureStolen;
-    const goldAwarded = 14 + currentWave * 4;
     const trapRefundGold = this.dismantleRemainingTraps();
-    const treasurePenaltyGold = treasureStolen ? Math.min(goldAwarded + trapRefundGold, 8 + currentWave * 2) : 0;
-    const preparationBudget = goldAwarded + trapRefundGold - treasurePenaltyGold;
+    const rawGoldAwarded = 22 + currentWave * 6;
+    const treasurePenaltyGold = treasureStolen ? Math.min(rawGoldAwarded + trapRefundGold, 8 + currentWave * 2) : 0;
+    const economy = computeExpeditionEconomy({
+      wave: currentWave,
+      boss: this.state.boss,
+      treasureStolen,
+      trapRefundGold,
+      treasurePenaltyGold,
+    });
+    const goldAwarded = economy.goldAwarded;
+    const doorSalvageGold = 0;
+    const preparationBudget = economy.preparationBudget;
     const adaptationNotes = this.applyAdaptation(runtime.stats, runtime.elapsedMs);
     this.recordTopMinionFeat(runtime.stats);
 
@@ -1338,7 +1553,10 @@ export class DungeonSimulation {
       runtime,
       goldAwarded,
       trapRefundGold,
+      doorSalvageGold,
       treasurePenaltyGold,
+      economy.treasureProtectedBonusGold,
+      economy.bossSurvivalBonusGold,
       Math.max(0, preparationBudget),
       adaptationNotes,
       reputationDelta,
@@ -1403,6 +1621,9 @@ export class DungeonSimulation {
       0,
       0,
       0,
+      0,
+      0,
+      0,
       adaptationNotes,
       reputationDelta,
     );
@@ -1417,7 +1638,10 @@ export class DungeonSimulation {
     runtime: WaveRuntime,
     goldAwarded: number,
     trapRefundGold: number,
+    doorSalvageGold: number,
     treasurePenaltyGold: number,
+    treasureProtectedBonusGold: number,
+    bossSurvivalBonusGold: number,
     preparationBudget: number,
     adaptationNotes: string[],
     reputationDelta: number,
@@ -1445,8 +1669,19 @@ export class DungeonSimulation {
       bossDamageTaken: Math.round(runtime.stats.bossDamageTaken),
       goldAwarded,
       trapRefundGold,
+      doorSalvageGold,
       treasurePenaltyGold,
+      treasureProtectedBonusGold,
+      bossSurvivalBonusGold,
       preparationBudget,
+      abilityUses: runtime.stats.abilityUses,
+      doorsPicked: runtime.stats.doorsPicked,
+      doorNoThiefRetreats: runtime.stats.doorNoThiefRetreats,
+      fleeingTrapAvoidances: runtime.stats.fleeingTrapAvoidances,
+      groupRetreats: runtime.stats.groupRetreats,
+      coverRetreats: runtime.stats.coverRetreats,
+      panicRetreats: runtime.stats.panicRetreats,
+      disobeys: runtime.stats.disobeys,
       treasureStolen: runtime.stats.treasureStolen,
       dungeonReputation: this.state.world.dungeonReputation.value,
       reputationDelta,
@@ -1457,7 +1692,15 @@ export class DungeonSimulation {
       sharedLines: this.buildSharedLines(runtime, storyLines),
       gainsLosses: this.buildGainsLosses(runtime, participants),
       guildChanges: this.buildGuildChanges(wave, adaptationNotes),
-      economyLines: this.buildEconomyLines(goldAwarded, trapRefundGold, treasurePenaltyGold, preparationBudget),
+      economyLines: this.buildEconomyLines(
+        goldAwarded,
+        trapRefundGold,
+        doorSalvageGold,
+        treasurePenaltyGold,
+        treasureProtectedBonusGold,
+        bossSurvivalBonusGold,
+        preparationBudget,
+      ),
       participants,
       notableAdventurers: buildNotableAdventurers(runtime.stats),
       deaths: runtime.stats.deaths.slice(-5).map((record) => record.note),
@@ -1538,6 +1781,20 @@ export class DungeonSimulation {
       lines.push('La salle du boss reste surtout une rumeur couteuse.');
     }
 
+    if (runtime.stats.tacticalHesitations > 0 || runtime.stats.thiefTrapMitigations > 0 || runtime.stats.thiefDoorLeads > 0) {
+      lines.push(
+        `Lecture terrain: ${runtime.stats.tacticalHesitations} hesitation${runtime.stats.tacticalHesitations > 1 ? 's' : ''}, ` +
+          `${runtime.stats.thiefTrapMitigations} piege${runtime.stats.thiefTrapMitigations > 1 ? 's' : ''} affaibli${runtime.stats.thiefTrapMitigations > 1 ? 's' : ''}, ` +
+          `${runtime.stats.thiefDoorLeads} intervention${runtime.stats.thiefDoorLeads > 1 ? 's' : ''} de voleur sur porte.`,
+      );
+    }
+
+    if (runtime.stats.doorNoThiefRetreats > 0) {
+      lines.push("La Guilde retient qu'une porte verrouillee exige un voleur vivant.");
+    } else if (runtime.stats.doorsPicked > 0) {
+      lines.push(`Crochetage observe: ${runtime.stats.doorsPicked} porte${runtime.stats.doorsPicked > 1 ? 's' : ''} ouverte${runtime.stats.doorsPicked > 1 ? 's' : ''} sans degats.`);
+    }
+
     lines.push(
       runtime.stats.treasureStolen
         ? 'Le chemin vers le tresor est confirme et vendable en taverne.'
@@ -1584,7 +1841,7 @@ export class DungeonSimulation {
   }
 
   private buildGuildChanges(wave: number, adaptationNotes: string[]): string[] {
-    const nextRoster = buildWaveRoster(wave + 1, this.state.memory);
+    const nextRoster = buildWaveRoster(wave + 1, this.state.memory, this.hasActiveDoor());
     return [
       `Composition probable: ${formatRoster(nextRoster)}.`,
       ...adaptationNotes,
@@ -1594,13 +1851,28 @@ export class DungeonSimulation {
   private buildEconomyLines(
     goldAwarded: number,
     trapRefundGold: number,
+    doorSalvageGold: number,
     treasurePenaltyGold: number,
+    treasureProtectedBonusGold: number,
+    bossSurvivalBonusGold: number,
     preparationBudget: number,
   ): string[] {
     const lines = [
       `Or gagne par notoriete: +${goldAwarded}.`,
       `Or recupere via demontage des pieges: +${trapRefundGold}.`,
     ];
+
+    if (treasureProtectedBonusGold > 0) {
+      lines.push(`Tresor protege: +${treasureProtectedBonusGold}.`);
+    }
+
+    if (bossSurvivalBonusGold > 0) {
+      lines.push(`Boss encore debout: +${bossSurvivalBonusGold}.`);
+    }
+
+    if (doorSalvageGold > 0) {
+      lines.push(`Materiaux recuperes sur portes detruites: +${doorSalvageGold}.`);
+    }
 
     if (treasurePenaltyGold > 0) {
       lines.push(`Tresor vole: -${treasurePenaltyGold} pour remplacer l humiliation brillante.`);
@@ -1627,8 +1899,7 @@ export class DungeonSimulation {
       return;
     }
 
-    adventurer.targetStage = 'exit';
-    adventurer.path = [];
+    this.startGroupRetreat(`${adventurer.name} appelle la retraite avant de devenir une statistique.`, 'danger');
     this.state.message = `${adventurer.name} choisit la strategie heroique dite "sortir vivant".`;
   }
 
@@ -1700,6 +1971,7 @@ export class DungeonSimulation {
     if (decision) {
       this.state.message = decision;
       this.state.runtime.stats.storyEvents.push(decision);
+      this.startGroupRetreat(decision, decision.includes('tresor') ? 'treasure' : 'danger');
     }
 
     applyPartyDecisions(this.state.runtime.partyPlan, this.state.adventurers);
@@ -1718,6 +1990,39 @@ export class DungeonSimulation {
 
       adventurer.speedMultiplier = adventurer.slowedTimerMs > 0 ? 0.58 : 1;
     });
+  }
+
+  private updateBossAutopilot(deltaMs: number): void {
+    const runtime = this.state.runtime;
+
+    if (!runtime || this.state.adventurers.length === 0) {
+      this.state.bossAutopilotIntent = null;
+      return;
+    }
+
+    runtime.bossAutopilotTimerMs = Math.max(0, runtime.bossAutopilotTimerMs - deltaMs);
+
+    if (runtime.bossAutopilotTimerMs > 0) {
+      return;
+    }
+
+    runtime.bossAutopilotTimerMs = 620;
+    const decision = chooseBossAutopilotAbility(this.state.boss, {
+      adventurers: this.state.adventurers,
+      defenses: this.state.defenses,
+      doors: this.state.doors,
+      stats: runtime.stats,
+    });
+    this.state.bossAutopilotIntent = decision.intent;
+
+    if (!decision.ability) {
+      return;
+    }
+
+    if (this.useBossAbility(decision.ability)) {
+      runtime.stats.storyEvents.push(`Autopilote du boss: ${decision.intent ?? 'reaction instinctive'}`);
+      this.state.message = `${this.state.bossLastAbilityName ?? 'Pouvoir du boss'} automatique: ${decision.intent ?? 'le trone se defend tout seul.'}`;
+    }
   }
 
   private entityMovementGuard(): {
@@ -1757,6 +2062,90 @@ export class DungeonSimulation {
     return `${adventurer.name} survit a sa ${expeditionLabel}. C'est exactement comme ca que naissent les problemes recurrents.`;
   }
 
+  private applyLocalDecision(adventurer: AdventurerEntity): void {
+    if (!this.state.runtime) {
+      return;
+    }
+
+    const decision = evaluateLocalAdventurerDecision(adventurer, {
+      partyPlan: this.state.runtime.partyPlan,
+      adventurers: this.state.adventurers,
+      defenses: this.state.defenses,
+      doors: this.state.doors,
+      targetCell: this.getTargetCell(adventurer),
+    });
+
+    adventurer.decisionSpeedMultiplier = decision.speedMultiplier;
+    const canReactNow = adventurer.barkCooldownMs <= 0;
+
+    if (decision.bark) {
+      tryBark(adventurer, decision.bark, this.visibleBarkCount());
+    }
+
+    if (adventurer.role === 'thief') {
+      this.tryThiefMitigateTrap(adventurer);
+    }
+
+    if (decision.forceExit && decision.bark === 'doorNoThief') {
+      this.retreatFromDoorWithoutThief(adventurer);
+      return;
+    }
+
+    if (decision.forceExit) {
+      adventurer.targetStage = 'exit';
+      adventurer.path = [];
+    }
+
+    if (decision.clearPath) {
+      adventurer.path = [];
+    }
+
+    if (decision.reason) {
+      this.state.message = decision.reason;
+      this.state.runtime.stats.storyEvents.push(decision.reason);
+    }
+
+    if (decision.hesitateMs > 0 && canReactNow) {
+      adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, decision.hesitateMs);
+      this.state.runtime.stats.tacticalHesitations += 1;
+    }
+  }
+
+  private tryThiefMitigateTrap(adventurer: AdventurerEntity): void {
+    if (!this.state.runtime || adventurer.attackTimerMs > 0) {
+      return;
+    }
+
+    const trap = findVisibleTrap(adventurer, this.state.defenses);
+
+    if (!trap || trap.cooldownRemainingMs > 0) {
+      return;
+    }
+
+    trap.cooldownRemainingMs = 3600;
+    adventurer.attackTimerMs = Math.max(adventurer.attackTimerMs, Math.round(adventurer.attackCooldownMs * 0.75));
+    this.state.runtime.stats.thiefTrapMitigations += 1;
+    this.state.runtime.stats.storyEvents.push(`${adventurer.name} neutralise une partie du ${getDefenseDefinition(trap.type).name}.`);
+    this.state.memory.trapDangerByCell[cellKey(trap.cell)] = Math.max(
+      this.state.memory.trapDangerByCell[cellKey(trap.cell)] ?? 0,
+      0.35,
+    );
+    tryBark(adventurer, 'trapThief', this.visibleBarkCount());
+  }
+
+  private createPartyBark(kind: 'bossAbility' | 'treasureTaken'): void {
+    const speaker = this.state.adventurers.find((adventurer) => adventurer.alive && !adventurer.escaped && adventurer.barkCooldownMs <= 0)
+      ?? this.state.adventurers.find((adventurer) => adventurer.alive && !adventurer.escaped);
+
+    if (speaker) {
+      tryBark(speaker, kind, this.visibleBarkCount());
+    }
+  }
+
+  private visibleBarkCount(): number {
+    return this.state.adventurers.filter((adventurer) => adventurer.barkText && adventurer.barkTimerMs > 0).length;
+  }
+
   private addReputationChronicle(previousTitle: string): void {
     const currentTitle = this.state.world.dungeonReputation.title;
 
@@ -1778,6 +2167,11 @@ export class DungeonSimulation {
       this.state.memory.rolePressure.thief += 1;
       this.state.memory.trapAvoidance = Math.min(2.75, this.state.memory.trapAvoidance + 0.28);
       notes.push('Ils recrutent plus de voleurs et notent les dalles meurtrieres. Delation cartographique.');
+    }
+
+    if (stats.doorNoThiefRetreats > 0) {
+      this.state.memory.rolePressure.thief += 3;
+      notes.push('Porte verrouillee sans specialiste: la Guilde inscrit "voleur requis" en haut du prochain contrat.');
     }
 
     if (durationMs >= 26000 || stats.combatEngagementMs >= 9000) {
@@ -1884,6 +2278,29 @@ export class DungeonSimulation {
     ];
   }
 
+  private hasActiveDoor(): boolean {
+    return this.state.doors.some((door) => !door.destroyed);
+  }
+
+  private buildDoorSummary(): DoorSummary {
+    const activeDoors = this.state.doors.filter((door) => !door.destroyed);
+    const locked = activeDoors.filter((door) => !door.openedForExpedition).length;
+    const opened = activeDoors.filter((door) => door.openedForExpedition).length;
+    const beingPicked = activeDoors.filter((door) => door.beingPickedById !== null).length;
+    const averageHp = activeDoors.length > 0
+      ? Math.round(activeDoors.reduce((total, door) => total + door.hp, 0) / activeDoors.length)
+      : 0;
+
+    return {
+      active: activeDoors.length,
+      averageHp,
+      maxHp: DOOR_HP,
+      locked,
+      opened,
+      beingPicked,
+    };
+  }
+
   private buildTerritorySummary(): CountItem[] {
     const summary = summarizeTiles(this.state.tiles);
     return [
@@ -1916,6 +2333,17 @@ function createEmptyWaveStats(): WaveStats {
     doorDamageTotal: 0,
     doorDamageByThief: 0,
     doorDestroyedBeforeTreasure: false,
+    doorSalvageGold: 0,
+    doorsPicked: 0,
+    doorNoThiefRetreats: 0,
+    fleeingTrapAvoidances: 0,
+    groupRetreats: 0,
+    coverRetreats: 0,
+    panicRetreats: 0,
+    disobeys: 0,
+    tacticalHesitations: 0,
+    thiefTrapMitigations: 0,
+    thiefDoorLeads: 0,
   };
 }
 

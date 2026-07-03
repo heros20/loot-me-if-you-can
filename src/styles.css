@@ -468,7 +468,7 @@ button {
   padding: 8px 10px;
   color: #f4ead2;
   background: rgba(143, 38, 49, 0.14);
-  cursor: pointer;
+  cursor: default;
   text-align: left;
 }
 
@@ -480,11 +480,6 @@ button {
 .ability-button.is-ready {
   border-color: #8f2631;
   background: rgba(143, 38, 49, 0.3);
-}
-
-.ability-button.is-ready:hover {
-  border-color: #e1b35a;
-  filter: brightness(1.12);
 }
 
 .ability-button strong {

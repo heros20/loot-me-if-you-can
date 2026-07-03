@@ -35,12 +35,6 @@ for (let wave = 1; wave <= 10; wave += 1) {
     sim.update(50);
     t += 50;
 
-    if (t % 4000 === 0) {
-      sim.useBossAbility('shockwave');
-      sim.useBossAbility('roar');
-      sim.useBossAbility('summon');
-    }
-
     const s = sim.getSnapshot();
 
     if (s.phase === 'report' || s.phase === 'defeat') {

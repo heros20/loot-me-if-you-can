@@ -9,6 +9,42 @@ interface MonsterMovementOptions {
   getNextWaypoint: (fromX: number, fromY: number, targetX: number, targetY: number) => { x: number; y: number } | null;
 }
 
+interface ChaseConfig {
+  acquireRange: number;
+  maxHomeDistance: number;
+  chaseMs: number;
+  speed: number;
+  returnSpeed: number;
+  patrolRadius: number;
+}
+
+const CHASE_CONFIG: Record<'goblin' | 'skeleton' | 'slime', ChaseConfig> = {
+  goblin: {
+    acquireRange: 3.05,
+    maxHomeDistance: 4.2,
+    chaseMs: 5200,
+    speed: 0.00205,
+    returnSpeed: 0.00155,
+    patrolRadius: 0.32,
+  },
+  skeleton: {
+    acquireRange: 2.1,
+    maxHomeDistance: 2.25,
+    chaseMs: 3300,
+    speed: 0.0009,
+    returnSpeed: 0.00098,
+    patrolRadius: 0.08,
+  },
+  slime: {
+    acquireRange: 1.55,
+    maxHomeDistance: 1.45,
+    chaseMs: 2100,
+    speed: 0.00062,
+    returnSpeed: 0.0005,
+    patrolRadius: 0.14,
+  },
+};
+
 export function updateMonsterAI(
   minions: DefenseEntity[],
   adventurers: AdventurerEntity[],
@@ -46,25 +82,7 @@ function updateGoblin(
   deltaMs: number,
   movement: MonsterMovementOptions,
 ): void {
-  const target = findNearestAdventurer(minion, adventurers, 2.7);
-
-  if (target && distance(minion.x, minion.y, minion.homeCell.x, minion.homeCell.y) <= 3.4) {
-    minion.aiState = 'chase';
-    minion.targetAdventurerId = target.id;
-    moveToward(minion, target.x, target.y, 0.00195 * deltaMs, movement);
-    return;
-  }
-
-  minion.targetAdventurerId = null;
-  if (distance(minion.x, minion.y, minion.homeCell.x, minion.homeCell.y) > 0.2) {
-    minion.aiState = 'return';
-    moveToward(minion, minion.homeCell.x, minion.homeCell.y, 0.0015 * deltaMs, movement);
-    return;
-  }
-
-  minion.aiState = 'patrol';
-  minion.patrolAngle += deltaMs * 0.0017;
-  movePatrol(minion, minion.homeCell.x + Math.cos(minion.patrolAngle) * 0.32, minion.homeCell.y + Math.sin(minion.patrolAngle) * 0.32, movement);
+  updateChaser(minion, adventurers, deltaMs, movement, CHASE_CONFIG.goblin);
 }
 
 function updateSkeleton(
@@ -73,18 +91,7 @@ function updateSkeleton(
   deltaMs: number,
   movement: MonsterMovementOptions,
 ): void {
-  const target = findNearestAdventurer(minion, adventurers, 1.8);
-
-  if (target && distance(minion.x, minion.y, minion.homeCell.x, minion.homeCell.y) <= 1.35) {
-    minion.aiState = 'chase';
-    minion.targetAdventurerId = target.id;
-    moveToward(minion, target.x, target.y, 0.00078 * deltaMs, movement);
-    return;
-  }
-
-  minion.targetAdventurerId = null;
-  minion.aiState = 'return';
-  moveToward(minion, minion.homeCell.x, minion.homeCell.y, 0.00092 * deltaMs, movement);
+  updateChaser(minion, adventurers, deltaMs, movement, CHASE_CONFIG.skeleton);
 }
 
 function updateSlime(
@@ -95,21 +102,10 @@ function updateSlime(
   movement: MonsterMovementOptions,
 ): void {
   const target = findNearestAdventurer(minion, adventurers, 1.35);
-  minion.patrolAngle += deltaMs * 0.0012;
-
-  if (target && distance(minion.x, minion.y, minion.homeCell.x, minion.homeCell.y) <= 1.05) {
-    minion.aiState = 'chase';
-    minion.targetAdventurerId = target.id;
-    moveToward(minion, target.x, target.y, 0.00058 * deltaMs, movement);
+  if (target || minion.targetAdventurerId) {
+    updateChaser(minion, adventurers, deltaMs, movement, CHASE_CONFIG.slime);
   } else {
-    minion.targetAdventurerId = null;
-    minion.aiState = 'patrol';
-    movePatrol(
-      minion,
-      minion.homeCell.x + Math.cos(minion.patrolAngle) * 0.14,
-      minion.homeCell.y + Math.abs(Math.sin(minion.patrolAngle)) * 0.18,
-      movement,
-    );
+    updatePatrol(minion, deltaMs, movement, CHASE_CONFIG.slime);
   }
 
   adventurers.forEach((adventurer) => {
@@ -117,6 +113,63 @@ function updateSlime(
       slowedAdventurerIds.push(adventurer.id);
     }
   });
+}
+
+function updateChaser(
+  minion: DefenseEntity,
+  adventurers: AdventurerEntity[],
+  deltaMs: number,
+  movement: MonsterMovementOptions,
+  config: ChaseConfig,
+): void {
+  const homeDistance = distance(minion.x, minion.y, minion.homeCell.x, minion.homeCell.y);
+  const returningToPost = minion.aiState === 'return' && homeDistance > 0.26;
+  const previousTarget = !returningToPost && minion.targetAdventurerId
+    ? adventurers.find((adventurer) => adventurer.id === minion.targetAdventurerId && adventurer.alive && !adventurer.escaped) ?? null
+    : null;
+  const target = returningToPost ? null : previousTarget ?? findNearestAdventurer(minion, adventurers, config.acquireRange);
+
+  if (
+    target &&
+    homeDistance <= config.maxHomeDistance &&
+    minion.chaseTimerMs < config.chaseMs &&
+    minion.stuckTimerMs < 900
+  ) {
+    minion.aiState = 'chase';
+    minion.targetAdventurerId = target.id;
+    minion.chaseTimerMs += deltaMs;
+    const moved = moveToward(minion, target.x, target.y, config.speed * deltaMs, movement);
+    updateStuckState(minion, moved, deltaMs);
+    return;
+  }
+
+  minion.targetAdventurerId = null;
+  minion.chaseTimerMs = 0;
+  minion.stuckTimerMs = 0;
+
+  if (homeDistance > 0.18) {
+    minion.aiState = 'return';
+    moveToward(minion, minion.homeCell.x, minion.homeCell.y, config.returnSpeed * deltaMs, movement);
+    return;
+  }
+
+  updatePatrol(minion, deltaMs, movement, config);
+}
+
+function updatePatrol(
+  minion: DefenseEntity,
+  deltaMs: number,
+  movement: MonsterMovementOptions,
+  config: ChaseConfig,
+): void {
+  minion.aiState = 'patrol';
+  minion.patrolAngle += deltaMs * 0.0013;
+  movePatrol(
+    minion,
+    minion.homeCell.x + Math.cos(minion.patrolAngle) * config.patrolRadius,
+    minion.homeCell.y + Math.sin(minion.patrolAngle) * config.patrolRadius,
+    movement,
+  );
 }
 
 function findNearestAdventurer(
@@ -140,13 +193,13 @@ function moveToward(
   targetY: number,
   step: number,
   movement: MonsterMovementOptions,
-): void {
+): boolean {
   const dx = targetX - entity.x;
   const dy = targetY - entity.y;
   const remaining = Math.hypot(dx, dy);
 
   if (remaining <= 0.001) {
-    return;
+    return false;
   }
 
   const directStep = computeStep(entity.x, entity.y, targetX, targetY, step);
@@ -157,7 +210,7 @@ function moveToward(
   if (!waypoint) {
     entity.targetAdventurerId = null;
     entity.aiState = 'return';
-    return;
+    return false;
   }
 
   const nextStep = computeStep(entity.x, entity.y, waypoint.x, waypoint.y, step);
@@ -167,11 +220,12 @@ function moveToward(
   if (!movement.canMoveBetween(entity.x, entity.y, nextX, nextY)) {
     entity.targetAdventurerId = null;
     entity.aiState = 'return';
-    return;
+    return false;
   }
 
   entity.x = nextX;
   entity.y = nextY;
+  return Math.hypot(entity.x - entity.lastX, entity.y - entity.lastY) > 0.002;
 }
 
 function movePatrol(
@@ -186,6 +240,17 @@ function movePatrol(
 
   entity.x = targetX;
   entity.y = targetY;
+}
+
+function updateStuckState(entity: DefenseEntity, moved: boolean, deltaMs: number): void {
+  if (moved) {
+    entity.stuckTimerMs = 0;
+  } else {
+    entity.stuckTimerMs += deltaMs;
+  }
+
+  entity.lastX = entity.x;
+  entity.lastY = entity.y;
 }
 
 function computeStep(fromX: number, fromY: number, targetX: number, targetY: number, step: number): { x: number; y: number } {

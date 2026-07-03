@@ -4,7 +4,7 @@
 |---|---|
 | **Statut** | Vivant — journal append-only, on n'édite jamais une décision passée |
 | **Propriétaire** | Game Design |
-| **Dernière mise à jour** | 2026-07-02 |
+| **Dernière mise à jour** | 2026-07-03 |
 | **Documents liés** | [DESIGN_PRINCIPLES.md](./DESIGN_PRINCIPLES.md) · [GAME_DESIGN_DOCUMENT.md](./GAME_DESIGN_DOCUMENT.md) |
 
 ---
@@ -136,6 +136,29 @@ Chaque décision structurante obtient une entrée, numérotée dans l'ordre chro
 **Décision** : *Loot Me If You Can* est une guerre de l'information entre le Maître du Donjon et le Royaume. Le Royaume ne connaît pas le donjon par magie : il apprend uniquement grâce aux survivants, aux cartographes, aux rumeurs, aux rapports d'expédition, aux fragments de carte et à des observations imparfaites. Le joueur peut modifier son donjon entre deux expéditions — la carte connue du Royaume peut donc devenir obsolète.
 **Alternatives envisagées** : un royaume omniscient qui connaît en permanence l'état exact du donjon (écarté : plus simple à simuler, mais contredit Design Principles #13 et retire toute valeur stratégique à l'information elle-même) ; une carte du royaume qui se met à jour instantanément et parfaitement après chaque expédition (écarté : supprime tout intérêt à la désinformation et à l'obsolescence de la carte).
 **Conséquences** : l'information devient une ressource centrale, au même titre que l'or ou le territoire ; les survivants sont dangereux parce qu'ils rapportent des connaissances, pas seulement parce qu'ils s'échappent avec le trésor ; tuer un cartographe peut ralentir l'apprentissage du Royaume ; laisser partir un survivant peut au contraire désinformer la Guilde si son récit est incomplet ou biaisé ; les futures expéditions se préparent selon ce que la Guilde *croit* savoir, pas selon la vérité absolue du donjon. Documenté dans le [GAME_DESIGN_DOCUMENT.md](./GAME_DESIGN_DOCUMENT.md) §21 à §24 (Exploration des aventuriers, Cartographie progressive, Informations imparfaites, Cartographe) ; devient le cœur du Milestone 3 — *The Kingdom Remembers* (voir [ROADMAP.md](./ROADMAP.md), [MILESTONES.md](./MILESTONES.md)).
+
+---
+
+## D-011 — Portes V1 : obstacle tactique passif
+
+**Date** : 2026-07-03
+**Statut** : Actif
+**Contexte** : audit technique de Portes V1 (stable, sans bug critique ni majeur) — clarifier explicitement la nature de la porte avant d'envisager toute évolution (portes avancées, économie de réparation, Royaume qui apprend).
+**Décision** : la porte renforcée est un obstacle tactique passif et verrouillé, pas un piège et pas un objet destructible. Elle ne fait aucun dégât et ne perd pas de PV : son rôle est de bloquer le passage jusqu'à ce qu'un voleur vivant la crochète. Une porte crochetée s'ouvre pour l'expédition en cours, puis se referme automatiquement entre deux expéditions. Si une expédition sans voleur vivant arrive devant une porte, elle abandonne et la composition adaptative favorise davantage les voleurs. Les monstres et le boss du joueur ignorent volontairement les portes : elles ne gênent que les intrus.
+**Alternatives envisagées** : garder une porte cassable par dégâts classiques (écarté après playtest : donne l'impression d'or perdu et affaiblit le rôle du voleur) ; donner à la porte des dégâts de contact contre l'aventurier qui la force (écarté pour V1 : transforme l'obstacle en piège déguisé) ; ajouter clés, mini-jeu ou types avancés de portes (écarté : hors périmètre de Portes V1).
+**Conséquences** : la valeur tactique d'une porte dépend de ce que le joueur place à proximité (pièges, sbires, lignes de vue du boss) pour exploiter le temps de crochetage ou provoquer une retraite si la Guilde manque de voleur. Il n'y a plus de réparation ni de remboursement de porte en V1, car la porte n'est plus endommagée. Documenté dans le [CHANGELOG.md](../CHANGELOG.md) (Economy & Locked Doors).
+
+---
+
+## D-012 - Portes V1.2 : retrait volontaire, pas reparation
+
+**Date** : 2026-07-03
+**Statut** : Actif
+**Contexte** : passe de stabilisation Expedition Cohesion & Defense AI. Les portes verrouillees sont devenues persistantes et non destructibles, mais le joueur doit pouvoir corriger une mauvaise pose sans attendre une economie de reparation.
+**Decision** : une porte placee persiste entre expeditions et se reverrouille a chaque nouvelle expedition. Elle ne subit toujours aucun degat et ne demande aucune reparation. En phase Build uniquement, le joueur peut la retirer volontairement avec l'outil `Retirer porte` et recuperer un remboursement partiel fixe de 50% du cout de porte.
+**Alternatives envisagees** : remboursement automatique entre vagues (rejete : contredit la permanence tactique de la porte) ; reparation ou usure des portes (rejete : hors perimetre tant que les portes ne prennent pas de degats) ; retrait gratuit complet (rejete : rend la pose trop reversible et efface le poids economique du placement).
+**Consequences** : D-011 reste vraie pour le role tactique passif et non destructible de la porte, mais sa phrase "pas de remboursement" est revisee : il n'y a pas de remboursement automatique ni de recuperation liee aux degats, seulement un demontage volontaire en preparation.
+**Remplace / Remplace par** : revise partiellement D-011.
 
 ---
 

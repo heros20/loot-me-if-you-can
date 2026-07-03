@@ -38,6 +38,15 @@ export interface CountItem {
   count: number;
 }
 
+export interface DoorSummary {
+  active: number;
+  averageHp: number;
+  maxHp: number;
+  locked: number;
+  opened: number;
+  beingPicked: number;
+}
+
 export interface BossAbilityUiItem {
   type: BossAbilityType;
   name: string;
@@ -96,6 +105,7 @@ export interface DungeonSnapshot {
   dungeonTiles: DungeonTile[];
   territoryByType: CountItem[];
   digCost: number;
+  doorSummary: DoorSummary;
   dungeonValidation: DungeonValidation;
   expeditionLabel: string;
   expeditionPrimaryGoal: string;
@@ -117,6 +127,8 @@ export interface DungeonSnapshot {
   recentRumors: string[];
   inspectedAdventurer: InspectedAdventurer | null;
   namedMinions: NamedMinionUiItem[];
+  bossAutopilotIntent: string | null;
+  bossLastAbilityName: string | null;
 }
 
 export type UiSnapshot = MenuSnapshot | DungeonSnapshot;

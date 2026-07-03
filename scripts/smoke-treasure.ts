@@ -31,12 +31,6 @@ for (let wave = 1; wave <= 8; wave += 1) {
     sim.update(50);
     t += 50;
 
-    if (t % 6000 === 0) {
-      sim.useBossAbility('shockwave');
-      sim.useBossAbility('roar');
-      sim.useBossAbility('summon');
-    }
-
     const s = sim.getSnapshot();
 
     if (s.treasureStatus === 'carried') {

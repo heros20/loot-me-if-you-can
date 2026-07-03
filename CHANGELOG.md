@@ -2,11 +2,28 @@
 
 ## Unreleased - Direction studio gameplay
 
+- Added the Expedition Cohesion & Defense AI stabilization pass without starting Kingdom memory, cartography, Cartographer, or full class abilities.
+- Added `src/systems/partyRetreatSystem.ts`: door-without-living-thief and party-level retreats now assign simple group intents (`followRetreat`, `coverRetreat`, `panicRetreat`, `disobey`) with contextual barks and debrief stats.
+- Doors now persist as locked obstacles between expeditions, reset their lock state after each wave, and can be voluntarily removed during build phase for a partial gold refund.
+- Stabilized goblin, skeleton, and slime movement with temporary chase timers, return-to-post behavior, and stuck detection so defensive units do not jitter in place or chase forever through rock-blocked routes.
+- Added smoke coverage for voluntary door removal/refund, no-thief group retreat movement, and goblin temporary chase/return behavior.
+- Added the Expedition Intelligence & Early Strategy pass without starting Kingdom memory, global mapping, or the Cartographer class.
+- Added `src/systems/adventurerDecisionSystem.ts`: adventurers now make small local decisions around visible traps, doors, nearby dangerous minions, wounded allies, personality, and party plan. They can hesitate, let the thief pass, keep warriors/thieves nearer the front, keep mages/healers nearer the rear, and retreat more believably when very wounded.
+- Added `src/systems/barkSystem.ts`: short contextual in-game barks appear above adventurers for doors, traps, wounds, boss powers, treasure theft, and retreat pressure, with per-unit cooldowns and a visible-bark cap.
+- Added a lightweight thief utility pass: thieves move forward around traps/doors, handle locked doors, and can temporarily weaken a visible trap instead of letting the whole party blindly eat it.
+- Added `src/systems/bossAutopilotSystem.ts`: the boss now chooses existing powers automatically based on clustered adventurers, fleeing/treasure-carrying targets, healers, door slowdowns, throne pressure, and low boss health. The boss UI now reports cooldowns, last power, and current intent as information rather than required micromanagement.
+- Added the Economy & Locked Doors pass: starting gold is now 120, digging costs 8, reinforced doors cost 18, and post-wave economy now includes expedition reward, protected-treasure bonus, boss-alive bonus, and trap recovery so a successful run adds room to adapt.
+- Reworked Portes V1 from destructible obstacles into locked doors: they no longer lose HP or break from attacks, only thieves can pick them, picked doors open for the current expedition, and they reset locked between expeditions.
+- Expeditions without a living thief now recognize a locked door as a blocker, bark about it, retreat, record the failure in the debrief, and push adaptive composition toward future thieves.
+- Improved retreat pathing around visible lethal traps: badly wounded fleeing adventurers try a short alternative before stepping onto obvious death, without becoming perfect path solvers.
+- Improved bark readability and repetition control with a global phrase cooldown, fewer simultaneous barks, longer display time, higher battlefield placement, and a semi-opaque bubble.
+- Debriefs now surface defensive strategy more clearly: door delay, thief trap mitigation, thief door work, boss autopilot usage, tactical hesitations, and recovered door materials can all appear in the report.
+- Updated smoke coverage so boss powers are validated as automatic, expedition reports still contain exactly 5 adventurers, doors remain non-destructible, thieves pick doors, no-thief parties retreat, and the richer first build budget supports a real defensive plan.
 - Fixed expedition size at exactly 5 adventurers via the new `PARTY_SIZE` constant; difficulty now shifts through class composition, levels, memory, and tactics instead of larger waves.
 - Reworked class composition into a fixed-size adaptive roster: traps push the guild toward thieves, long fights toward healers, lethal minions toward warriors, boss pressure toward tanks/healers, and treasure theft toward more aggressive boss-capable teams.
 - Replaced wall placement with the first Carve Your Kingdom vertical slice: the 23x16 dungeon now starts mostly as rock, with an initial carved route, treasure room, throne room, and branch rooms.
 - Added explicit tile semantics (`rock`, `floor`, `room`, `entrance`, `treasure`, `throne`) and tile helpers for walkability, territory counts, room marking, and blocked pathfinding cells.
-- Added the Creuser tool: adjacent rock can be dug into floor for `DIG_COST` (10 gold), with no-gold and invalid-dig feedback.
+- Added the Creuser tool: adjacent rock can be dug into floor for `DIG_COST` (8 gold), with no-gold and invalid-dig feedback.
 - Added a Salles UI category with visual guard-room and crypt marking on carved territory, plus a disabled door placeholder for later.
 - Updated defense validation so traps, minions, and summoned skeletons require valid carved floor/room cells and cannot be placed on rock, entrance, treasure, or throne tiles.
 - Stabilized special-room constructibility: the exact entrance, treasure, and boss/throne tiles stay protected, while carved tiles around the treasure and boss can now hold defenses.
@@ -18,11 +35,23 @@
 - Replaced the small sidebar report with a full debrief overlay covering summary, all 5 participants, learned dangers, shared rumors, gains/losses, guild adaptation, and dungeon economy.
 - Added independent `smoke-treasure` and `smoke-longrun` npm scripts while keeping `npm run smoke` as the aggregate.
 - Added smoke assertions for fixed 5-adventurer reports, paid digging, no-gold digging refusal, protected exact tiles, special-room defense placement, and rock placement refusal.
-- Added Portes V1: a Porte renforcee construction (20 gold, 60 HP) placeable on any dug floor/room cell, including around the treasure and throne rooms, but never on rock, the exact entrance/treasure/throne cells, or a cell already holding a trap, minion, or another door.
-- Doors stay traversable for pathfinding but block movement at runtime: adventurers stop and attack a closed door until it breaks, then the expedition continues; thieves deal double damage to doors (`THIEF_DOOR_DAMAGE_MULTIPLIER`).
-- Doors render as a distinct placeholder with their own HP bar, hit feedback, and a broken-door marker on destruction; undamaged doors persist between expeditions and damaged (non-destroyed) doors are fully repaired at the next build phase, while destroyed doors must be rebuilt.
+- Added Portes V1: a Porte renforcee construction (18 gold, locked) placeable on any dug floor/room cell, including around the treasure and throne rooms, but never on rock, the exact entrance/treasure/throne cells, or a cell already holding a trap, minion, or another door.
+- Doors stay traversable for pathfinding but block movement at runtime: adventurers stop until a thief picks the lock; parties without a living thief retreat and learn to bring one.
+- Doors render as a distinct placeholder with locked/picking/open states; picked doors persist and reset locked at the next build phase.
 - Debriefs now mention a door's impact (delay, thief efficiency, destruction before the treasure) when it mattered during the expedition.
-- Added door smoke assertions: placement refusals on rock/entrance/treasure/throne, acceptance on floor and around the treasure room, gold cost and disabled-button feedback, occupied-cell refusal, thief damage multiplier, and end-to-end door damage/destruction across a full multi-wave run.
+- Added door smoke assertions: placement refusals on rock/entrance/treasure/throne, acceptance on floor and around the treasure room, gold cost and disabled-button feedback, occupied-cell refusal, lock initialization, thief lockpicking, reset between expeditions, and no-thief retreat.
+
+### Expedition Cohesion & Defense AI - Polish follow-up
+
+- The adaptive roster now favors a thief pre-emptively whenever any active locked door exists in the dungeon, not only after a wave already failed for lack of a thief (`buildWaveRoster` takes a `hasActiveLockedDoor` flag consumed by `roleScore`).
+- The post-wave debrief now narrates disobedience and cover-retreat moments ("un aventurier desobeit a l'ordre de repli et tient la ligne") instead of only showing them as live barks during the fight, so a healer refusing to flee is visible after the fact too.
+
+### Portes V1.1 - Polish & Documentation
+
+- Documented the door's design intent as `D-011` in `docs/DECISIONS.md`: a passive tactical obstacle (no damage dealt), can also block a fleeing adventurer on purpose, and is deliberately ignored by the player's own monsters and boss.
+- Added a door summary to the Construction panel ("Portes actives : N — Solidite : X / 82 en moyenne", or "Portes actives : 0") so the player always knows how many reinforced doors are still standing without scanning the map.
+- Gave door placement refusals a specific reason instead of one generic message: rock, entrance, exact treasure, exact throne, an already-occupied door cell, an already-occupied trap/monster cell, and insufficient gold now each report their own short explanation.
+- Superseded by Economy & Locked Doors: doors now use locked/picking/open states rather than combat damage.
 
 ## 0.5.0 - Le boss devient un vrai boss
 

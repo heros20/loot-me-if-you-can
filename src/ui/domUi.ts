@@ -1,5 +1,5 @@
 import type { BossAbilityType, ConstructionTool, DefenseType } from '../game/types';
-import type { ConstructionUiItem, CountItem, DefenseUiItem, DungeonSnapshot, UiSnapshot } from '../game/uiSnapshot';
+import type { ConstructionUiItem, CountItem, DefenseUiItem, DoorSummary, DungeonSnapshot, UiSnapshot } from '../game/uiSnapshot';
 import { emitUiAction, onUiState } from './uiEvents';
 
 const BEST_WAVE_STORAGE_KEY = 'final-boss-dungeon.best-wave';
@@ -107,6 +107,7 @@ export class GameDomUi {
         <div class="tool-list">${constructionTools.map((item) => this.renderToolButton(item, snapshot)).join('')}</div>
         <div class="roster">${this.renderCounts(snapshot.territoryByType)}</div>
         <div class="message">Creuser coute ${snapshot.digCost} or. La roche bloque les expeditions; le sol et les salles les laissent passer.</div>
+        <div class="message">${this.renderDoorSummary(snapshot.doorSummary)}</div>
       </div>
 
       <div class="panel-section">
@@ -258,7 +259,11 @@ export class GameDomUi {
       </div>
 
       <div class="panel-section">
-        <p class="section-title">Capacites du boss</p>
+        <p class="section-title">Boss autonome</p>
+        <div class="message">
+          ${snapshot.bossAutopilotIntent ? escapeHtml(snapshot.bossAutopilotIntent) : 'Le boss attend que les intrus approchent du trone.'}
+          ${snapshot.bossLastAbilityName ? `<br>Dernier pouvoir: ${escapeHtml(snapshot.bossLastAbilityName)}.` : ''}
+        </div>
         <div class="ability-list">
           ${snapshot.bossAbilities
             .map((ability) => {
@@ -269,15 +274,13 @@ export class GameDomUi {
                   ? 'Pret'
                   : `${cooldownSeconds}s`;
               return `
-                <button
+                <div
                   class="ability-button${ability.ready ? ' is-ready' : ''}"
-                  data-ability="${ability.type}"
-                  ${ability.ready ? '' : 'disabled'}
                   title="${escapeHtml(ability.description)}"
                 >
                   <strong>${escapeHtml(ability.name)}</strong>
                   <span>${escapeHtml(status)} - ${ability.usesLeft} restant${ability.usesLeft > 1 ? 's' : ''}</span>
-                </button>
+                </div>
               `;
             })
             .join('')}
@@ -477,6 +480,14 @@ export class GameDomUi {
         <strong>${escapeHtml(value)}</strong>
       </div>
     `;
+  }
+
+  private renderDoorSummary(summary: DoorSummary): string {
+    if (summary.active === 0) {
+      return 'Portes actives : 0';
+    }
+
+    return `Portes actives : ${summary.active} - verrouillees : ${summary.locked}, ouvertes cette expedition : ${summary.opened}`;
   }
 
   private renderCounts(items: CountItem[]): string {

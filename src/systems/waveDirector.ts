@@ -10,14 +10,14 @@ const BASE_ROLE_SCORE: Record<AdventurerRole, number> = {
   healer: 0.88,
 };
 
-export function buildWaveRoster(wave: number, memory: AdaptationMemory): AdventurerRole[] {
+export function buildWaveRoster(wave: number, memory: AdaptationMemory, hasActiveLockedDoor = false): AdventurerRole[] {
   const roles: AdventurerRole[] = [];
 
   while (roles.length < PARTY_SIZE) {
     const nextRole = ADAPTIVE_ROLE_ORDER
       .map((role) => ({
         role,
-        score: roleScore(role, wave, memory, roles),
+        score: roleScore(role, wave, memory, roles, hasActiveLockedDoor),
       }))
       .sort((a, b) => b.score - a.score || ADAPTIVE_ROLE_ORDER.indexOf(a.role) - ADAPTIVE_ROLE_ORDER.indexOf(b.role))[0]?.role ?? 'warrior';
 
@@ -78,6 +78,15 @@ export function createAdventurer(profile: AdventurerProfile, id: string, wave: n
     stunnedTimerMs: 0,
     fearTimerMs: 0,
     fearPreviousStage: null,
+    retreatIntent: 'none',
+    retreatIntentTimerMs: 0,
+    hesitationTimerMs: 0,
+    decisionSpeedMultiplier: 1,
+    barkText: null,
+    barkTimerMs: 0,
+    barkCooldownMs: index * 220,
+    lastBarkKey: null,
+    lastAvoidedTrapKey: null,
     isHeir: profile.heirOfProfileId !== null,
   };
 }
@@ -87,6 +96,7 @@ function roleScore(
   wave: number,
   memory: AdaptationMemory,
   currentRoles: AdventurerRole[],
+  hasActiveLockedDoor: boolean,
 ): number {
   const currentCount = currentRoles.filter((candidate) => candidate === role).length;
 
@@ -97,7 +107,9 @@ function roleScore(
   const pressure = memory.rolePressure[role] ?? 0;
   const waveBias = ((wave + ADAPTIVE_ROLE_ORDER.indexOf(role)) % ADAPTIVE_ROLE_ORDER.length) * 0.045;
   const trapLearningBias = role === 'thief' ? Math.max(0, memory.trapAvoidance - 0.35) * 0.36 : 0;
+  // Une porte verrouillee connue du Royaume doit quasi-garantir un voleur dans le prochain contrat (D-012).
+  const lockedDoorBias = role === 'thief' && hasActiveLockedDoor && currentCount === 0 ? 0.9 : 0;
   const duplicatePenalty = currentCount * 1.08 + Math.max(0, currentCount - 1) * 0.68;
 
-  return BASE_ROLE_SCORE[role] + pressure * 1.22 + waveBias + trapLearningBias - duplicatePenalty;
+  return BASE_ROLE_SCORE[role] + pressure * 1.22 + waveBias + trapLearningBias + lockedDoorBias - duplicatePenalty;
 }

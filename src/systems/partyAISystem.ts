@@ -80,6 +80,10 @@ export function applyPartyDecisions(plan: PartyPlan, adventurers: AdventurerEnti
     }
 
     if (plan.retreating) {
+      if (adventurer.retreatIntent === 'disobey') {
+        return;
+      }
+
       adventurer.targetStage = 'exit';
       adventurer.path = [];
       return;

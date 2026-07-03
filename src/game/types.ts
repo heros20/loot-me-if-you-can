@@ -13,11 +13,12 @@ export type TileType = 'rock' | 'floor' | 'room' | 'entrance' | 'treasure' | 'th
 
 export type RoomSpecialization = 'guardRoom' | 'crypt' | 'treasureRoom' | 'throneRoom';
 
-export type ConstructionTool = 'dig' | 'guardRoom' | 'crypt' | 'door';
+export type ConstructionTool = 'dig' | 'guardRoom' | 'crypt' | 'door' | 'removeDoor';
 
 export type AdventurerRole = 'warrior' | 'thief' | 'mage' | 'healer';
 
 export type AdventurerTargetStage = 'treasure' | 'boss' | 'exit';
+export type AdventurerRetreatIntent = 'none' | 'followRetreat' | 'coverRetreat' | 'panicRetreat' | 'disobey';
 
 export type ExpeditionPlanType = 'greedy' | 'heroic' | 'cautious' | 'fanatic' | 'mercenary';
 
@@ -85,9 +86,15 @@ export interface DungeonTile {
 export interface DungeonDoor {
   id: string;
   cell: GridCell;
+  locked: boolean;
+  openedForExpedition: boolean;
+  beingPickedById: string | null;
+  pickProgressMs: number;
+  pickRequiredMs: number;
   hp: number;
   maxHp: number;
   destroyed: boolean;
+  salvageClaimed: boolean;
 }
 
 export interface DefenseDefinition {
@@ -243,6 +250,10 @@ export interface DefenseEntity {
   aiState: DefenseAIState;
   targetAdventurerId: string | null;
   patrolAngle: number;
+  chaseTimerMs: number;
+  stuckTimerMs: number;
+  lastX: number;
+  lastY: number;
   kills: number;
   wavesSurvived: number;
   summoned: boolean;
@@ -281,6 +292,15 @@ export interface AdventurerEntity {
   stunnedTimerMs: number;
   fearTimerMs: number;
   fearPreviousStage: AdventurerTargetStage | null;
+  retreatIntent: AdventurerRetreatIntent;
+  retreatIntentTimerMs: number;
+  hesitationTimerMs: number;
+  decisionSpeedMultiplier: number;
+  barkText: string | null;
+  barkTimerMs: number;
+  barkCooldownMs: number;
+  lastBarkKey: string | null;
+  lastAvoidedTrapKey: string | null;
   isHeir: boolean;
 }
 
@@ -340,6 +360,17 @@ export interface WaveStats {
   doorDamageTotal: number;
   doorDamageByThief: number;
   doorDestroyedBeforeTreasure: boolean;
+  doorSalvageGold: number;
+  doorsPicked: number;
+  doorNoThiefRetreats: number;
+  fleeingTrapAvoidances: number;
+  groupRetreats: number;
+  coverRetreats: number;
+  panicRetreats: number;
+  disobeys: number;
+  tacticalHesitations: number;
+  thiefTrapMitigations: number;
+  thiefDoorLeads: number;
 }
 
 export interface WaveRuntime {
@@ -351,6 +382,7 @@ export interface WaveRuntime {
   partyPlan: PartyPlan;
   stats: WaveStats;
   doorsEngagedIds: Set<string>;
+  bossAutopilotTimerMs: number;
 }
 
 export interface PartyPlan {
@@ -394,7 +426,18 @@ export interface WaveReport {
   goldAwarded: number;
   trapRefundGold: number;
   treasurePenaltyGold: number;
+  doorSalvageGold: number;
+  treasureProtectedBonusGold: number;
+  bossSurvivalBonusGold: number;
   preparationBudget: number;
+  abilityUses: number;
+  doorsPicked: number;
+  doorNoThiefRetreats: number;
+  fleeingTrapAvoidances: number;
+  groupRetreats: number;
+  coverRetreats: number;
+  panicRetreats: number;
+  disobeys: number;
   treasureStolen: boolean;
   dungeonReputation: number;
   reputationDelta: number;
@@ -434,4 +477,6 @@ export interface GameState {
   paused: boolean;
   gameSpeed: number;
   inspectedAdventurerId: string | null;
+  bossAutopilotIntent: string | null;
+  bossLastAbilityName: string | null;
 }

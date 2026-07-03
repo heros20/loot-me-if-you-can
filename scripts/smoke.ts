@@ -1,7 +1,7 @@
 /* Test de fumee headless: simule plusieurs vagues avec pieges, sbires et capacites du boss. */
 import { DIG_COST, DOOR_COST, PARTY_SIZE, STARTING_GOLD } from '../src/game/constants';
 import { DungeonSimulation } from '../src/game/DungeonSimulation';
-import { computeDoorDamage } from '../src/systems/doorSystem';
+import { computeDoorRemovalRefund } from '../src/systems/economyBalance';
 import type { GridCell } from '../src/game/types';
 
 function validateDiggingRules(): void {
@@ -19,15 +19,16 @@ function validateDiggingRules(): void {
     process.exit(1);
   }
 
+  (digSim as unknown as { state: { gold: number } }).state.gold = 0;
   digSim.placeSelectedDefense({ x: 10, y: 7 });
-  const afterNoGoldDig = digSim.getSnapshot();
+  const afterInsufficientDig = digSim.getSnapshot();
 
-  if (afterNoGoldDig.gold !== 0 || !afterNoGoldDig.message.includes('Il faut')) {
+  if (afterInsufficientDig.gold !== 0 || !afterInsufficientDig.message.includes('Il faut')) {
     console.error('ECHEC: le creusement sans or devrait etre refuse avec feedback.');
     process.exit(1);
   }
 
-  const digTool = afterNoGoldDig.constructionTools.find((tool) => tool.type === 'dig');
+  const digTool = afterInsufficientDig.constructionTools.find((tool) => tool.type === 'dig');
 
   if (!digTool?.disabled) {
     console.error('ECHEC: le bouton Creuser devrait etre desactive quand l or est insuffisant.');
@@ -140,10 +141,13 @@ function validateDoorRules(): void {
     process.exit(1);
   }
 
-  acceptSim.placeSelectedDefense({ x: 11, y: 4 });
+  (acceptSim as unknown as { state: { gold: number } }).state.gold = DOOR_COST * 2;
+  [{ x: 11, y: 4 }, { x: 12, y: 4 }].forEach((cell) => acceptSim.placeSelectedDefense(cell));
+  const afterMoreDoors = acceptSim.getSnapshot();
+  acceptSim.placeSelectedDefense({ x: 13, y: 4 });
   const afterInsufficientGold = acceptSim.getSnapshot();
 
-  if (afterInsufficientGold.gold !== STARTING_GOLD - DOOR_COST || acceptSim.getRenderState().doors.length !== 1) {
+  if (afterInsufficientGold.gold !== afterMoreDoors.gold || acceptSim.getRenderState().doors.length !== 3) {
     console.error('ECHEC: une porte a ete posee malgre un or insuffisant.');
     process.exit(1);
   }
@@ -178,12 +182,149 @@ function validateDoorRules(): void {
   }
 }
 
-function validateDoorCombatRules(): void {
-  const warriorDamage = computeDoorDamage(10, 'warrior');
-  const thiefDamage = computeDoorDamage(10, 'thief');
+function validateDoorLockRules(): void {
+  const lockSim = new DungeonSimulation();
+  lockSim.startNewGame();
+  lockSim.selectConstructionTool('door');
+  lockSim.placeSelectedDefense({ x: 10, y: 4 });
+  const door = lockSim.getRenderState().doors[0];
 
-  if (thiefDamage <= warriorDamage) {
-    console.error('ECHEC: le voleur devrait infliger plus de degats a une porte qu un guerrier a degats egaux.');
+  if (!door?.locked || door.openedForExpedition || door.pickProgressMs !== 0 || door.destroyed) {
+    console.error('ECHEC: une porte devrait demarrer verrouillee, non ouverte et non detruite.');
+    process.exit(1);
+  }
+}
+
+function validateDoorRemovalRules(): void {
+  const removeSim = new DungeonSimulation();
+  removeSim.startNewGame();
+  removeSim.selectConstructionTool('door');
+  removeSim.placeSelectedDefense({ x: 10, y: 4 });
+  const afterPlaceGold = removeSim.getSnapshot().gold;
+
+  removeSim.selectConstructionTool('removeDoor');
+  removeSim.placeSelectedDefense({ x: 10, y: 4 });
+  const afterRemove = removeSim.getSnapshot();
+
+  if (removeSim.getRenderState().doors.length !== 0) {
+    console.error('ECHEC: Retirer porte devrait enlever la porte volontairement en preparation.');
+    process.exit(1);
+  }
+
+  if (afterRemove.gold !== afterPlaceGold + computeDoorRemovalRefund()) {
+    console.error('ECHEC: Retirer porte devrait rembourser partiellement la porte.');
+    process.exit(1);
+  }
+}
+
+function validateDoorNoThiefRetreat(): void {
+  const noThiefSim = new DungeonSimulation();
+  noThiefSim.startNewGame();
+  noThiefSim.selectConstructionTool('door');
+  noThiefSim.placeSelectedDefense({ x: 10, y: 4 });
+  noThiefSim.launchWave();
+
+  let elapsed = 0;
+  let thiefRemoved = false;
+  let sawGroupRetreat = false;
+  let furthestXAtRetreat = 0;
+  let movedTowardExitAfterRetreat = false;
+
+  while (elapsed < 180000) {
+    noThiefSim.update(50);
+    elapsed += 50;
+    const state = (noThiefSim as unknown as {
+      state: {
+        adventurers: Array<{ role: string; alive: boolean; hp: number; targetStage: string; x: number }>;
+        memory: { rolePressure: { thief: number } };
+      };
+    }).state;
+    const thief = state.adventurers.find((adventurer) => adventurer.role === 'thief' && adventurer.alive);
+
+    if (thief) {
+      thief.alive = false;
+      thief.hp = 0;
+      thiefRemoved = true;
+    }
+
+    const snapshot = noThiefSim.getSnapshot();
+    const active = state.adventurers.filter((adventurer) => adventurer.alive);
+
+    if ((snapshot.report?.doorNoThiefRetreats ?? 0) > 0 || active.some((adventurer) => adventurer.targetStage === 'exit')) {
+      const exitTargets = active.filter((adventurer) => adventurer.targetStage === 'exit').length;
+
+      if (!sawGroupRetreat && exitTargets >= 2) {
+        sawGroupRetreat = true;
+        furthestXAtRetreat = Math.max(...active.map((adventurer) => adventurer.x));
+      }
+
+      if (sawGroupRetreat && active.some((adventurer) => adventurer.x < furthestXAtRetreat - 0.7)) {
+        movedTowardExitAfterRetreat = true;
+      }
+    }
+
+    if (snapshot.phase === 'report' || snapshot.phase === 'defeat') {
+      const pressure = state.memory.rolePressure.thief;
+
+      if (!thiefRemoved || (snapshot.report?.doorNoThiefRetreats ?? 0) <= 0 || pressure < 3 || !sawGroupRetreat || !movedTowardExitAfterRetreat) {
+        console.error('ECHEC: une expedition sans voleur vivant devrait abandonner devant la porte et pousser le recrutement de voleur.');
+        process.exit(1);
+      }
+
+      return;
+    }
+  }
+
+  console.error('ECHEC: le scenario porte sans voleur n a pas produit de rapport.');
+  process.exit(1);
+}
+
+function validateGoblinChaseRules(): void {
+  const goblinSim = new DungeonSimulation();
+  goblinSim.startNewGame();
+  goblinSim.selectDefense('goblin');
+  goblinSim.placeSelectedDefense({ x: 6, y: 6 });
+  const testGoblin = (goblinSim as unknown as {
+    state: { defenses: Array<{ type: string; hp: number; maxHp: number }> };
+  }).state.defenses.find((defense) => defense.type === 'goblin');
+
+  if (testGoblin) {
+    testGoblin.hp = 9999;
+    testGoblin.maxHp = 9999;
+  }
+
+  goblinSim.launchWave();
+
+  let movedFromHome = false;
+  let returnedNearHome = false;
+
+  for (let elapsed = 0; elapsed < 90000; elapsed += 50) {
+    goblinSim.update(50);
+    const state = (goblinSim as unknown as {
+      state: {
+        defenses: Array<{ type: string; x: number; y: number; homeCell: { x: number; y: number }; aiState: string }>;
+      };
+    }).state;
+    const goblin = state.defenses.find((defense) => defense.type === 'goblin');
+
+    if (!goblin) {
+      break;
+    }
+
+    const homeDistance = Math.hypot(goblin.x - goblin.homeCell.x, goblin.y - goblin.homeCell.y);
+
+    if (homeDistance > 0.35 || goblin.aiState === 'chase') {
+      movedFromHome = true;
+    }
+
+    if (movedFromHome && homeDistance < 0.28 && elapsed > 8000) {
+      returnedNearHome = true;
+      break;
+    }
+  }
+
+  if (!movedFromHome || !returnedNearHome) {
+    console.error('ECHEC: le gobelin devrait poursuivre temporairement puis revenir pres de son poste.');
     process.exit(1);
   }
 }
@@ -191,7 +332,10 @@ function validateDoorCombatRules(): void {
 validateDiggingRules();
 validateSpecialRoomBuildRules();
 validateDoorRules();
-validateDoorCombatRules();
+validateDoorLockRules();
+validateDoorRemovalRules();
+validateDoorNoThiefRetreat();
+validateGoblinChaseRules();
 
 const sim = new DungeonSimulation();
 sim.startNewGame();
@@ -215,6 +359,8 @@ function buildPhase(): void {
 }
 
 let abilityFired = 0;
+let doorEverPicked = false;
+let doorEverRetreatedNoThief = false;
 let doorEverDamaged = false;
 let doorEverDestroyed = false;
 
@@ -245,13 +391,6 @@ for (let wave = 1; wave <= 6; wave += 1) {
     sim.update(50);
     elapsed += 50;
 
-    if (elapsed % 8000 === 0) {
-      sim.useBossAbility('shockwave');
-      sim.useBossAbility('roar');
-      sim.useBossAbility('summon');
-      abilityFired += 1;
-    }
-
     const snapshot = sim.getSnapshot();
 
     if (snapshot.phase === 'report' || snapshot.phase === 'defeat') {
@@ -271,6 +410,10 @@ for (let wave = 1; wave <= 6; wave += 1) {
     console.error(`ECHEC: rapport vague ${wave} contient ${report.participants.length} participants au lieu de ${PARTY_SIZE}`);
     process.exit(1);
   }
+
+  abilityFired += report.abilityUses;
+  doorEverPicked ||= report.doorsPicked > 0;
+  doorEverRetreatedNoThief ||= report.doorNoThiefRetreats > 0;
 
   const doorsAfterWave = sim.getRenderState().doors;
 
@@ -296,12 +439,29 @@ for (let wave = 1; wave <= 6; wave += 1) {
   }
 
   sim.continueBuild();
+
+  const resetDoor = sim.getRenderState().doors.find((door) => door.cell.x === 10 && door.cell.y === 4);
+
+  if (resetDoor && (!resetDoor.locked || resetDoor.openedForExpedition || resetDoor.pickProgressMs !== 0)) {
+    console.error('ECHEC: une porte crochetee devrait etre reverrouillee entre expeditions.');
+    process.exit(1);
+  }
 }
 
-if (!doorEverDamaged && !doorEverDestroyed) {
-  console.error('ECHEC: la porte renforcee posee sur le chemin n a jamais ete endommagee ni detruite sur 6 vagues.');
+if (!doorEverPicked) {
+  console.error('ECHEC: une porte sur le chemin devrait etre crochetee par un voleur vivant.');
   process.exit(1);
 }
 
-console.log(`Portes renforcees: endommagee=${doorEverDamaged} detruite=${doorEverDestroyed}`);
-console.log(`Capacites declenchees ${abilityFired} fois. Test termine sans crash.`);
+if (doorEverDamaged || doorEverDestroyed) {
+  console.error('ECHEC: les portes verrouillees ne doivent plus etre endommagees ni detruites par combat.');
+  process.exit(1);
+}
+
+if (abilityFired <= 0) {
+  console.error('ECHEC: le boss devrait declencher au moins une capacite automatiquement.');
+  process.exit(1);
+}
+
+console.log(`Portes verrouillees: crochetee=${doorEverPicked} retraiteSansVoleur=${doorEverRetreatedNoThief} endommagee=${doorEverDamaged} detruite=${doorEverDestroyed}`);
+console.log(`Capacites automatiques declenchees ${abilityFired} fois. Test termine sans crash.`);

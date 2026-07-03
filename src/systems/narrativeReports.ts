@@ -24,15 +24,37 @@ export function buildWaveStoryLines(input: BuildWaveStoryInput): string[] {
   }
 
   if (input.stats.doorEncounters > 0) {
-    lines.push(
-      input.stats.doorDestroyedBeforeTreasure
-        ? 'Une porte renforcee a ete detruite avant que le tresor ne soit atteint.'
-        : "La porte renforcee a retarde l'expedition dans les couloirs.",
-    );
-
-    if (input.stats.doorDamageByThief > 0 && input.stats.doorDamageByThief >= input.stats.doorDamageTotal * 0.5) {
-      lines.push('Le voleur a brise la porte plus vite que prevu.');
+    if (input.stats.doorsPicked > 0) {
+      lines.push(`Le voleur crochete ${input.stats.doorsPicked} porte${input.stats.doorsPicked > 1 ? 's' : ''} verrouillee${input.stats.doorsPicked > 1 ? 's' : ''}.`);
+    } else {
+      lines.push("La porte verrouillee a stoppe l'expedition dans les couloirs.");
     }
+
+    if (input.stats.doorNoThiefRetreats > 0) {
+      lines.push("L'expedition a abandonne devant une porte verrouillee faute de voleur.");
+    }
+
+    if (input.stats.trapStats && Object.values(input.stats.trapStats).some((entry) => (entry?.damage ?? 0) > 0)) {
+      lines.push('La porte a retenu le groupe assez longtemps pour laisser les pieges travailler.');
+    }
+  }
+
+  if (input.stats.thiefTrapMitigations > 0) {
+    lines.push(`Le voleur neutralise ${input.stats.thiefTrapMitigations} piege${input.stats.thiefTrapMitigations > 1 ? 's' : ''} avant le pire.`);
+  }
+
+  if (input.stats.abilityUses > 0) {
+    lines.push(`Le boss lance ${input.stats.abilityUses} pouvoir${input.stats.abilityUses > 1 ? 's' : ''} automatiquement.`);
+  }
+
+  if (input.stats.disobeys > 0) {
+    lines.push(
+      input.stats.disobeys > 1
+        ? `${input.stats.disobeys} aventuriers desobeissent a l'ordre de repli et tiennent la ligne.`
+        : "Un aventurier desobeit a l'ordre de repli et tient la ligne seul.",
+    );
+  } else if (input.stats.coverRetreats > 0) {
+    lines.push('Un couvreur retarde sa propre fuite pour proteger le repli du groupe.');
   }
 
   lines.push(...input.stats.storyEvents);

@@ -23,13 +23,14 @@ import { DungeonSimulation } from '../game/DungeonSimulation';
 import type { AdventurerEntity, DefenseEntity, DungeonDoor, DungeonTile } from '../game/types';
 import { getAdventurerDefinition, getDefenseDefinition } from '../entities/definitions';
 import { canBuildDefenseOnTile, canMarkRoomTile } from '../systems/dungeonConstruction';
-import { canPlaceDoorAt, findActiveDoorAt } from '../systems/doorSystem';
+import { canPlaceDoorAt, findActiveDoorAt, findDoorAt } from '../systems/doorSystem';
 import { emitUiState, onUiAction } from '../ui/uiEvents';
 
 interface RenderedEntity {
   container: Phaser.GameObjects.Container;
   sprite: Phaser.GameObjects.Image;
   label: Phaser.GameObjects.Text;
+  bark?: Phaser.GameObjects.Text;
 }
 
 interface RenderedDoor {
@@ -328,8 +329,22 @@ export class DungeonScene extends Phaser.Scene {
           fontFamily: 'monospace',
         })
         .setOrigin(0.5);
-      const container = this.add.container(world.x, world.y, [sprite, label]);
-      view = { container, sprite, label };
+      const bark = this.add
+        .text(0, -46, '', {
+          color: '#fff4d8',
+          fontSize: '9px',
+          fontFamily: 'monospace',
+          backgroundColor: 'rgba(15, 13, 16, 0.82)',
+          padding: { x: 4, y: 2 },
+          wordWrap: { width: 126 },
+          align: 'center',
+        })
+        .setOrigin(0.5, 1)
+        .setDepth(200)
+        .setVisible(false);
+      const container = this.add.container(world.x, world.y, [sprite, label, bark]);
+      container.setDepth(30);
+      view = { container, sprite, label, bark };
       this.adventurerViews.set(adventurer.id, view);
     }
 
@@ -347,6 +362,12 @@ export class DungeonScene extends Phaser.Scene {
       view.sprite.setTint(0x9fb7e8);
     } else {
       view.sprite.clearTint();
+    }
+
+    if (view.bark) {
+      view.bark.setText(adventurer.barkText ?? '');
+      view.bark.setVisible(Boolean(adventurer.barkText && adventurer.barkTimerMs > 0));
+      view.bark.setAlpha(Math.min(1, adventurer.barkTimerMs / 450));
     }
   }
 
@@ -373,21 +394,17 @@ export class DungeonScene extends Phaser.Scene {
 
     const previousHp = this.previousDoorHp.get(door.id);
 
-    if (previousHp !== undefined && door.hp < previousHp) {
+    if (previousHp !== undefined && door.pickProgressMs > previousHp) {
       this.pulseHit(view.container);
     }
 
-    if (previousHp !== undefined && previousHp > 0 && door.hp <= 0) {
-      this.spawnDeathPuff(world.x, world.y, 0xc8a25a);
-    }
-
-    this.previousDoorHp.set(door.id, door.hp);
+    this.previousDoorHp.set(door.id, door.pickProgressMs);
     view.container.setPosition(world.x, world.y);
-    const damagedRatio = door.hp / door.maxHp;
-    view.shape.setFillStyle(door.destroyed ? 0x3a2c22 : 0x8a5a34, door.destroyed ? 0.35 : 1);
-    view.shape.setStrokeStyle(2, !door.destroyed && damagedRatio < 0.4 ? 0xd85a32 : 0x2c1810, 1);
-    view.label.setText(door.destroyed ? 'X' : 'P');
-    view.container.setAlpha(door.destroyed ? 0.5 : 1);
+    const picking = door.beingPickedById !== null && !door.openedForExpedition;
+    view.shape.setFillStyle(door.openedForExpedition ? 0x4f6f52 : picking ? 0xb0823a : 0x8a5a34, door.openedForExpedition ? 0.55 : 1);
+    view.shape.setStrokeStyle(2, picking ? 0xe1b35a : 0x2c1810, 1);
+    view.label.setText(door.openedForExpedition ? 'O' : picking ? '...' : 'L');
+    view.container.setAlpha(door.openedForExpedition ? 0.58 : 1);
   }
 
   private pulseHit(container: Phaser.GameObjects.Container): void {
@@ -433,10 +450,10 @@ export class DungeonScene extends Phaser.Scene {
     });
 
     renderState.doors
-      .filter((door) => !door.destroyed)
+      .filter((door) => !door.destroyed && !door.openedForExpedition && door.beingPickedById !== null)
       .forEach((door) => {
         const world = cellToWorld(door.cell);
-        this.drawBar(world.x - 12, world.y - 20, 24, door.hp / door.maxHp, 0xd8a24a);
+        this.drawBar(world.x - 12, world.y - 20, 24, door.pickProgressMs / door.pickRequiredMs, 0xe1b35a);
       });
 
     const bossWorld = gridPositionToWorld(renderState.boss.x, renderState.boss.y);
@@ -526,6 +543,8 @@ export class DungeonScene extends Phaser.Scene {
             || Boolean(findActiveDoorAt(renderState.doors, cell))
             || renderState.defenses.some((defense) => defense.alive && isSameCell(defense.cell, cell))
             || renderState.gold < DOOR_COST
+          : constructionTool === 'removeDoor'
+            ? !findDoorAt(renderState.doors, cell)
           : !canBuildDefenseOnTile(tile);
     const color = invalid ? 0x8f2631 : 0xe1b35a;
     this.hoverGraphics.lineStyle(3, color, 0.86);
