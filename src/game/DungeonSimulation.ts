@@ -74,10 +74,12 @@ import {
   updateDungeonReputation,
 } from '../systems/adventurerProfiles';
 import { buildWaveStoryLines } from '../systems/narrativeReports';
+import { buildSurvivorChronicle } from '../systems/survivorChronicleSystem';
 import { chooseBossTarget, updateBossMovement } from '../systems/bossAISystem';
 import { updateMonsterAI } from '../systems/monsterAISystem';
 import {
   applyPartyDecisions,
+  chooseTreasureGroupObjective,
   choosePostTreasureGoal,
   createPartyPlan,
   updatePartyPlan,
@@ -106,6 +108,7 @@ import {
   computeDoorRemovalRefund,
 } from '../systems/economyBalance';
 import { tickAdventurerBarks, tickGlobalBarks, tryBark } from '../systems/barkSystem';
+import type { BarkKind } from '../systems/barkSystem';
 import { assignGroupRetreat } from '../systems/partyRetreatSystem';
 import { applyRumorPressure, generateTavernRumor, recordRumor } from '../systems/tavernRumors';
 import { createMinionName } from '../systems/minionNaming';
@@ -617,6 +620,7 @@ export class DungeonSimulation {
       return;
     }
 
+    const hadSurvivors = this.state.report?.chronicle.hasSurvivors ?? false;
     this.state.phase = 'build';
     this.state.defenses = this.state.defenses.filter((defense) => defense.alive && !defense.summoned);
     this.state.defenses.forEach((defense) => {
@@ -633,7 +637,9 @@ export class DungeonSimulation {
       defense.tauntTimerMs = 0;
     });
     this.state.doors = repairDoors(this.state.doors);
-    this.state.message = 'Nouvelle preparation. Les survivants racontent deja des mensonges tactiques.';
+    this.state.message = hadSurvivors
+      ? 'Nouvelle preparation. Les survivants racontent deja des mensonges tactiques.'
+      : "Nouvelle preparation. Aucun survivant officiel: la taverne invente le reste.";
   }
 
   restart(): void {
@@ -1261,6 +1267,7 @@ export class DungeonSimulation {
 
     this.state.runtime.partyPlan.retreating = true;
     this.state.runtime.partyPlan.retreatReason = reason;
+    this.state.runtime.partyPlan.groupObjective = kind === 'treasure' ? 'escapeWithTreasure' : 'retreat';
     this.state.runtime.stats.groupRetreats += 1;
 
     const assignments = assignGroupRetreat(
@@ -1309,8 +1316,30 @@ export class DungeonSimulation {
       adventurer.carryingTreasure = true;
 
       if (this.state.runtime) {
-        this.state.runtime.partyPlan.treasureClaimed = true;
-        this.state.runtime.stats.storyEvents.push(`${adventurer.name} s'empare du tresor du donjon.`);
+        const runtime = this.state.runtime;
+        runtime.partyPlan.treasureClaimed = true;
+        runtime.stats.treasureCarrierName = adventurer.name;
+        runtime.stats.storyEvents.push(`${adventurer.name} s'empare du tresor du donjon.`);
+        const groupObjective = chooseTreasureGroupObjective(
+          runtime.partyPlan,
+          adventurer,
+          this.state.adventurers,
+          runtime.stats,
+          this.state.boss.hp / this.state.boss.maxHp,
+        );
+        runtime.partyPlan.groupObjective = groupObjective;
+        runtime.stats.treasureGroupDecision = groupObjective;
+
+        if (groupObjective === 'escapeWithTreasure') {
+          runtime.stats.storyEvents.push("Decision collective: le groupe protege le porteur et fuit avec le tresor.");
+          this.startGroupRetreat('Tresor pris: le groupe couvre la fuite du porteur.', 'treasure');
+          tryBark(adventurer, 'treasureEscape', this.visibleBarkCount());
+          this.barkRoleNearTreasureCarrier(adventurer, 'protectCarrier');
+        } else {
+          runtime.stats.storyEvents.push('Decision collective: le groupe pousse vers le boss avec le tresor en main.');
+          tryBark(adventurer, 'treasureChallenge', this.visibleBarkCount());
+          this.barkRoleNearTreasureCarrier(adventurer, 'stayTogether');
+        }
       }
 
       adventurer.targetStage = this.state.runtime
@@ -1682,7 +1711,7 @@ export class DungeonSimulation {
       reputationDelta,
     });
 
-    return {
+    const report: Omit<WaveReport, 'chronicle'> = {
       wave,
       cleared,
       partyLabel: runtime.partyPlan.label,
@@ -1731,6 +1760,11 @@ export class DungeonSimulation {
       verdict: cleared
         ? 'Tous les aventuriers sont morts. Ils reviendront, parce que les heros confondent obstination et scenario.'
         : 'Le boss est mort. Le donjon passe sous gestion heroique, donc probablement en open space.',
+    };
+
+    return {
+      ...report,
+      chronicle: buildSurvivorChronicle(report),
     };
   }
 
@@ -2237,6 +2271,20 @@ export class DungeonSimulation {
     }
   }
 
+  private barkRoleNearTreasureCarrier(carrier: AdventurerEntity, kind: BarkKind): void {
+    const speaker = this.state.adventurers
+      .filter((adventurer) => adventurer.id !== carrier.id && adventurer.alive && !adventurer.escaped && adventurer.barkCooldownMs <= 0)
+      .sort((a, b) => {
+        const priorityA = a.role === 'warrior' ? 0 : a.role === 'healer' ? 1 : a.role === 'thief' ? 2 : 3;
+        const priorityB = b.role === 'warrior' ? 0 : b.role === 'healer' ? 1 : b.role === 'thief' ? 2 : 3;
+        return priorityA - priorityB || distance(a.x, a.y, carrier.x, carrier.y) - distance(b.x, b.y, carrier.x, carrier.y);
+      })[0] ?? null;
+
+    if (speaker) {
+      tryBark(speaker, kind, this.visibleBarkCount());
+    }
+  }
+
   private visibleBarkCount(): number {
     return this.state.adventurers.filter((adventurer) => adventurer.barkText && adventurer.barkTimerMs > 0).length;
   }
@@ -2437,6 +2485,8 @@ function createEmptyWaveStats(): WaveStats {
     tacticalHesitations: 0,
     thiefTrapMitigations: 0,
     thiefDoorLeads: 0,
+    treasureCarrierName: null,
+    treasureGroupDecision: null,
   };
 }
 

@@ -34,6 +34,7 @@ export type CombatAbilityId =
 export type CombatAbilityCooldowns = Partial<Record<CombatAbilityId, number>>;
 
 export type ExpeditionPlanType = 'greedy' | 'heroic' | 'cautious' | 'fanatic' | 'mercenary';
+export type PartyGroupObjective = 'seekTreasure' | 'escapeWithTreasure' | 'challengeBoss' | 'retreat' | 'panic';
 
 export type DefenseAIState = 'idle' | 'patrol' | 'chase' | 'return';
 
@@ -410,6 +411,8 @@ export interface WaveStats {
   tacticalHesitations: number;
   thiefTrapMitigations: number;
   thiefDoorLeads: number;
+  treasureCarrierName: string | null;
+  treasureGroupDecision: 'escapeWithTreasure' | 'challengeBoss' | null;
 }
 
 export interface WaveRuntime {
@@ -428,6 +431,7 @@ export interface PartyPlan {
   type: ExpeditionPlanType;
   label: string;
   primaryGoal: AdventurerTargetStage;
+  groupObjective: PartyGroupObjective;
   retreating: boolean;
   treasureClaimed: boolean;
   retreatReason: string | null;
@@ -452,6 +456,21 @@ export interface ExpeditionParticipantReport {
   level: number;
   status: 'mort' | 'survivant' | 'blesse' | 'fuite' | 'disparu';
   note: string;
+}
+
+export interface ChronicleBadge {
+  label: string;
+  value: string;
+  tone: 'neutral' | 'good' | 'bad' | 'warning';
+}
+
+export interface SurvivorChronicle {
+  title: string;
+  subtitle: string;
+  hasSurvivors: boolean;
+  lines: string[];
+  badges: ChronicleBadge[];
+  tacticalSummary: string;
 }
 
 export interface WaveReport {
@@ -489,6 +508,7 @@ export interface WaveReport {
   guildChanges: string[];
   economyLines: string[];
   participants: ExpeditionParticipantReport[];
+  chronicle: SurvivorChronicle;
   notableAdventurers: string[];
   deaths: string[];
   survivors: string[];

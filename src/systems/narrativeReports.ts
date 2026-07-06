@@ -23,6 +23,14 @@ export function buildWaveStoryLines(input: BuildWaveStoryInput): string[] {
     lines.push('Le tresor du donjon a quitte le batiment. Les tavernes en riront pendant des semaines.');
   }
 
+  if (input.stats.treasureCarrierName && input.stats.treasureGroupDecision === 'escapeWithTreasure') {
+    lines.push(`${input.stats.treasureCarrierName} prend le tresor et le groupe couvre une retraite collective.`);
+  }
+
+  if (input.stats.treasureCarrierName && input.stats.treasureGroupDecision === 'challengeBoss') {
+    lines.push(`${input.stats.treasureCarrierName} garde le tresor pendant que le groupe choisit de finir le boss.`);
+  }
+
   if (input.stats.doorEncounters > 0) {
     if (input.stats.doorsPicked > 0) {
       lines.push(`Le voleur crochete ${input.stats.doorsPicked} porte${input.stats.doorsPicked > 1 ? 's' : ''} verrouillee${input.stats.doorsPicked > 1 ? 's' : ''}.`);

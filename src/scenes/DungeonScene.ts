@@ -30,6 +30,9 @@ interface RenderedEntity {
   container: Phaser.GameObjects.Container;
   sprite: Phaser.GameObjects.Image;
   label: Phaser.GameObjects.Text;
+  badge?: Phaser.GameObjects.Text;
+  fxLabel?: Phaser.GameObjects.Text;
+  intentLabel?: Phaser.GameObjects.Text;
   bark?: Phaser.GameObjects.Text;
 }
 
@@ -238,6 +241,7 @@ export class DungeonScene extends Phaser.Scene {
         this.previousAdventurerHp.delete(id);
       }
     });
+    this.layoutAdventurerBarks();
 
     const activeDoorIds = new Set(renderState.doors.map((door) => door.id));
     renderState.doors.forEach((door) => this.syncDoor(door));
@@ -298,8 +302,19 @@ export class DungeonScene extends Phaser.Scene {
           fontFamily: 'monospace',
         })
         .setOrigin(0.5);
-      const container = this.add.container(world.x, world.y, [sprite, label]);
-      view = { container, sprite, label };
+      const fxLabel = this.add
+        .text(0, -25, '', {
+          color: '#100e12',
+          fontSize: '8px',
+          fontStyle: 'bold',
+          fontFamily: 'monospace',
+          backgroundColor: 'rgba(246, 216, 138, 0.92)',
+          padding: { x: 3, y: 1 },
+        })
+        .setOrigin(0.5)
+        .setVisible(false);
+      const container = this.add.container(world.x, world.y, [sprite, label, fxLabel]);
+      view = { container, sprite, label, fxLabel };
       this.defenseViews.set(defense.id, view);
     }
 
@@ -317,10 +332,13 @@ export class DungeonScene extends Phaser.Scene {
 
     if (defense.abilityFxTimerMs > 0) {
       view.sprite.setTint(0xf6d88a);
+      view.fxLabel?.setText(defenseFxText(defense)).setVisible(true).setAlpha(Math.min(1, defense.abilityFxTimerMs / 220));
     } else if (defense.slowedTimerMs > 0) {
       view.sprite.setTint(0x9fd6ff);
+      view.fxLabel?.setText('RALENTI').setVisible(true).setAlpha(0.72);
     } else {
       view.sprite.clearTint();
+      view.fxLabel?.setVisible(false);
     }
   }
 
@@ -331,6 +349,38 @@ export class DungeonScene extends Phaser.Scene {
 
     if (!view) {
       const sprite = this.add.image(0, 0, TEXTURE_KEYS.adventurer[adventurer.role]).setDisplaySize(28, 28);
+      const badge = this.add
+        .text(0, -17, roleBadgeText(adventurer), {
+          color: '#100e12',
+          fontSize: '8px',
+          fontStyle: 'bold',
+          fontFamily: 'monospace',
+          backgroundColor: roleBadgeColor(adventurer),
+          padding: { x: 3, y: 1 },
+        })
+        .setOrigin(0.5);
+      const fxLabel = this.add
+        .text(0, -29, '', {
+          color: '#100e12',
+          fontSize: '8px',
+          fontStyle: 'bold',
+          fontFamily: 'monospace',
+          backgroundColor: 'rgba(246, 216, 138, 0.94)',
+          padding: { x: 3, y: 1 },
+        })
+        .setOrigin(0.5)
+        .setVisible(false);
+      const intentLabel = this.add
+        .text(0, 31, '', {
+          color: '#fff4d8',
+          fontSize: '8px',
+          fontStyle: 'bold',
+          fontFamily: 'monospace',
+          backgroundColor: 'rgba(15, 13, 16, 0.82)',
+          padding: { x: 3, y: 1 },
+        })
+        .setOrigin(0.5)
+        .setVisible(false);
       const label = this.add
         .text(0, 20, shortDisplayName(adventurer.name, definition.shortName), {
           color: '#fff4d8',
@@ -352,9 +402,9 @@ export class DungeonScene extends Phaser.Scene {
         .setOrigin(0.5, 1)
         .setDepth(200)
         .setVisible(false);
-      const container = this.add.container(world.x, world.y, [sprite, label, bark]);
+      const container = this.add.container(world.x, world.y, [sprite, badge, fxLabel, label, intentLabel, bark]);
       container.setDepth(30);
-      view = { container, sprite, label, bark };
+      view = { container, sprite, label, badge, fxLabel, intentLabel, bark };
       this.adventurerViews.set(adventurer.id, view);
     }
 
@@ -367,24 +417,72 @@ export class DungeonScene extends Phaser.Scene {
     this.previousAdventurerHp.set(adventurer.id, adventurer.hp);
     view.container.setPosition(world.x, world.y);
     view.container.setAlpha(adventurer.stunnedTimerMs > 0 ? 0.55 : 1);
+    view.badge?.setText(roleBadgeText(adventurer)).setBackgroundColor(roleBadgeColor(adventurer));
+    view.sprite.setDisplaySize(adventurer.carryingTreasure ? 31 : 28, adventurer.carryingTreasure ? 31 : 28);
 
     if (adventurer.abilityFxTimerMs > 0) {
       view.sprite.setTint(0xf6d88a);
+      view.fxLabel?.setText(adventurerFxText(adventurer)).setVisible(true).setAlpha(Math.min(1, adventurer.abilityFxTimerMs / 220));
     } else if (adventurer.damageReductionTimerMs > 0) {
       view.sprite.setTint(0xffd37a);
+      view.fxLabel?.setText('PROTEGE').setVisible(true).setAlpha(0.82);
     } else if (adventurer.slowedTimerMs > 0) {
       view.sprite.setTint(0x9fd6ff);
+      view.fxLabel?.setText('RALENTI').setVisible(true).setAlpha(0.72);
     } else if (adventurer.fearTimerMs > 0) {
       view.sprite.setTint(0x9fb7e8);
+      view.fxLabel?.setText('FUITE').setVisible(true).setAlpha(0.78);
     } else {
       view.sprite.clearTint();
+      view.fxLabel?.setVisible(false);
     }
+
+    const intent = retreatIntentText(adventurer);
+    view.intentLabel?.setText(intent).setVisible(intent.length > 0);
 
     if (view.bark) {
       view.bark.setText(adventurer.barkText ?? '');
       view.bark.setVisible(Boolean(adventurer.barkText && adventurer.barkTimerMs > 0));
       view.bark.setAlpha(Math.min(1, adventurer.barkTimerMs / 450));
     }
+  }
+
+  private layoutAdventurerBarks(): void {
+    const placed: Array<{ left: number; right: number; top: number; bottom: number }> = [];
+    const candidates = [...this.adventurerViews.values()]
+      .filter((view) => view.bark?.visible && view.bark.text.length > 0)
+      .sort((a, b) => a.container.y - b.container.y || a.container.x - b.container.x);
+    const offsets = [-46, -64, -82, -28];
+
+    candidates.forEach((view) => {
+      const bark = view.bark;
+
+      if (!bark) {
+        return;
+      }
+
+      const width = Math.min(126, Math.max(54, bark.text.length * 5.2 + 12));
+      const height = bark.text.length > 34 ? 38 : 24;
+      const placement = offsets
+        .map((offset) => ({
+          offset,
+          rect: {
+            left: view.container.x - width / 2,
+            right: view.container.x + width / 2,
+            top: view.container.y + offset - height,
+            bottom: view.container.y + offset,
+          },
+        }))
+        .find((candidate) => candidate.rect.top >= 8 && !placed.some((rect) => rectanglesOverlap(rect, candidate.rect)));
+
+      if (!placement) {
+        bark.setVisible(false);
+        return;
+      }
+
+      bark.setY(placement.offset).setVisible(true);
+      placed.push(placement.rect);
+    });
   }
 
   private syncDoor(door: DungeonDoor): void {
@@ -626,4 +724,105 @@ function tileTexture(tile: DungeonTile | null): string {
 
 function shortDisplayName(name: string, fallback: string): string {
   return name.split(' ')[0]?.slice(0, 9) ?? fallback;
+}
+
+function roleBadgeText(adventurer: AdventurerEntity): string {
+  if (adventurer.carryingTreasure) {
+    return 'COFFRE';
+  }
+
+  switch (adventurer.role) {
+    case 'warrior':
+      return 'GUER';
+    case 'thief':
+      return 'VOL';
+    case 'mage':
+      return 'MAG';
+    case 'healer':
+      return 'SOIN';
+    default:
+      return '?';
+  }
+}
+
+function roleBadgeColor(adventurer: AdventurerEntity): string {
+  if (adventurer.carryingTreasure) {
+    return 'rgba(246, 216, 138, 0.96)';
+  }
+
+  switch (adventurer.role) {
+    case 'warrior':
+      return 'rgba(200, 139, 74, 0.94)';
+    case 'thief':
+      return 'rgba(125, 148, 214, 0.94)';
+    case 'mage':
+      return 'rgba(184, 115, 214, 0.94)';
+    case 'healer':
+      return 'rgba(121, 199, 161, 0.94)';
+    default:
+      return 'rgba(244, 234, 210, 0.9)';
+  }
+}
+
+function adventurerFxText(adventurer: AdventurerEntity): string {
+  switch (adventurer.role) {
+    case 'warrior':
+      return 'TAUNT';
+    case 'thief':
+      return 'PIEGE -';
+    case 'mage':
+      return 'GLACE';
+    case 'healer':
+      return 'SOIN';
+    default:
+      return 'ACTIF';
+  }
+}
+
+function defenseFxText(defense: DefenseEntity): string {
+  switch (defense.type) {
+    case 'goblin':
+      return 'SOURNOIS';
+    case 'skeleton':
+      return 'LOURD';
+    case 'slime':
+      return 'COLLE';
+    case 'fireTrap':
+    case 'spikeTrap':
+      return 'PIEGE -';
+    default:
+      return 'ACTIF';
+  }
+}
+
+function retreatIntentText(adventurer: AdventurerEntity): string {
+  if (adventurer.retreatIntent === 'disobey') {
+    return adventurer.targetStage === 'boss' ? 'RESTE' : 'REFUS';
+  }
+
+  if (adventurer.targetStage !== 'exit') {
+    return '';
+  }
+
+  if (adventurer.carryingTreasure) {
+    return 'PORTEUR';
+  }
+
+  switch (adventurer.retreatIntent) {
+    case 'coverRetreat':
+      return 'COUVRE';
+    case 'panicRetreat':
+      return 'PANIQUE';
+    case 'followRetreat':
+      return 'FUITE';
+    default:
+      return 'FUITE';
+  }
+}
+
+function rectanglesOverlap(
+  a: { left: number; right: number; top: number; bottom: number },
+  b: { left: number; right: number; top: number; bottom: number },
+): boolean {
+  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
 }

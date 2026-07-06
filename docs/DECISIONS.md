@@ -162,6 +162,18 @@ Chaque décision structurante obtient une entrée, numérotée dans l'ordre chro
 
 ---
 
+## D-013 - Intention collective lisible, pas memoire strategique
+
+**Date** : 2026-07-06
+**Statut** : Actif
+**Contexte** : passe Expedition Clarity & Survivor Chronicle V1. Les playtests montraient des expeditions qui se separaient silencieusement apres la prise du tresor, donnant l'impression que chaque aventurier improvisait seul.
+**Decision** : chaque expedition garde une intention collective legere (`groupObjective`) limitee aux moments lisibles de V1 : chercher le tresor, fuir avec le tresor, defier le boss, retraiter, ou paniquer. Les aventuriers conservent des intentions individuelles (`followRetreat`, `coverRetreat`, `panicRetreat`, `disobey`), mais elles doivent servir ou expliquer l'objectif de groupe. Les splits restent rares et doivent etre barkes ou mentionnes au debrief.
+**Alternatives envisagees** : laisser chaque aventurier choisir seul apres le tresor (rejete : comportements absurdes visibles) ; implementer tout de suite une vraie memoire strategique du Royaume (rejete : hors perimetre, cela appartient a The Kingdom Remembers) ; bloquer toute desobeissance (rejete : rend les expeditions moins memorables).
+**Consequences** : le tresor declenche une decision collective explicite sans changer l'economie, les classes, les portes, les monstres ni les capacites. La chronique d'expedition peut raconter cette decision, mais ne constitue pas encore une cartographie ou une IA globale du Royaume.
+**Remplace / Remplace par** :
+
+---
+
 ## Modèle vierge pour une nouvelle entrée
 
 ```

@@ -1,8 +1,19 @@
 import type { BossAbilityType, ConstructionTool, DefenseType } from '../game/types';
-import type { ConstructionUiItem, CountItem, DefenseUiItem, DoorSummary, DungeonSnapshot, UiSnapshot } from '../game/uiSnapshot';
+import type {
+  ConstructionUiItem,
+  CountItem,
+  DefenseUiItem,
+  DoorSummary,
+  DungeonSnapshot,
+  UiSnapshot,
+} from '../game/uiSnapshot';
 import { emitUiAction, onUiState } from './uiEvents';
 
 const BEST_WAVE_STORAGE_KEY = 'final-boss-dungeon.best-wave';
+
+type MessageTone = 'info' | 'warning' | 'error' | 'success';
+
+const DEFAULT_OPEN_SECTIONS: readonly string[] = [];
 
 function loadBestWave(): number {
   try {
@@ -20,9 +31,16 @@ function saveBestWave(value: number): void {
   }
 }
 
+/**
+ * Passe UI/UX uniquement: ce fichier ne lit ni ne modifie aucune regle de jeu.
+ * Il compose l'ecran a partir du DungeonSnapshot deja expose par la simulation.
+ */
 export class GameDomUi {
   private lastMarkup = '';
   private bestWave = loadBestWave();
+  private lastSnapshot: UiSnapshot | null = null;
+  private openSections = new Set<string>(DEFAULT_OPEN_SECTIONS);
+  private creditsOpen = false;
   private readonly unsubscribe: () => void;
 
   constructor(private readonly root: HTMLElement) {
@@ -34,6 +52,8 @@ export class GameDomUi {
   }
 
   private render(snapshot: UiSnapshot): void {
+    this.lastSnapshot = snapshot;
+
     if (snapshot.phase !== 'menu' && snapshot.survivedWaves > this.bestWave) {
       this.bestWave = snapshot.survivedWaves;
       saveBestWave(this.bestWave);
@@ -50,23 +70,82 @@ export class GameDomUi {
     this.bindActions(snapshot);
   }
 
+  /** Redessine avec le dernier snapshot connu, pour les etats purement locaux (accordeons, credits). */
+  private refresh(): void {
+    if (this.lastSnapshot) {
+      this.render(this.lastSnapshot);
+    }
+  }
+
+  private toggleSection(id: string): void {
+    if (this.openSections.has(id)) {
+      this.openSections.delete(id);
+    } else {
+      this.openSections.add(id);
+    }
+
+    this.refresh();
+  }
+
+  private toggleCredits(): void {
+    this.creditsOpen = !this.creditsOpen;
+    this.refresh();
+  }
+
+  // ---------------------------------------------------------------------
+  // Menu d'accueil
+  // ---------------------------------------------------------------------
+
   private renderMenu(): string {
     return `
       <section class="menu">
-        <p class="menu__eyebrow">V0 jouable</p>
-        <h1 class="menu__title">Final Boss Dungeon</h1>
-        <p class="menu__copy">
-          Tu es le boss final. Des aventuriers entrent, meurent, apprennent, puis reviennent avec encore moins de respect pour la propriete privee.
-        </p>
-        <button class="button" data-action="start-game">Installer la tyrannie</button>
+        <div class="menu__panel">
+          <p class="menu__eyebrow">Prototype jouable</p>
+          <h1 class="menu__title">Loot Me If You Can</h1>
+          <p class="menu__subtitle">Creuse ton donjon. Defends ton tresor. Survis au Royaume.</p>
+          <p class="menu__copy">
+            Tu es la derniere ligne de defense d'un tresor que tout le royaume convoite.
+            Creuse des couloirs, pose des pieges, arme tes salles, puis regarde les aventuriers
+            apprendre de leurs erreurs. Ou en mourir.
+          </p>
+
+          <div class="menu__actions">
+            <button class="button button--primary" data-action="start-game">Nouvelle partie</button>
+            <button class="button button--ghost" data-action="noop" disabled title="Aucune sauvegarde disponible pour le moment.">
+              Continuer
+            </button>
+            <button class="button button--link" data-action="toggle-credits">
+              ${this.creditsOpen ? 'Fermer les credits' : 'Credits & licences'}
+            </button>
+          </div>
+
+          ${this.creditsOpen ? this.renderCredits() : ''}
+        </div>
+
+        <p class="menu__version">Prototype en developpement</p>
       </section>
     `;
   }
 
-  private renderDungeon(snapshot: DungeonSnapshot): string {
-    const bossPercent = Math.max(0, Math.round((snapshot.bossHp / snapshot.bossMaxHp) * 100));
-    const title = snapshot.phase === 'defeat' ? 'Chute du proprietaire' : 'Salle de controle';
+  private renderCredits(): string {
+    return `
+      <div class="menu__credits">
+        <p class="section-title">Credits &amp; licences</p>
+        <ul>
+          <li>Conception et developpement: le studio, avec Codex.</li>
+          <li>Decors, unites et objets: pack Kenney Tiny Dungeon (CC0) - kenney.nl.</li>
+          <li>Solutions de repli visuelles generees en interne si un visuel externe manque.</li>
+        </ul>
+        <p class="menu__credits__note">Details complets dans CREDITS.md et ASSET_LICENSES.md.</p>
+      </div>
+    `;
+  }
 
+  // ---------------------------------------------------------------------
+  // Ecran de jeu (HUD haut + sidebar "Salle de controle")
+  // ---------------------------------------------------------------------
+
+  private renderDungeon(snapshot: DungeonSnapshot): string {
     return `
       <section class="hud">
         <div class="status-strip">
@@ -78,15 +157,12 @@ export class GameDomUi {
         </div>
 
         <aside class="side-panel">
-          <div class="panel-section">
-            <p class="section-title">${title}</p>
-            <div class="message">${escapeHtml(snapshot.message)}</div>
-          </div>
-
+          ${this.renderControlHeader(snapshot)}
+          ${this.renderContextMessage(snapshot)}
           ${snapshot.phase === 'build' ? this.renderBuildControls(snapshot) : ''}
-          ${snapshot.phase === 'wave' ? this.renderWavePanel(snapshot, bossPercent) : ''}
-          ${snapshot.phase === 'report' && snapshot.report ? '<div class="message">Le debriefing complet est ouvert.</div>' : ''}
-          ${snapshot.phase === 'defeat' && snapshot.report ? '<div class="message message--alert">Le boss est tombe. Rapport final ouvert.</div>' : ''}
+          ${snapshot.phase === 'wave' ? this.renderWavePanel(snapshot) : ''}
+          ${snapshot.phase === 'report' && snapshot.report ? '<p class="side-panel__hint">Le debriefing complet est ouvert.</p>' : ''}
+          ${snapshot.phase === 'defeat' && snapshot.report ? '<p class="side-panel__hint">Le boss est tombe. Rapport final ouvert.</p>' : ''}
         </aside>
 
         ${snapshot.phase === 'report' && snapshot.report ? this.renderReport(snapshot) : ''}
@@ -95,109 +171,210 @@ export class GameDomUi {
     `;
   }
 
+  private renderControlHeader(snapshot: DungeonSnapshot): string {
+    const phase = describePhase(snapshot.phase);
+
+    return `
+      <header class="control-header">
+        <div class="control-header__top">
+          <p class="control-header__eyebrow">Salle de controle</p>
+          <span class="phase-pill phase-pill--${phase.tone}">${phase.label}</span>
+        </div>
+        <p class="control-header__meta"><strong>${snapshot.gold} or</strong> &middot; Expedition ${snapshot.wave}</p>
+      </header>
+    `;
+  }
+
+  private renderContextMessage(snapshot: DungeonSnapshot): string {
+    const { tone, text } = snapshot.phase === 'build'
+      ? classifyBuildMessage(snapshot)
+      : snapshot.phase === 'wave'
+        ? classifyWaveMessage(snapshot)
+        : { tone: 'info' as MessageTone, text: snapshot.message };
+
+    return `
+      <div class="context-message context-message--${tone}">
+        <span class="context-message__icon" aria-hidden="true">${toneIcon(tone)}</span>
+        <p>${escapeHtml(text)}</p>
+      </div>
+    `;
+  }
+
+  // ---------------------------------------------------------------------
+  // Phase de preparation (build)
+  // ---------------------------------------------------------------------
+
   private renderBuildControls(snapshot: DungeonSnapshot): string {
     const constructionTools = snapshot.constructionTools.filter((item) => item.category === 'construction');
     const roomTools = snapshot.constructionTools.filter((item) => item.category === 'rooms');
     const traps = snapshot.availableDefenses.filter((item) => item.kind === 'trap');
     const minions = snapshot.availableDefenses.filter((item) => item.kind === 'minion');
+    const defensesActive = snapshot.defensesByKind.reduce((total, item) => total + item.count, 0);
+    const journalCount = snapshot.recentRumors.length + snapshot.recentJournal.length + snapshot.recentChronicles.length
+      + (snapshot.report ? 1 : 0);
+    const roomsOpen = snapshot.selectedConstructionTool === 'guardRoom' || snapshot.selectedConstructionTool === 'crypt';
+    const defensesOpen = snapshot.selectedDefense !== null;
 
     return `
-      <div class="panel-section">
-        <p class="section-title">Construction</p>
-        <div class="tool-list">${constructionTools.map((item) => this.renderToolButton(item, snapshot)).join('')}</div>
-        <div class="roster">${this.renderCounts(snapshot.territoryByType)}</div>
-        <div class="message">Creuser coute ${snapshot.digCost} or. La roche bloque les expeditions; le sol et les salles les laissent passer.</div>
-        <div class="message">${this.renderDoorSummary(snapshot.doorSummary)}</div>
+      <p class="side-panel__meta">
+        Prochaine expedition : ${escapeHtml(snapshot.expeditionLabel)} vers ${escapeHtml(snapshot.expeditionPrimaryGoal)}
+        &middot; ${snapshot.nextWaveSize} intrus
+      </p>
+
+      <div class="primary-actions">
+        ${constructionTools.map((item) => this.renderToolCard(item, snapshot)).join('')}
       </div>
 
-      <div class="panel-section">
-        <p class="section-title">Salles</p>
-        <div class="tool-list">${roomTools.map((item) => this.renderToolButton(item, snapshot)).join('')}</div>
-      </div>
-
-      <div class="panel-section">
-        <p class="section-title">Pieges</p>
-        <div class="defense-list">${traps.map((item) => this.renderDefenseButton(item, snapshot)).join('')}</div>
-      </div>
-
-      <div class="panel-section">
-        <p class="section-title">Monstres</p>
-        <div class="defense-list">${minions.map((item) => this.renderDefenseButton(item, snapshot)).join('')}</div>
-        ${this.renderNamedMinions(snapshot)}
-      </div>
-
-      <div class="panel-section">
-        <p class="section-title">Boss</p>
-        <div class="report__grid">
-          <div class="report__metric"><span>Vie</span><strong>${snapshot.bossHp}/${snapshot.bossMaxHp}</strong></div>
-          <div class="report__metric"><span>Pouvoirs</span><strong>${snapshot.bossAbilities.length}</strong></div>
-          <div class="report__metric"><span>Salle</span><strong>Trone</strong></div>
-        </div>
-      </div>
-
-      <div class="panel-section">
-        <p class="section-title">Expedition</p>
-        <div class="report__grid">
-          <div class="report__metric"><span>Type</span><strong>${escapeHtml(snapshot.expeditionLabel)}</strong></div>
-          <div class="report__metric"><span>Objectif</span><strong>${escapeHtml(snapshot.expeditionPrimaryGoal)}</strong></div>
-          <div class="report__metric"><span>Taille</span><strong>${snapshot.nextWaveSize}</strong></div>
-          <div class="report__metric"><span>Infamie</span><strong>${snapshot.dungeonReputation}</strong></div>
-        </div>
-        <div class="roster">${this.renderCounts(snapshot.adventurersByRole)}</div>
-        <div class="message${snapshot.dungeonValidation.valid ? ' message--ok' : ' message--alert'}">
-          ${snapshot.dungeonValidation.valid
-            ? 'Donjon valide: entree, tresor et boss restent relies.'
-            : escapeHtml(snapshot.dungeonValidation.reason ?? 'Donjon invalide.')}
-        </div>
-      </div>
-
-      ${snapshot.report ? this.renderCompactReport(snapshot) : ''}
-      ${snapshot.recentRumors.length > 0 ? this.renderRumors(snapshot.recentRumors) : ''}
-      ${snapshot.recentJournal.length > 0 ? this.renderJournal(snapshot.recentJournal) : ''}
-      ${snapshot.recentChronicles.length > 0 ? this.renderChronicles(snapshot.recentChronicles) : ''}
-      ${this.bestWave > 0 ? `<div class="message">Record local: ${this.bestWave} vague${this.bestWave > 1 ? 's' : ''} repoussee${this.bestWave > 1 ? 's' : ''}.</div>` : ''}
-
-      <div class="actions">
-        <button class="button" data-action="launch-wave" ${snapshot.canLaunchWave ? '' : 'disabled'}>
-          Lancer l expedition
+      <div class="primary-actions primary-actions--soon">
+        <button class="tool-card tool-card--soon" type="button" disabled
+          title="Bientot disponible : reboucher ou rediriger un couloir pour pas cher.">
+          <strong>Mur</strong>
+          <span class="tool-card__cost">Bientot</span>
         </button>
+        <button class="tool-card tool-card--soon" type="button" disabled
+          title="Bientot disponible : replacer le boss ailleurs dans le donjon, hors de la zone de surete.">
+          <strong>Deplacer boss</strong>
+          <span class="tool-card__cost">Bientot</span>
+        </button>
+      </div>
+
+      ${this.renderSelectedToolDetail(snapshot)}
+
+      <div class="accordion">
+        ${this.renderAccordion(
+          'rooms',
+          'Salles & terrain',
+          roomTools.length > 0 ? String(roomTools.length) : null,
+          `
+            <div class="tool-grid">${roomTools.map((item) => this.renderToolCard(item, snapshot)).join('')}</div>
+            <p class="accordion__subtitle">Terrain</p>
+            <div class="pill-row">${this.renderCounts(snapshot.territoryByType)}</div>
+            ${this.renderDoorPills(snapshot.doorSummary)}
+          `,
+          roomsOpen,
+        )}
+
+        ${this.renderAccordion(
+          'defenses',
+          'Defenses',
+          defensesActive > 0 ? String(defensesActive) : null,
+          `
+            <p class="accordion__subtitle">Pieges</p>
+            <div class="card-grid">${traps.map((item) => this.renderDefenseCard(item, snapshot)).join('')}</div>
+            <p class="accordion__subtitle">Monstres</p>
+            <div class="card-grid">${minions.map((item) => this.renderDefenseCard(item, snapshot)).join('')}</div>
+            ${this.renderSelectedDefenseDetail(snapshot)}
+            ${this.renderNamedMinions(snapshot)}
+          `,
+          defensesOpen,
+        )}
+
+        ${this.renderAccordion(
+          'journal',
+          'Journal',
+          journalCount > 0 ? String(Math.min(9, journalCount)) : null,
+          this.renderJournalFeed(snapshot),
+        )}
+      </div>
+
+      <div class="actions actions--sticky">
+        <button class="button button--primary" data-action="launch-wave" ${snapshot.canLaunchWave ? '' : 'disabled'}>
+          Lancer l'expedition
+        </button>
+        ${!snapshot.canLaunchWave
+          ? `<p class="actions__hint">${escapeHtml(snapshot.dungeonValidation.reason ?? 'Le donjon doit rester accessible.')}</p>`
+          : ''}
       </div>
     `;
   }
 
-  private renderToolButton(item: ConstructionUiItem, snapshot: DungeonSnapshot): string {
-    const selected = item.type === snapshot.selectedConstructionTool ? ' is-selected' : '';
-    const cost = item.cost === null ? '' : `<em>${item.cost} or</em>`;
+  private renderAccordion(id: string, title: string, badge: string | null, bodyHtml: string, forceOpen = false): string {
+    const isOpen = forceOpen || this.openSections.has(id);
 
     return `
-      <button
-        class="tool-button${selected}"
-        data-construction="${item.type}"
-        ${item.disabled ? 'disabled' : ''}
-      >
+      <div class="accordion__item${isOpen ? ' is-open' : ''}">
+        <button class="accordion__summary" type="button" data-section="${id}" aria-expanded="${isOpen}">
+          <span class="accordion__chevron" aria-hidden="true">&rsaquo;</span>
+          <span class="accordion__title">${escapeHtml(title)}</span>
+          ${badge ? `<span class="accordion__badge">${escapeHtml(badge)}</span>` : ''}
+        </button>
+        <div class="accordion__body">${bodyHtml}</div>
+      </div>
+    `;
+  }
+
+  private renderToolCard(item: ConstructionUiItem, snapshot: DungeonSnapshot): string {
+    const selected = item.type === snapshot.selectedConstructionTool ? ' is-selected' : '';
+    const cost = item.cost === null ? 'Gratuit' : `${item.cost} or`;
+
+    return `
+      <button class="tool-card${selected}" data-construction="${item.type}" ${item.disabled ? 'disabled' : ''}>
         <strong>${escapeHtml(item.name)}</strong>
-        <small>${escapeHtml(item.description)}</small>
-        ${cost}
+        <span class="tool-card__cost">${cost}</span>
       </button>
     `;
   }
 
-  private renderDefenseButton(item: DefenseUiItem, snapshot: DungeonSnapshot): string {
+  private renderDefenseCard(item: DefenseUiItem, snapshot: DungeonSnapshot): string {
     const selected = item.type === snapshot.selectedDefense ? ' is-selected' : '';
 
     return `
-      <button
-        class="defense-button${selected}"
-        data-defense="${item.type}"
-        ${item.disabled ? 'disabled' : ''}
-      >
-        <span class="defense-button__swatch" style="--swatch:${item.color}"></span>
-        <span>
-          <strong>${escapeHtml(item.name)}</strong>
-          <small>${escapeHtml(item.description)}</small>
-        </span>
-        <em>${item.cost} or</em>
+      <button class="defense-card${selected}" data-defense="${item.type}" ${item.disabled ? 'disabled' : ''}>
+        <span class="defense-card__swatch" style="--swatch:${item.color}"></span>
+        <strong>${escapeHtml(item.name)}</strong>
+        <span class="defense-card__cost">${item.cost} or</span>
       </button>
+    `;
+  }
+
+  private renderSelectedToolDetail(snapshot: DungeonSnapshot): string {
+    const tool = snapshot.constructionTools.find((item) => item.type === snapshot.selectedConstructionTool);
+
+    if (!tool) {
+      return '';
+    }
+
+    const cost = tool.cost === null ? 'Gratuit' : `${tool.cost} or`;
+
+    return `
+      <div class="detail-card">
+        <p class="detail-card__title">Outil : ${escapeHtml(tool.name)}</p>
+        <div class="detail-card__row"><span>Cout</span><strong>${cost}</strong></div>
+        <p class="detail-card__effect">${escapeHtml(tool.description)}</p>
+        <p class="detail-card__hint">${escapeHtml(placementHintFor(tool.type))}</p>
+      </div>
+    `;
+  }
+
+  private renderSelectedDefenseDetail(snapshot: DungeonSnapshot): string {
+    const item = snapshot.availableDefenses.find((candidate) => candidate.type === snapshot.selectedDefense);
+
+    if (!item) {
+      return '';
+    }
+
+    return `
+      <div class="detail-card">
+        <p class="detail-card__title">Outil : ${escapeHtml(item.name)}</p>
+        <div class="detail-card__row"><span>Cout</span><strong>${item.cost} or</strong></div>
+        <p class="detail-card__effect">${escapeHtml(item.description)}</p>
+        <p class="detail-card__hint">Placement : sol creuse, hors entree, tresor et trone.</p>
+      </div>
+    `;
+  }
+
+  private renderDoorPills(summary: DoorSummary): string {
+    if (summary.active === 0) {
+      return '';
+    }
+
+    return `
+      <div class="pill-row">
+        <span class="pill pill--muted">Portes</span>
+        <span class="pill">${summary.active} active${summary.active > 1 ? 's' : ''}</span>
+        <span class="pill">${summary.locked} verrouillee${summary.locked > 1 ? 's' : ''}</span>
+        ${summary.opened > 0 ? `<span class="pill">${summary.opened} ouverte${summary.opened > 1 ? 's' : ''}</span>` : ''}
+      </div>
     `;
   }
 
@@ -208,7 +385,7 @@ export class GameDomUi {
 
     return `
       <div class="named-minions">
-        <p class="section-title">Sbires notables</p>
+        <p class="accordion__subtitle">Sbires notables</p>
         <ul class="minion-list">
           ${snapshot.namedMinions
             .map(
@@ -225,86 +402,105 @@ export class GameDomUi {
     `;
   }
 
-  private renderRumors(rumors: string[]): string {
-    return this.renderTextList('Rumeurs de taverne', rumors.slice(-2));
-  }
+  private renderJournalFeed(snapshot: DungeonSnapshot): string {
+    const entries: Array<{ tag: string; text: string }> = [];
 
-  private renderWavePanel(snapshot: DungeonSnapshot, bossPercent: number): string {
+    if (snapshot.report) {
+      entries.push({
+        tag: 'Rapport',
+        text: `Vague ${snapshot.report.wave}: ${snapshot.report.adventurersKilled} morts, ${snapshot.report.adventurersEscaped} retours. ${
+          snapshot.report.adaptationNotes[0] ?? ''
+        }`.trim(),
+      });
+    }
+
+    snapshot.recentRumors.slice(-2).forEach((text) => entries.push({ tag: 'Rumeur', text }));
+    snapshot.recentJournal.slice(-3).forEach((text) => entries.push({ tag: 'Journal', text }));
+    snapshot.recentChronicles.slice(-3).forEach((text) => entries.push({ tag: 'Chronique', text }));
+
+    if (this.bestWave > 0) {
+      entries.push({
+        tag: 'Record',
+        text: `${this.bestWave} vague${this.bestWave > 1 ? 's' : ''} repoussee${this.bestWave > 1 ? 's' : ''} localement.`,
+      });
+    }
+
+    if (entries.length === 0) {
+      return '<p class="journal-feed__empty">Rien a raconter pour le moment.</p>';
+    }
+
     return `
-      <div class="panel-section">
-        <p class="section-title">Vague en cours</p>
-        <div class="report__grid">
-          <div class="report__metric"><span>Plan</span><strong>${escapeHtml(snapshot.expeditionLabel)}</strong></div>
-          <div class="report__metric"><span>Objectif</span><strong>${escapeHtml(snapshot.expeditionPrimaryGoal)}</strong></div>
-        </div>
-        <div class="wave-controls">
-          <button class="control-button" data-action="toggle-pause">${snapshot.paused ? 'Reprendre' : 'Pause'}</button>
-          ${[1, 2, 3]
-            .map(
-              (speed) => `
-                <button class="control-button${snapshot.gameSpeed === speed ? ' is-selected' : ''}" data-speed="${speed}">
-                  x${speed}
-                </button>
-              `,
-            )
-            .join('')}
-        </div>
-        ${this.renderTreasureStatus(snapshot)}
-        <div class="roster">${this.renderCounts(snapshot.adventurersByRole)}</div>
-        <div class="roster">${this.renderNameTags(snapshot.activeAdventurerNames)}</div>
-        <div class="report__grid">
-          <div class="report__metric"><span>Boss</span><strong>${bossPercent}%</strong></div>
-          <div class="report__metric"><span>Infamie</span><strong>${snapshot.dungeonReputation}</strong></div>
-        </div>
-      </div>
-
-      <div class="panel-section">
-        <p class="section-title">Boss autonome</p>
-        <div class="message">
-          ${snapshot.bossAutopilotIntent ? escapeHtml(snapshot.bossAutopilotIntent) : 'Le boss attend que les intrus approchent du trone.'}
-          ${snapshot.bossLastAbilityName ? `<br>Dernier pouvoir: ${escapeHtml(snapshot.bossLastAbilityName)}.` : ''}
-        </div>
-        <div class="ability-list">
-          ${snapshot.bossAbilities
-            .map((ability) => {
-              const cooldownSeconds = Math.ceil(ability.cooldownRemainingMs / 1000);
-              const status = ability.usesLeft === 0
-                ? 'Epuise'
-                : ability.ready
-                  ? 'Pret'
-                  : `${cooldownSeconds}s`;
-              return `
-                <div
-                  class="ability-button${ability.ready ? ' is-ready' : ''}"
-                  title="${escapeHtml(ability.description)}"
-                >
-                  <strong>${escapeHtml(ability.name)}</strong>
-                  <span>${escapeHtml(status)} - ${ability.usesLeft} restant${ability.usesLeft > 1 ? 's' : ''}</span>
-                </div>
-              `;
-            })
-            .join('')}
-        </div>
-      </div>
-
-      ${snapshot.inspectedAdventurer ? this.renderInspection(snapshot) : '<div class="message">Clique sur un intrus pour l\'inspecter.</div>'}
+      <ul class="journal-feed">
+        ${entries
+          .map(
+            (entry) => `
+              <li>
+                <span class="journal-feed__tag">${escapeHtml(entry.tag)}</span>
+                <span>${escapeHtml(entry.text)}</span>
+              </li>
+            `,
+          )
+          .join('')}
+      </ul>
     `;
   }
 
-  private renderTreasureStatus(snapshot: DungeonSnapshot): string {
-    if (snapshot.treasureStatus === 'carried') {
-      return `<div class="message message--alert">Tresor porte par ${escapeHtml(snapshot.treasureCarrierName ?? 'un intrus')}. Ne le laisse pas sortir.</div>`;
-    }
+  // ---------------------------------------------------------------------
+  // Phase d'expedition (wave)
+  // ---------------------------------------------------------------------
 
-    if (snapshot.treasureStatus === 'dropped') {
-      return '<div class="message message--alert">Le tresor traine par terre. Quelqu\'un va forcement le ramasser.</div>';
-    }
+  private renderWavePanel(snapshot: DungeonSnapshot): string {
+    return `
+      <p class="side-panel__meta">
+        ${escapeHtml(snapshot.expeditionLabel)} vers ${escapeHtml(snapshot.expeditionPrimaryGoal)}
+      </p>
 
-    if (snapshot.treasureStatus === 'stolen') {
-      return '<div class="message message--alert">Le tresor est VOLE. La honte sera comptabilisee au rapport.</div>';
-    }
+      <div class="wave-controls">
+        <button class="control-button" data-action="toggle-pause">${snapshot.paused ? 'Reprendre' : 'Pause'}</button>
+        ${[1, 2, 3]
+          .map(
+            (speed) => `
+              <button class="control-button${snapshot.gameSpeed === speed ? ' is-selected' : ''}" data-speed="${speed}">
+                x${speed}
+              </button>
+            `,
+          )
+          .join('')}
+      </div>
 
-    return '';
+      <div class="panel-block">
+        <p class="panel-block__title">Intrus en approche</p>
+        <div class="pill-row">${this.renderCounts(snapshot.adventurersByRole)}</div>
+        <div class="pill-row">${this.renderNameTags(snapshot.activeAdventurerNames)}</div>
+      </div>
+
+      <div class="panel-block">
+        <p class="panel-block__title">Boss autonome</p>
+        <p class="panel-block__text">
+          ${snapshot.bossAutopilotIntent ? escapeHtml(snapshot.bossAutopilotIntent) : 'Le boss attend que les intrus approchent du trone.'}
+          ${snapshot.bossLastAbilityName ? ` Dernier pouvoir : ${escapeHtml(snapshot.bossLastAbilityName)}.` : ''}
+        </p>
+        <div class="pill-row">
+          ${snapshot.bossAbilities.map((ability) => this.renderAbilityPill(ability)).join('')}
+        </div>
+      </div>
+
+      ${snapshot.inspectedAdventurer
+        ? this.renderInspection(snapshot)
+        : '<p class="side-panel__hint">Clique sur un intrus pour l\'inspecter.</p>'}
+    `;
+  }
+
+  private renderAbilityPill(ability: DungeonSnapshot['bossAbilities'][number]): string {
+    const cooldownSeconds = Math.ceil(ability.cooldownRemainingMs / 1000);
+    const status = ability.usesLeft === 0 ? 'Epuise' : ability.ready ? 'Pret' : `${cooldownSeconds}s`;
+    const readyClass = ability.ready ? ' pill--ready' : '';
+
+    return `
+      <span class="pill pill--ability${readyClass}" title="${escapeHtml(ability.description)}">
+        ${escapeHtml(ability.shortName)} : ${escapeHtml(status)}
+      </span>
+    `;
   }
 
   private renderInspection(snapshot: DungeonSnapshot): string {
@@ -318,23 +514,27 @@ export class GameDomUi {
     const injuries = target.injuries.length > 0 ? target.injuries.join(', ') : 'aucune';
 
     return `
-      <div class="panel-section inspection">
-        <p class="section-title">Dossier: ${escapeHtml(target.name)}</p>
+      <div class="panel-block inspection">
+        <p class="panel-block__title">Dossier : ${escapeHtml(target.name)}</p>
         <ul class="inspection__facts">
           <li>${escapeHtml(target.className)} niveau ${target.level}, ${target.age} ans</li>
-          <li>PV: ${target.hp} / ${target.maxHp}</li>
-          <li>Personnalite: ${escapeHtml(target.personality)} (traits: ${escapeHtml(traits)})</li>
-          <li>Expeditions: ${target.expeditionCount} (survies: ${target.survivedExpeditions})</li>
-          <li>Monstres tues: ${target.monstersKilled}, pieges declenches: ${target.trapsTriggered}</li>
-          <li>Blessures: ${escapeHtml(injuries)}</li>
+          <li>PV : ${target.hp} / ${target.maxHp}</li>
+          <li>Personnalite : ${escapeHtml(target.personality)} (traits : ${escapeHtml(traits)})</li>
+          <li>Expeditions : ${target.expeditionCount} (survies : ${target.survivedExpeditions})</li>
+          <li>Monstres tues : ${target.monstersKilled}, pieges declenches : ${target.trapsTriggered}</li>
+          <li>Blessures : ${escapeHtml(injuries)}</li>
           ${target.isHeir && target.heirNote ? `<li class="inspection__heir">${escapeHtml(target.heirNote)}</li>` : ''}
           ${target.carryingTreasure ? '<li class="inspection__heir">Porte le tresor du donjon.</li>' : ''}
-          ${target.lastFeat ? `<li>Dernier fait: ${escapeHtml(target.lastFeat)}</li>` : ''}
+          ${target.lastFeat ? `<li>Dernier fait : ${escapeHtml(target.lastFeat)}</li>` : ''}
         </ul>
         <button class="control-button" data-action="close-inspection">Fermer le dossier</button>
       </div>
     `;
   }
+
+  // ---------------------------------------------------------------------
+  // Debriefing (rapport / defaite) - overlays plein ecran, inchanges
+  // ---------------------------------------------------------------------
 
   private renderReport(snapshot: DungeonSnapshot): string {
     const report = snapshot.report;
@@ -346,31 +546,18 @@ export class GameDomUi {
     return `
       <div class="debrief-overlay">
         <section class="debrief">
-          <header class="debrief__header">
-            <div>
-              <p class="section-title">Debriefing de vague</p>
-              <h2>Vague ${report.wave}: ${report.cleared ? 'le donjon tient' : 'le boss tombe'}</h2>
-              <p>${escapeHtml(report.verdict)}</p>
-            </div>
-            <div class="debrief__metrics">
-              <span>${report.adventurersKilled} morts</span>
-              <span>${report.adventurersEscaped} retours</span>
-              <span>${report.durationSeconds}s</span>
-            </div>
-          </header>
+          ${this.renderChronicle(report)}
 
-          <div class="debrief__grid">
-            ${this.renderDebriefSection('Resume', report.storyLines)}
+          <div class="debrief__grid debrief__grid--compact">
             ${this.renderParticipantSection(snapshot)}
-            ${this.renderDebriefSection('Ce qu ils ont appris', report.learnedLines)}
-            ${this.renderDebriefSection('Ce qu ils ont partage', report.sharedLines)}
-            ${this.renderDebriefSection('Gains et pertes', report.gainsLosses)}
-            ${this.renderDebriefSection('Ce que la guilde change', report.guildChanges)}
-            ${this.renderDebriefSection('Economie du donjon', report.economyLines)}
+            ${this.renderDebriefSection('Lecture tactique', report.learnedLines.slice(0, 3))}
+            ${this.renderDebriefSection('Suite probable', report.guildChanges.slice(0, 3))}
+            ${this.renderDebriefSection('Economie', report.economyLines.slice(-3))}
           </div>
 
           <div class="debrief__actions">
-            <button class="button" data-action="continue-build">Preparer la suite</button>
+            <button class="button button--ghost" data-action="continue-build">Passer</button>
+            <button class="button button--primary" data-action="continue-build">Continuer</button>
           </div>
         </section>
       </div>
@@ -387,26 +574,12 @@ export class GameDomUi {
     return `
       <div class="debrief-overlay">
         <section class="debrief debrief--defeat">
-          <header class="debrief__header">
-            <div>
-              <p class="section-title">Rapport final</p>
-              <h2>Le boss est tombe</h2>
-              <p>${escapeHtml(report.verdict)}</p>
-            </div>
-            <div class="debrief__metrics">
-              <span>${snapshot.survivedWaves} vagues</span>
-              <span>record ${this.bestWave}</span>
-              <span>${report.durationSeconds}s</span>
-            </div>
-          </header>
+          ${this.renderChronicle(report, true)}
 
-          <div class="debrief__grid">
-            ${this.renderDebriefSection('Resume', report.storyLines)}
+          <div class="debrief__grid debrief__grid--compact">
             ${this.renderParticipantSection(snapshot)}
-            ${this.renderDebriefSection('Ce qu ils ont appris', report.learnedLines)}
-            ${this.renderDebriefSection('Ce que la guilde retient', report.sharedLines)}
-            ${this.renderDebriefSection('Gains et pertes', report.gainsLosses)}
-            ${this.renderDebriefSection('Economie du donjon', report.economyLines)}
+            ${this.renderDebriefSection('Ce que la guilde retient', report.sharedLines.slice(0, 3))}
+            ${this.renderDebriefSection('Bilan', report.gainsLosses.slice(0, 3))}
           </div>
 
           <div class="debrief__actions">
@@ -414,6 +587,42 @@ export class GameDomUi {
           </div>
         </section>
       </div>
+    `;
+  }
+
+  private renderChronicle(report: DungeonSnapshot['report'], final = false): string {
+    if (!report) {
+      return '';
+    }
+
+    const chronicle = report.chronicle;
+    const title = final ? 'Chronique finale' : chronicle.title;
+
+    return `
+      <header class="chronicle-card${chronicle.hasSurvivors ? '' : ' chronicle-card--no-survivors'}">
+        <div class="chronicle-card__intro">
+          <p class="section-title">${escapeHtml(title)}</p>
+          <h2>Vague ${report.wave}: ${escapeHtml(chronicle.subtitle)}</h2>
+          <p>${escapeHtml(chronicle.tacticalSummary)}</p>
+        </div>
+
+        <div class="chronicle-badges">
+          ${chronicle.badges.map((badge) => this.renderChronicleBadge(badge)).join('')}
+        </div>
+
+        <ul class="chronicle-lines">
+          ${chronicle.lines.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}
+        </ul>
+      </header>
+    `;
+  }
+
+  private renderChronicleBadge(badge: NonNullable<DungeonSnapshot['report']>['chronicle']['badges'][number]): string {
+    return `
+      <span class="chronicle-badge chronicle-badge--${badge.tone}">
+        <small>${escapeHtml(badge.label)}</small>
+        <strong>${escapeHtml(badge.value)}</strong>
+      </span>
     `;
   }
 
@@ -450,28 +659,9 @@ export class GameDomUi {
     `;
   }
 
-  private renderCompactReport(snapshot: DungeonSnapshot): string {
-    const report = snapshot.report;
-
-    if (!report) {
-      return '';
-    }
-
-    return `
-      <div class="report">
-        <p class="section-title">Dernier carnage</p>
-        <p>Vague ${report.wave}: ${report.adventurersKilled} heros punis, ${report.adventurersEscaped} temoins problematiques. ${escapeHtml(report.adaptationNotes[0] ?? 'Ils reviendront quand meme. Evidemment.')}</p>
-      </div>
-    `;
-  }
-
-  private renderJournal(entries: string[]): string {
-    return this.renderTextList('Journal recent', entries.slice(-3));
-  }
-
-  private renderChronicles(entries: string[]): string {
-    return this.renderTextList('Chroniques', entries.slice(-4));
-  }
+  // ---------------------------------------------------------------------
+  // Petits helpers d'affichage partages
+  // ---------------------------------------------------------------------
 
   private renderStatus(label: string, value: string): string {
     return `
@@ -482,38 +672,23 @@ export class GameDomUi {
     `;
   }
 
-  private renderDoorSummary(summary: DoorSummary): string {
-    if (summary.active === 0) {
-      return 'Portes actives : 0';
-    }
-
-    return `Portes actives : ${summary.active} - verrouillees : ${summary.locked}, ouvertes cette expedition : ${summary.opened}`;
-  }
-
   private renderCounts(items: CountItem[]): string {
     return items
       .filter((item) => item.count > 0)
-      .map((item) => `<span class="tag">${escapeHtml(item.label)} x${item.count}</span>`)
-      .join('') || '<span class="tag">Aucun. Moment suspect.</span>';
+      .map((item) => `<span class="pill">${escapeHtml(item.label)} x${item.count}</span>`)
+      .join('') || '<span class="pill pill--muted">Aucun</span>';
   }
 
   private renderNameTags(names: string[]): string {
     return names
       .slice(0, 6)
-      .map((name) => `<span class="tag">${escapeHtml(name)}</span>`)
-      .join('') || '<span class="tag">Aucun nom a retenir.</span>';
+      .map((name) => `<span class="pill">${escapeHtml(name)}</span>`)
+      .join('') || '<span class="pill pill--muted">Aucun nom a retenir</span>';
   }
 
-  private renderTextList(title: string, entries: string[]): string {
-    if (entries.length === 0) {
-      return '';
-    }
-
-    return `
-      <p class="section-title">${escapeHtml(title)}</p>
-      <ul>${entries.map((entry) => `<li>${escapeHtml(entry)}</li>`).join('')}</ul>
-    `;
-  }
+  // ---------------------------------------------------------------------
+  // Actions
+  // ---------------------------------------------------------------------
 
   private bindActions(snapshot: UiSnapshot): void {
     this.root.querySelectorAll<HTMLButtonElement>('[data-action]').forEach((button) => {
@@ -522,6 +697,10 @@ export class GameDomUi {
 
         if (action === 'start-game') {
           emitUiAction({ type: 'start-game' });
+        }
+
+        if (action === 'toggle-credits') {
+          this.toggleCredits();
         }
 
         if (action === 'launch-wave') {
@@ -542,6 +721,16 @@ export class GameDomUi {
 
         if (action === 'restart') {
           emitUiAction({ type: 'restart' });
+        }
+      });
+    });
+
+    this.root.querySelectorAll<HTMLButtonElement>('[data-section]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const section = button.dataset.section;
+
+        if (section) {
+          this.toggleSection(section);
         }
       });
     });
@@ -592,6 +781,10 @@ export class GameDomUi {
   }
 }
 
+// ---------------------------------------------------------------------
+// Fonctions pures (aucun etat, aucune regle de jeu)
+// ---------------------------------------------------------------------
+
 function escapeHtml(value: string): string {
   return value
     .replaceAll('&', '&amp;')
@@ -613,5 +806,93 @@ function roleLabel(role: string): string {
       return 'Soigneur';
     default:
       return role;
+  }
+}
+
+function describePhase(phase: DungeonSnapshot['phase']): { label: string; tone: string } {
+  switch (phase) {
+    case 'build':
+      return { label: 'Preparation', tone: 'build' };
+    case 'wave':
+      return { label: 'Expedition en cours', tone: 'wave' };
+    case 'report':
+      return { label: 'Debriefing', tone: 'report' };
+    case 'defeat':
+      return { label: 'Defaite', tone: 'defeat' };
+    default:
+      return { label: phase, tone: 'build' };
+  }
+}
+
+function toneIcon(tone: MessageTone): string {
+  switch (tone) {
+    case 'error':
+      return '!';
+    case 'warning':
+      return '*';
+    case 'success':
+      return 'v';
+    default:
+      return 'i';
+  }
+}
+
+const ERROR_MESSAGE_HINTS = ['pas assez', 'insuffisant', 'refuse', 'impossible', 'aucune porte', 'aucun outil', 'aucune defense'];
+const SUCCESS_MESSAGE_HINTS = ['recupere', 'demonte'];
+
+function classifyMessageTone(message: string): MessageTone {
+  const lower = message.toLowerCase();
+
+  if (ERROR_MESSAGE_HINTS.some((hint) => lower.includes(hint))) {
+    return 'error';
+  }
+
+  if (SUCCESS_MESSAGE_HINTS.some((hint) => lower.includes(hint))) {
+    return 'success';
+  }
+
+  return 'info';
+}
+
+function classifyBuildMessage(snapshot: DungeonSnapshot): { tone: MessageTone; text: string } {
+  if (!snapshot.dungeonValidation.valid) {
+    return { tone: 'warning', text: snapshot.dungeonValidation.reason ?? "Le donjon n'est pas valide." };
+  }
+
+  return { tone: classifyMessageTone(snapshot.message), text: snapshot.message };
+}
+
+function classifyWaveMessage(snapshot: DungeonSnapshot): { tone: MessageTone; text: string } {
+  if (snapshot.treasureStatus === 'stolen') {
+    return { tone: 'error', text: 'Le tresor est VOLE. La honte sera comptabilisee au rapport.' };
+  }
+
+  if (snapshot.treasureStatus === 'dropped') {
+    return { tone: 'warning', text: "Le tresor traine par terre. Quelqu'un va forcement le ramasser." };
+  }
+
+  if (snapshot.treasureStatus === 'carried') {
+    return {
+      tone: 'warning',
+      text: `Tresor porte par ${snapshot.treasureCarrierName ?? 'un intrus'}. Ne le laisse pas sortir.`,
+    };
+  }
+
+  return { tone: classifyMessageTone(snapshot.message), text: snapshot.message };
+}
+
+function placementHintFor(type: ConstructionTool): string {
+  switch (type) {
+    case 'dig':
+      return 'Placement : case de roche adjacente a une zone deja creusee.';
+    case 'door':
+      return 'Placement : couloir creuse, sans piege ni monstre sur la case.';
+    case 'removeDoor':
+      return 'Placement : clique sur une porte existante pour la retirer.';
+    case 'guardRoom':
+    case 'crypt':
+      return 'Placement : case deja creusee.';
+    default:
+      return '';
   }
 }

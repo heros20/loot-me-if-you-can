@@ -2,11 +2,19 @@
 
 ## Near Term
 
+- Dungeon Structure V2 (see `docs/DUNGEON_STRUCTURE_V2.md` for the full spec, not yet implemented):
+  - V1.2 boss deplacable + zone de surete autour de l'entree.
+  - V1.3 mur constructible (rebouchage d'une case creusee, coherent avec D-009) + validation de chemin bidirectionnelle.
+  - V1.4 map initiale moins creusee (actuellement 19% de la carte est deja creusee au demarrage, en reseau ramifie avec 3 salles pretes a l'emploi).
+  - V2.0 generation aleatoire de la carte au lancement d'un run (seed, une seule fois par partie, jamais par expedition).
+  - V2.1 zones/antichambres sur une meme carte, V3.0 plusieurs niveaux + sous-boss.
 - Expand Kenney-based asset coverage for ability-specific particles/icons if V1 readability needs more than tint/pulse feedback.
 - Add sound effects and a mute toggle.
 - Add clearer placement previews for trap range and minion attack range.
 - Add visual effects for boss abilities (shockwave ring, roar cone, summon puff).
 - Add hotkey for pause (space).
+- UI follow-ups from the menu/sidebar pass: wire boss abilities to manual `use-ability` clicks if manual casting returns, add small icons/symbols to tool and defense cards once art budget allows, and consider a proper options/credits route if the menu grows beyond a single overlay panel.
+- Survivor Chronicle follow-up: tune the exact narrative line pool after playtests, and later decide how much of it feeds The Kingdom Remembers without adding cartography in this V1.
 
 ## Gameplay
 
@@ -32,7 +40,7 @@
 - Add automated browser smoke tests (the headless simulation suite lives in `scripts/`, run with `npm run smoke`).
 - Turn the smoke scripts into deterministic assertions with a proper test runner.
 - Continue extracting combat resolution if V0 abilities grow beyond the current `combatAbilitySystem` boundary.
-- Add asset loading from a JSON manifest once external art is introduced.
+- Consider moving `src/assets/manifest.ts` to data/JSON only if the external asset list grows beyond the current Kenney V1 set.
 - Split profile memory, expedition resolution, and report generation into smaller simulation modules if they grow.
 - Doors V1 persistence limit: a picked door opens only for the current expedition, then resets locked between expeditions. It cannot be damaged or destroyed by adventurers, and there is no repair economy because there is no door damage model. Players can still voluntarily remove a placed door during build phase for a partial refund.
 - Doors V1 pathfinding limit: doors are fully traversable for the A* cost model (no extra weight), so on layouts with multiple equal-length routes the guild may occasionally path around a door instead of through it. Fine for V1 corridors/choke points; revisit if the Royaume's future pathing needs to actively avoid or route through known doors.
@@ -70,3 +78,8 @@
 - Portes V1.1 polish: documented the door's design intent as D-011, added a build-panel door summary (active count + average HP), and gave door placement refusals a specific reason instead of one generic message.
 - Expedition Intelligence & Early Strategy: added local adventurer hesitation/formation/retreat behavior, contextual barks above units, thief trap mitigation and door leadership, boss autopilot for existing powers, richer starting economy, locked-door crochetage, and clearer tactical debrief lines.
 - Follow-up polish: pre-emptive thief bias whenever a locked door exists (not just after a failed retreat), and debrief narration for disobedience/cover-retreat moments.
+- Bugfix + Asset Integration V1: defensive units now respect closed reinforced doors, thieves have 2 trap interventions per expedition with overwhelmed feedback, Kenney Tiny Dungeon CC0 sprites are wired through `src/assets/manifest.ts`, and generated placeholders remain as load-failure fallbacks.
+- Menu & sidebar UI/UX pass: redesigned the home menu (title, subtitle, ambiance copy, disabled Continue, credits toggle, prototype badge) and rebuilt the "Salle de controle" sidebar with a sticky header, one contextual message at a time, collapsible sections, compact cards with a selected-tool detail fiche, pill counters, and a compact scrollable journal feed. Presentation only; no snapshot, simulation, or balance changes.
+- Expedition Clarity & Survivor Chronicle V1: treasure pickup now produces a collective group objective, combat readability uses short role/intent/ability labels, barks are shorter and spatially de-overlapped, and the post-wave report starts with a skippable survivor/no-survivor chronicle.
+- Full-viewport layout pass: the app shell now fills the real browser window (docked play area + docked sidebar via `--sidebar-width`/`--hud-height` CSS custom properties) instead of a small fixed-size box centered on the page, and the existing Phaser `Scale.FIT` config scales the unchanged 960x640 game resolution to fill the larger canvas area. `src/styles.css` only; no grid, coordinate, or gameplay constant was touched.
+- Sidebar audit & cleanup pass: primary build tools (dig/door/remove-door) are now always visible instead of hidden in an accordion, the header/next-expedition summaries were compressed from stat-card grids and 5-pill rows down to single compact lines, territory/door counters moved into a secondary "Salles & terrain" accordion, and every accordion defaults to closed unless its tool/defense is already selected. Added disabled "Bientot" placeholders for the future Mur and Deplacer boss actions. The survivor chronicle/debrief overlay was left untouched. See `docs/DUNGEON_STRUCTURE_V2.md` for the design spec this prepares the UI for.

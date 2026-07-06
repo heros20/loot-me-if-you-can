@@ -8,6 +8,10 @@ export type BarkKind =
   | 'trapSeen'
   | 'trapThief'
   | 'trapThiefOverwhelmed'
+  | 'treasureEscape'
+  | 'treasureChallenge'
+  | 'protectCarrier'
+  | 'stayTogether'
   | 'fleeTrap'
   | 'wounded'
   | 'retreat'
@@ -30,6 +34,10 @@ const BARKS: Record<BarkKind, string[]> = {
   trapSeen: ['Attendez... le sol est bizarre.', 'Ne marchez pas la-dessus !'],
   trapThief: ['Je vois le mecanisme.', 'Pas si vite, je peux l affaiblir.', 'Celui-la, je le vois.'],
   trapThiefOverwhelmed: ['Trop de mecanismes, je ne pourrai pas tout neutraliser.', 'Plus le temps de desamorcer !'],
+  treasureEscape: ["On a le tresor, sortons d'ici !", 'Protegez le porteur !'],
+  treasureChallenge: ['Non, le boss est affaibli, on termine ca !', 'On ne s eparpille pas !'],
+  protectCarrier: ['Protegez le porteur !', 'Couvrez notre retraite !'],
+  stayTogether: ['On ne s eparpille pas !', 'Restez groupes !'],
   fleeTrap: ['Pas par la, je vais y rester !', 'Autre chemin, tout de suite !'],
   wounded: ['Je ne tiendrai pas longtemps.', 'Soigneur ! Maintenant !'],
   retreat: ['On devrait sortir vivants.', 'La retraite reste une strategie.'],
@@ -46,6 +54,25 @@ const BARKS: Record<BarkKind, string[]> = {
 };
 
 const GLOBAL_BARK_COOLDOWN_MS = 9000;
+const MAX_VISIBLE_BARKS = 2;
+const BARK_PRIORITY: Partial<Record<BarkKind, number>> = {
+  doorNoThief: 3,
+  doorOpened: 3,
+  treasureTaken: 3,
+  treasureEscape: 3,
+  treasureChallenge: 3,
+  protectCarrier: 3,
+  retreat: 3,
+  retreatFollow: 2,
+  retreatCover: 2,
+  retreatPanic: 3,
+  retreatDisobey: 3,
+  healerHeal: 2,
+  healerGroupHeal: 3,
+  trapThiefOverwhelmed: 3,
+  trapThief: 2,
+  warriorTaunt: 2,
+};
 const phraseCooldownMs = new Map<string, number>();
 let lastGlobalText: string | null = null;
 
@@ -72,7 +99,9 @@ export function tickAdventurerBarks(adventurer: AdventurerEntity, deltaMs: numbe
 }
 
 export function tryBark(adventurer: AdventurerEntity, kind: BarkKind, visibleBarkCount: number): string | null {
-  if (adventurer.barkCooldownMs > 0 || visibleBarkCount >= 3) {
+  const priority = BARK_PRIORITY[kind] ?? 1;
+
+  if (adventurer.barkCooldownMs > 0 || (visibleBarkCount >= MAX_VISIBLE_BARKS && priority < 3)) {
     return null;
   }
 
@@ -87,8 +116,8 @@ export function tryBark(adventurer: AdventurerEntity, kind: BarkKind, visibleBar
   const text = selected.text;
 
   adventurer.barkText = text;
-  adventurer.barkTimerMs = 2900;
-  adventurer.barkCooldownMs = 7200;
+  adventurer.barkTimerMs = priority >= 3 ? 2500 : 2000;
+  adventurer.barkCooldownMs = priority >= 3 ? 5400 : 7600;
   adventurer.lastBarkKey = `${kind}:${selected.index}`;
   phraseCooldownMs.set(text, GLOBAL_BARK_COOLDOWN_MS);
   lastGlobalText = text;

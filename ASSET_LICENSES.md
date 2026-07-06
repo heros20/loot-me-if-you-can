@@ -9,6 +9,7 @@
 | Source | https://kenney.nl/assets/tiny-dungeon |
 | License | Creative Commons Zero, CC0 |
 | Integrated | 2026-07-06 |
+| License verified | 2026-07-06 against the official Kenney asset page and bundled `License.txt` |
 | Local folder | `public/assets/vendor/kenney/tiny-dungeon/` |
 
 Bundled files:

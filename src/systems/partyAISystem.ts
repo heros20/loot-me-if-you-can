@@ -1,4 +1,10 @@
-import type { AdventurerEntity, ExpeditionPlanType, PartyPlan, RumorEffect, WaveStats } from '../game/types';
+import type {
+  AdventurerEntity,
+  ExpeditionPlanType,
+  PartyPlan,
+  RumorEffect,
+  WaveStats,
+} from '../game/types';
 
 const PLAN_LABELS: Record<ExpeditionPlanType, string> = {
   greedy: 'Expedition cupide',
@@ -28,6 +34,7 @@ export function createPartyPlan(
     type,
     label: PLAN_LABELS[type],
     primaryGoal: type === 'greedy' || type === 'cautious' || type === 'mercenary' ? 'treasure' : 'boss',
+    groupObjective: type === 'greedy' || type === 'cautious' || type === 'mercenary' ? 'seekTreasure' : 'challengeBoss',
     retreating: false,
     treasureClaimed: false,
     retreatReason: null,
@@ -80,11 +87,31 @@ export function applyPartyDecisions(plan: PartyPlan, adventurers: AdventurerEnti
     }
 
     if (plan.retreating) {
+      if (plan.groupObjective !== 'panic' && plan.groupObjective !== 'escapeWithTreasure') {
+        plan.groupObjective = 'retreat';
+      }
+
       if (adventurer.retreatIntent === 'disobey') {
         return;
       }
 
       adventurer.targetStage = 'exit';
+      adventurer.path = [];
+      return;
+    }
+
+    if (plan.groupObjective === 'escapeWithTreasure') {
+      if (adventurer.retreatIntent === 'disobey') {
+        return;
+      }
+
+      adventurer.targetStage = 'exit';
+      adventurer.path = [];
+      return;
+    }
+
+    if (plan.groupObjective === 'challengeBoss' && adventurer.targetStage !== 'boss') {
+      adventurer.targetStage = 'boss';
       adventurer.path = [];
       return;
     }
@@ -96,7 +123,42 @@ export function applyPartyDecisions(plan: PartyPlan, adventurers: AdventurerEnti
   });
 }
 
+export function chooseTreasureGroupObjective(
+  plan: PartyPlan,
+  carrier: AdventurerEntity,
+  adventurers: AdventurerEntity[],
+  stats: WaveStats,
+  bossHpRatio: number,
+): 'escapeWithTreasure' | 'challengeBoss' {
+  const active = adventurers.filter((adventurer) => adventurer.alive && !adventurer.escaped);
+  const woundedCount = active.filter((adventurer) => adventurer.hp / adventurer.maxHp < 0.42).length;
+  const combatReadyCount = active.filter((adventurer) => adventurer.hp / adventurer.maxHp >= 0.5).length;
+  const hasTreasureEnoughPlan = plan.type === 'greedy' || plan.type === 'cautious';
+
+  if (hasTreasureEnoughPlan || stats.adventurersKilled > 0 || woundedCount >= 2 || carrier.hp / carrier.maxHp < 0.62) {
+    return 'escapeWithTreasure';
+  }
+
+  if ((plan.type === 'heroic' || plan.type === 'fanatic') && combatReadyCount >= 3) {
+    return 'challengeBoss';
+  }
+
+  if (bossHpRatio <= 0.55 && combatReadyCount >= 3 && plan.type !== 'cautious') {
+    return 'challengeBoss';
+  }
+
+  return plan.type === 'mercenary' ? 'escapeWithTreasure' : 'challengeBoss';
+}
+
 export function choosePostTreasureGoal(plan: PartyPlan, adventurer: AdventurerEntity): 'boss' | 'exit' {
+  if (plan.groupObjective === 'escapeWithTreasure' || plan.groupObjective === 'retreat' || plan.groupObjective === 'panic') {
+    return adventurer.retreatIntent === 'disobey' ? 'boss' : 'exit';
+  }
+
+  if (plan.groupObjective === 'challengeBoss') {
+    return 'boss';
+  }
+
   if (plan.type === 'fanatic' || plan.type === 'heroic') {
     return 'boss';
   }
@@ -119,5 +181,6 @@ export function choosePostTreasureGoal(plan: PartyPlan, adventurer: AdventurerEn
 function startRetreat(plan: PartyPlan, reason: string): string {
   plan.retreating = true;
   plan.retreatReason = reason;
+  plan.groupObjective = 'retreat';
   return reason;
 }

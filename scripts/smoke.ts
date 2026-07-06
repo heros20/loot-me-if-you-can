@@ -9,6 +9,7 @@ import {
 } from '../src/systems/combatAbilitySystem';
 import { computeDoorRemovalRefund } from '../src/systems/economyBalance';
 import { updateMonsterAI } from '../src/systems/monsterAISystem';
+import { choosePostTreasureGoal, chooseTreasureGroupObjective, createPartyPlan } from '../src/systems/partyAISystem';
 import type {
   AdventurerEntity,
   AdventurerRole,
@@ -49,6 +50,8 @@ function createSmokeStats(): WaveStats {
     tacticalHesitations: 0,
     thiefTrapMitigations: 0,
     thiefDoorLeads: 0,
+    treasureCarrierName: null,
+    treasureGroupDecision: null,
   };
 }
 
@@ -471,6 +474,53 @@ function validateDefensiveUnitsRespectClosedDoors(): void {
   }
 }
 
+function validateTreasureGroupDecisionRules(): void {
+  const cautiousPlan = createPartyPlan(1, 0, 'cautionSurge');
+  const treasureCarrier = createSmokeAdventurer('thief', 'carrier', 16, 4);
+  treasureCarrier.carryingTreasure = true;
+  const cautiousDecision = chooseTreasureGroupObjective(
+    cautiousPlan,
+    treasureCarrier,
+    [
+      treasureCarrier,
+      createSmokeAdventurer('warrior', 'escort-warrior', 16, 5),
+      createSmokeAdventurer('healer', 'escort-healer', 15, 4),
+    ],
+    createSmokeStats(),
+    0.9,
+  );
+  cautiousPlan.groupObjective = cautiousDecision;
+
+  if (cautiousDecision !== 'escapeWithTreasure' || choosePostTreasureGoal(cautiousPlan, treasureCarrier) !== 'exit') {
+    console.error('ECHEC: un groupe prudent avec tresor doit prendre une decision collective de fuite lisible.');
+    process.exit(1);
+  }
+
+  const heroicPlan = createPartyPlan(2, 0, null);
+  heroicPlan.type = 'heroic';
+  heroicPlan.primaryGoal = 'boss';
+  heroicPlan.groupObjective = 'challengeBoss';
+  const heroicCarrier = createSmokeAdventurer('warrior', 'heroic-carrier', 16, 4);
+  heroicCarrier.carryingTreasure = true;
+  const heroicDecision = chooseTreasureGroupObjective(
+    heroicPlan,
+    heroicCarrier,
+    [
+      heroicCarrier,
+      createSmokeAdventurer('mage', 'heroic-mage', 17, 4),
+      createSmokeAdventurer('healer', 'heroic-healer', 15, 4),
+    ],
+    createSmokeStats(),
+    0.5,
+  );
+  heroicPlan.groupObjective = heroicDecision;
+
+  if (heroicDecision !== 'challengeBoss' || choosePostTreasureGoal(heroicPlan, heroicCarrier) !== 'boss') {
+    console.error('ECHEC: un groupe heroique en etat de combattre doit assumer collectivement le boss apres le tresor.');
+    process.exit(1);
+  }
+}
+
 function validateCombatAbilityRules(): void {
   const warrior = createSmokeAdventurer('warrior', 'warrior', 4, 4);
   const healer = createSmokeAdventurer('healer', 'healer', 4.7, 4);
@@ -805,6 +855,7 @@ validateDoorLockRules();
 validateDoorRemovalRules();
 validateDoorNoThiefRetreat();
 validateDefensiveUnitsRespectClosedDoors();
+validateTreasureGroupDecisionRules();
 validateCombatAbilityRules();
 validateGoblinChaseRules();
 
@@ -878,6 +929,16 @@ for (let wave = 1; wave <= 6; wave += 1) {
 
   if (report.participants.length !== PARTY_SIZE) {
     console.error(`ECHEC: rapport vague ${wave} contient ${report.participants.length} participants au lieu de ${PARTY_SIZE}`);
+    process.exit(1);
+  }
+
+  if (report.chronicle.lines.length < 3 || report.chronicle.lines.length > 6 || report.chronicle.badges.length < 6) {
+    console.error(`ECHEC: chronique vague ${wave} invalide (lignes=${report.chronicle.lines.length}, badges=${report.chronicle.badges.length}).`);
+    process.exit(1);
+  }
+
+  if (report.chronicle.hasSurvivors !== (report.adventurersEscaped > 0)) {
+    console.error(`ECHEC: chronique vague ${wave} incoherente avec les survivants (${report.adventurersEscaped}).`);
     process.exit(1);
   }
 
