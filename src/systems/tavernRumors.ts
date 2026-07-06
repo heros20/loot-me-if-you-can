@@ -35,7 +35,7 @@ export function generateTavernRumor(input: RumorInput): TavernRumor {
     };
   }
 
-  if (input.bossKills >= 2 || input.stats.abilityUses >= 3) {
+  if (input.bossKills >= 2 || input.stats.bossAbilityUses >= 3) {
     return {
       wave: input.wave,
       effect: 'cautionSurge',

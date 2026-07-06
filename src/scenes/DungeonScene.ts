@@ -35,7 +35,7 @@ interface RenderedEntity {
 
 interface RenderedDoor {
   container: Phaser.GameObjects.Container;
-  shape: Phaser.GameObjects.Rectangle;
+  sprite: Phaser.GameObjects.Image;
   label: Phaser.GameObjects.Text;
 }
 
@@ -200,7 +200,7 @@ export class DungeonScene extends Phaser.Scene {
 
   private createBossView(): void {
     const world = cellToWorld(BOSS_CELL);
-    const sprite = this.add.image(0, 0, TEXTURE_KEYS.boss);
+    const sprite = this.add.image(0, 0, TEXTURE_KEYS.boss).setDisplaySize(42, 42);
     const label = this.add
       .text(0, 24, 'BOSS', {
         color: '#fff4d8',
@@ -286,7 +286,9 @@ export class DungeonScene extends Phaser.Scene {
       : cellToWorld(defense.cell);
 
     if (!view) {
-      const sprite = this.add.image(0, 0, TEXTURE_KEYS.defense[defense.type]);
+      const sprite = this.add
+        .image(0, 0, TEXTURE_KEYS.defense[defense.type])
+        .setDisplaySize(defense.kind === 'minion' ? 28 : 24, defense.kind === 'minion' ? 28 : 24);
       const labelText = defense.kind === 'minion' ? shortDisplayName(defense.name, definition.shortName) : definition.shortName;
       const label = this.add
         .text(0, 20, labelText, {
@@ -312,6 +314,14 @@ export class DungeonScene extends Phaser.Scene {
       : cellToWorld(defense.cell);
     view.container.setPosition(currentWorld.x, currentWorld.y);
     view.container.setAlpha(defense.kind === 'trap' && defense.cooldownRemainingMs > 0 ? 0.52 : 1);
+
+    if (defense.abilityFxTimerMs > 0) {
+      view.sprite.setTint(0xf6d88a);
+    } else if (defense.slowedTimerMs > 0) {
+      view.sprite.setTint(0x9fd6ff);
+    } else {
+      view.sprite.clearTint();
+    }
   }
 
   private syncAdventurer(adventurer: AdventurerEntity): void {
@@ -320,7 +330,7 @@ export class DungeonScene extends Phaser.Scene {
     const world = gridPositionToWorld(adventurer.x, adventurer.y);
 
     if (!view) {
-      const sprite = this.add.image(0, 0, TEXTURE_KEYS.adventurer[adventurer.role]);
+      const sprite = this.add.image(0, 0, TEXTURE_KEYS.adventurer[adventurer.role]).setDisplaySize(28, 28);
       const label = this.add
         .text(0, 20, shortDisplayName(adventurer.name, definition.shortName), {
           color: '#fff4d8',
@@ -358,7 +368,13 @@ export class DungeonScene extends Phaser.Scene {
     view.container.setPosition(world.x, world.y);
     view.container.setAlpha(adventurer.stunnedTimerMs > 0 ? 0.55 : 1);
 
-    if (adventurer.fearTimerMs > 0) {
+    if (adventurer.abilityFxTimerMs > 0) {
+      view.sprite.setTint(0xf6d88a);
+    } else if (adventurer.damageReductionTimerMs > 0) {
+      view.sprite.setTint(0xffd37a);
+    } else if (adventurer.slowedTimerMs > 0) {
+      view.sprite.setTint(0x9fd6ff);
+    } else if (adventurer.fearTimerMs > 0) {
       view.sprite.setTint(0x9fb7e8);
     } else {
       view.sprite.clearTint();
@@ -376,9 +392,7 @@ export class DungeonScene extends Phaser.Scene {
     const world = cellToWorld(door.cell);
 
     if (!view) {
-      const shape = this.add
-        .rectangle(0, 0, TILE_SIZE - 8, TILE_SIZE - 8, 0x8a5a34, 1)
-        .setStrokeStyle(2, 0x2c1810, 1);
+      const sprite = this.add.image(0, 0, TEXTURE_KEYS.door).setDisplaySize(TILE_SIZE - 6, TILE_SIZE - 6);
       const label = this.add
         .text(0, 0, 'P', {
           color: '#fff4d8',
@@ -387,8 +401,8 @@ export class DungeonScene extends Phaser.Scene {
           fontFamily: 'monospace',
         })
         .setOrigin(0.5);
-      const container = this.add.container(world.x, world.y, [shape, label]);
-      view = { container, shape, label };
+      const container = this.add.container(world.x, world.y, [sprite, label]);
+      view = { container, sprite, label };
       this.doorViews.set(door.id, view);
     }
 
@@ -401,8 +415,13 @@ export class DungeonScene extends Phaser.Scene {
     this.previousDoorHp.set(door.id, door.pickProgressMs);
     view.container.setPosition(world.x, world.y);
     const picking = door.beingPickedById !== null && !door.openedForExpedition;
-    view.shape.setFillStyle(door.openedForExpedition ? 0x4f6f52 : picking ? 0xb0823a : 0x8a5a34, door.openedForExpedition ? 0.55 : 1);
-    view.shape.setStrokeStyle(2, picking ? 0xe1b35a : 0x2c1810, 1);
+    if (picking) {
+      view.sprite.setTint(0xe1b35a);
+    } else if (door.openedForExpedition) {
+      view.sprite.setTint(0x79c7a1);
+    } else {
+      view.sprite.clearTint();
+    }
     view.label.setText(door.openedForExpedition ? 'O' : picking ? '...' : 'L');
     view.container.setAlpha(door.openedForExpedition ? 0.58 : 1);
   }

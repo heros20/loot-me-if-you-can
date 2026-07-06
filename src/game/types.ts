@@ -20,6 +20,19 @@ export type AdventurerRole = 'warrior' | 'thief' | 'mage' | 'healer';
 export type AdventurerTargetStage = 'treasure' | 'boss' | 'exit';
 export type AdventurerRetreatIntent = 'none' | 'followRetreat' | 'coverRetreat' | 'panicRetreat' | 'disobey';
 
+export type CombatAbilityId =
+  | 'warriorTaunt'
+  | 'thiefTrapMitigation'
+  | 'healerSingleHeal'
+  | 'healerGroupHeal'
+  | 'mageIceShard'
+  | 'mageFrostZone'
+  | 'goblinSneakAttack'
+  | 'skeletonHeavyStrike'
+  | 'slimeStickyGel';
+
+export type CombatAbilityCooldowns = Partial<Record<CombatAbilityId, number>>;
+
 export type ExpeditionPlanType = 'greedy' | 'heroic' | 'cautious' | 'fanatic' | 'mercenary';
 
 export type DefenseAIState = 'idle' | 'patrol' | 'chase' | 'return';
@@ -246,6 +259,11 @@ export interface DefenseEntity {
   hp: number;
   maxHp: number;
   cooldownRemainingMs: number;
+  abilityCooldowns: CombatAbilityCooldowns;
+  abilityFxTimerMs: number;
+  slowedTimerMs: number;
+  tauntedByAdventurerId: string | null;
+  tauntTimerMs: number;
   alive: boolean;
   aiState: DefenseAIState;
   targetAdventurerId: string | null;
@@ -278,6 +296,10 @@ export interface AdventurerEntity {
   attackCooldownMs: number;
   attackTimerMs: number;
   healTimerMs: number;
+  abilityCooldowns: CombatAbilityCooldowns;
+  abilityFxTimerMs: number;
+  damageReductionTimerMs: number;
+  thiefTrapInterventionsRemaining: number;
   trapDamageMultiplier: number;
   injuryPerformanceMultiplier: number;
   speedMultiplier: number;
@@ -323,6 +345,8 @@ export interface BossEntity {
   attackCooldownMs: number;
   attackTimerMs: number;
   targetAdventurerId: string | null;
+  tauntedByAdventurerId: string | null;
+  tauntTimerMs: number;
   abilities: Record<BossAbilityType, BossAbilityState>;
 }
 
@@ -339,6 +363,24 @@ export interface EffectStats {
 
 export type DefenseStatsByType = Partial<Record<DefenseType, EffectStats>>;
 
+export interface CombatAbilityStats {
+  warriorTaunts: number;
+  warriorProtectedDamage: number;
+  thiefTrapMitigations: number;
+  thiefTrapOverwhelmed: number;
+  healerSingleHeals: number;
+  healerGroupHeals: number;
+  healerHealing: number;
+  mageIceShards: number;
+  mageFrostZones: number;
+  mageDamage: number;
+  mageSlows: number;
+  goblinSneakAttacks: number;
+  skeletonHeavyStrikes: number;
+  slimeStickyGels: number;
+  slimeStickyApplications: number;
+}
+
 export interface WaveStats {
   adventurersKilled: number;
   adventurersEscaped: number;
@@ -354,6 +396,8 @@ export interface WaveStats {
   chronicleEvents: ChronicleEntry[];
   treasureStolen: boolean;
   abilityUses: number;
+  bossAbilityUses: number;
+  abilityStats: CombatAbilityStats;
   minionKillsByDefenseId: Record<string, number>;
   doorEncounters: number;
   doorsPicked: number;
@@ -425,6 +469,7 @@ export interface WaveReport {
   bossSurvivalBonusGold: number;
   preparationBudget: number;
   abilityUses: number;
+  bossAbilityUses: number;
   doorsPicked: number;
   doorNoThiefRetreats: number;
   fleeingTrapAvoidances: number;

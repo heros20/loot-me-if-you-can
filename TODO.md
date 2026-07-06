@@ -2,7 +2,7 @@
 
 ## Near Term
 
-- Replace generated placeholders with verified CC0 Kenney assets.
+- Expand Kenney-based asset coverage for ability-specific particles/icons if V1 readability needs more than tint/pulse feedback.
 - Add sound effects and a mute toggle.
 - Add clearer placement previews for trap range and minion attack range.
 - Add visual effects for boss abilities (shockwave ring, roar cone, summon puff).
@@ -15,7 +15,7 @@
 - Add trap upgrades between waves.
 - Add more boss abilities and an ability upgrade path funded by infamy.
 - Add adventurer equipment traits after repeated deaths.
-- Future class abilities pass, not started yet: warrior taunt/protection, thief lockpicking/trap detection polish, healer targeted and group heals, mage offensive ice/slow spell, defensive monster role abilities.
+- Combat Roles & Abilities V0 is in: future work should tune cooldowns/readability only after more playtest data, not add new classes or ability trees yet.
 - Let escaped treasure thieves come back richer and better equipped (bounty pressure).
 - Give named rooms persistent titles based on what happened there.
 - Improve injuries with recovery timers, permanent scars, and visible behavior changes.
@@ -31,7 +31,7 @@
 
 - Add automated browser smoke tests (the headless simulation suite lives in `scripts/`, run with `npm run smoke`).
 - Turn the smoke scripts into deterministic assertions with a proper test runner.
-- Split combat resolution into a dedicated system when the rule set grows.
+- Continue extracting combat resolution if V0 abilities grow beyond the current `combatAbilitySystem` boundary.
 - Add asset loading from a JSON manifest once external art is introduced.
 - Split profile memory, expedition resolution, and report generation into smaller simulation modules if they grow.
 - Doors V1 persistence limit: a picked door opens only for the current expedition, then resets locked between expeditions. It cannot be damaged or destroyed by adventurers, and there is no repair economy because there is no door damage model. Players can still voluntarily remove a placed door during build phase for a partial refund.

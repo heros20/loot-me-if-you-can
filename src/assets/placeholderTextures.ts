@@ -96,6 +96,15 @@ export function createPlaceholderTextures(scene: Phaser.Scene): void {
     graphics.strokeRect(6, 6, 36, 36);
   });
 
+  makeTexture(scene, TEXTURE_KEYS.door, 34, (graphics) => {
+    graphics.fillStyle(0x8a5a34, 1);
+    graphics.fillRoundedRect(5, 3, 24, 28, 3);
+    graphics.lineStyle(2, 0x2c1810, 1);
+    graphics.strokeRoundedRect(5, 3, 24, 28, 3);
+    graphics.fillStyle(0xe1b35a, 1);
+    graphics.fillCircle(23, 17, 2);
+  });
+
   makeTexture(scene, TEXTURE_KEYS.boss, 44, (graphics) => {
     graphics.fillStyle(0x8f2631, 1);
     graphics.fillCircle(22, 24, 16);

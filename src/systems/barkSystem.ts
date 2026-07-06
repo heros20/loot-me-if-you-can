@@ -7,6 +7,7 @@ export type BarkKind =
   | 'doorOpened'
   | 'trapSeen'
   | 'trapThief'
+  | 'trapThiefOverwhelmed'
   | 'fleeTrap'
   | 'wounded'
   | 'retreat'
@@ -15,7 +16,11 @@ export type BarkKind =
   | 'retreatPanic'
   | 'retreatDisobey'
   | 'treasureTaken'
-  | 'bossAbility';
+  | 'bossAbility'
+  | 'warriorTaunt'
+  | 'healerHeal'
+  | 'healerGroupHeal'
+  | 'mageIce';
 
 const BARKS: Record<BarkKind, string[]> = {
   doorThief: ['Laissez-moi faire.', 'Cette serrure ne tiendra pas longtemps.', "Je m'en occupe."],
@@ -23,7 +28,8 @@ const BARKS: Record<BarkKind, string[]> = {
   doorNoThief: ["On n'a personne pour ouvrir ca.", 'Sans voleur, cette porte nous arrete net.', "On reviendra avec quelqu'un capable de l'ouvrir."],
   doorOpened: ['Ouverte.', 'Passage libre.'],
   trapSeen: ['Attendez... le sol est bizarre.', 'Ne marchez pas la-dessus !'],
-  trapThief: ['Je vois le mecanisme.', 'Pas si vite, je peux l affaiblir.'],
+  trapThief: ['Je vois le mecanisme.', 'Pas si vite, je peux l affaiblir.', 'Celui-la, je le vois.'],
+  trapThiefOverwhelmed: ['Trop de mecanismes, je ne pourrai pas tout neutraliser.', 'Plus le temps de desamorcer !'],
   fleeTrap: ['Pas par la, je vais y rester !', 'Autre chemin, tout de suite !'],
   wounded: ['Je ne tiendrai pas longtemps.', 'Soigneur ! Maintenant !'],
   retreat: ['On devrait sortir vivants.', 'La retraite reste une strategie.'],
@@ -33,6 +39,10 @@ const BARKS: Record<BarkKind, string[]> = {
   retreatDisobey: ['Hors de question, on est si proches !', 'Je garde le passage.'],
   treasureTaken: ['On a le butin, partez !', 'Pas question, on finit le boss !'],
   bossAbility: ['Il prepare quelque chose !', 'Le maitre du donjon bouge enfin.'],
+  warriorTaunt: ['Derriere moi !', 'Je les retiens !', 'Touchez-moi plutot !'],
+  healerHeal: ['Tiens bon !', 'Je vous soigne !'],
+  healerGroupHeal: ['Restez groupes !', 'Je vous releve !'],
+  mageIce: ['Le froid les ralentira.', 'Reculez, je lance un sort !'],
 };
 
 const GLOBAL_BARK_COOLDOWN_MS = 9000;

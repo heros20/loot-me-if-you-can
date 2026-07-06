@@ -53,7 +53,7 @@ export function evaluateLocalAdventurerDecision(
   const cautious = context.partyPlan.type === 'cautious' || adventurer.personality === 'cautious' || adventurer.personality === 'traumatized';
   const formationSpeed = computeFormationSpeed(adventurer, context.adventurers);
 
-  if (nearbyDoor && !anyLivingThief) {
+  if (nearbyDoor && !anyLivingThief && adventurer.targetStage !== 'exit') {
     return {
       hesitateMs: 900,
       speedMultiplier: 0.35,

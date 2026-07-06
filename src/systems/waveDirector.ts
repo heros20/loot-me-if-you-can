@@ -1,6 +1,7 @@
 import { ENTRY_CELL, PARTY_SIZE, cellKey } from '../game/constants';
 import type { AdventurerEntity, AdventurerProfile, AdventurerRole, AdaptationMemory } from '../game/types';
 import { getAdventurerDefinition } from '../entities/definitions';
+import { COMBAT_ABILITY_BALANCE } from './combatAbilitySystem';
 
 const ADAPTIVE_ROLE_ORDER: AdventurerRole[] = ['warrior', 'thief', 'mage', 'healer'];
 const BASE_ROLE_SCORE: Record<AdventurerRole, number> = {
@@ -64,6 +65,10 @@ export function createAdventurer(profile: AdventurerProfile, id: string, wave: n
     attackCooldownMs: definition.attackCooldownMs,
     attackTimerMs: 180 + index * 70,
     healTimerMs: definition.healCooldownMs ?? 1000,
+    abilityCooldowns: {},
+    abilityFxTimerMs: 0,
+    damageReductionTimerMs: 0,
+    thiefTrapInterventionsRemaining: role === 'thief' ? COMBAT_ABILITY_BALANCE.thiefTrapInterventionsPerExpedition : 0,
     trapDamageMultiplier: definition.trapDamageMultiplier * (profile.dominantPersonality === 'cautious' ? 0.9 : 1),
     injuryPerformanceMultiplier,
     speedMultiplier: 1,

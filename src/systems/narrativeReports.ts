@@ -43,8 +43,8 @@ export function buildWaveStoryLines(input: BuildWaveStoryInput): string[] {
     lines.push(`Le voleur neutralise ${input.stats.thiefTrapMitigations} piege${input.stats.thiefTrapMitigations > 1 ? 's' : ''} avant le pire.`);
   }
 
-  if (input.stats.abilityUses > 0) {
-    lines.push(`Le boss lance ${input.stats.abilityUses} pouvoir${input.stats.abilityUses > 1 ? 's' : ''} automatiquement.`);
+  if (input.stats.bossAbilityUses > 0) {
+    lines.push(`Le boss lance ${input.stats.bossAbilityUses} pouvoir${input.stats.bossAbilityUses > 1 ? 's' : ''} automatiquement.`);
   }
 
   if (input.stats.disobeys > 0) {

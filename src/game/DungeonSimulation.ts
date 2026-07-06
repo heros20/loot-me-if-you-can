@@ -17,7 +17,6 @@ import {
   summarizeTiles,
 } from './dungeonTiles';
 import type {
-  AdventurerDefinition,
   AdventurerEntity,
   AdventurerRole,
   BossAbilityType,
@@ -53,7 +52,6 @@ import {
   ADVENTURER_ORDER,
   DEFENSE_DEFINITIONS,
   DEFENSE_ORDER,
-  getAdventurerDefinition,
   getDefenseDefinition,
 } from '../entities/definitions';
 import { buildWaveRoster, createAdventurer } from '../systems/waveDirector';
@@ -94,10 +92,15 @@ import {
   tickBossAbilities,
 } from '../systems/bossAbilities';
 import { chooseBossAutopilotAbility } from '../systems/bossAutopilotSystem';
+import { evaluateLocalAdventurerDecision } from '../systems/adventurerDecisionSystem';
 import {
-  evaluateLocalAdventurerDecision,
-  findVisibleTrap,
-} from '../systems/adventurerDecisionSystem';
+  COMBAT_ABILITY_BALANCE,
+  buildCombatAbilityReportLines,
+  createEmptyCombatAbilityStats,
+  tickCombatAbilityCooldowns,
+  tryUseAdventurerAbility,
+  tryUseDefenseAbility,
+} from '../systems/combatAbilitySystem';
 import {
   computeExpeditionEconomy,
   computeDoorRemovalRefund,
@@ -132,6 +135,8 @@ const BOSS_TEMPLATE: Omit<BossEntity, 'hp' | 'attackTimerMs' | 'abilities'> = {
   leashRange: 3.1,
   attackCooldownMs: 760,
   targetAdventurerId: null,
+  tauntedByAdventurerId: null,
+  tauntTimerMs: 0,
 };
 
 const ROOM_TOOL_LABELS: Record<'guardRoom' | 'crypt', string> = {
@@ -314,6 +319,7 @@ export class DungeonSimulation {
     consumeBossAbility(boss, type);
     this.state.bossLastAbilityName = definition.name;
     this.state.runtime.stats.abilityUses += 1;
+    this.state.runtime.stats.bossAbilityUses += 1;
     this.state.runtime.stats.storyEvents.push(`Le boss utilise ${definition.name}.`);
     this.createPartyBark('bossAbility');
     return true;
@@ -503,6 +509,11 @@ export class DungeonSimulation {
       hp: definition.hp ?? 1,
       maxHp: definition.hp ?? 1,
       cooldownRemainingMs: 0,
+      abilityCooldowns: {},
+      abilityFxTimerMs: 0,
+      slowedTimerMs: 0,
+      tauntedByAdventurerId: null,
+      tauntTimerMs: 0,
       alive: true,
       aiState: 'idle',
       targetAdventurerId: null,
@@ -587,9 +598,16 @@ export class DungeonSimulation {
     this.state.treasure = createSecureTreasure();
     this.state.bossAutopilotIntent = 'Attend une ouverture.';
     this.state.bossLastAbilityName = null;
+    this.state.boss.tauntedByAdventurerId = null;
+    this.state.boss.tauntTimerMs = 0;
     resetBossAbilitiesForWave(this.state.boss);
     this.state.defenses.forEach((defense) => {
       defense.cooldownRemainingMs = 0;
+      defense.abilityCooldowns = {};
+      defense.abilityFxTimerMs = 0;
+      defense.slowedTimerMs = 0;
+      defense.tauntedByAdventurerId = null;
+      defense.tauntTimerMs = 0;
     });
     this.state.message = `${this.state.runtime.partyPlan.label}: ${PARTY_SIZE} heros arrivent avec une strategie, ce qui est nouveau et inquietant.`;
   }
@@ -608,6 +626,11 @@ export class DungeonSimulation {
       }
 
       defense.cooldownRemainingMs = 0;
+      defense.abilityCooldowns = {};
+      defense.abilityFxTimerMs = 0;
+      defense.slowedTimerMs = 0;
+      defense.tauntedByAdventurerId = null;
+      defense.tauntTimerMs = 0;
     });
     this.state.doors = repairDoors(this.state.doors);
     this.state.message = 'Nouvelle preparation. Les survivants racontent deja des mensonges tactiques.';
@@ -856,17 +879,32 @@ export class DungeonSimulation {
 
     this.state.defenses.forEach((defense) => {
       defense.cooldownRemainingMs = Math.max(0, defense.cooldownRemainingMs - deltaMs);
+      defense.abilityFxTimerMs = Math.max(0, defense.abilityFxTimerMs - deltaMs);
+      defense.slowedTimerMs = Math.max(0, defense.slowedTimerMs - deltaMs);
+      defense.tauntTimerMs = Math.max(0, defense.tauntTimerMs - deltaMs);
+      tickCombatAbilityCooldowns(defense.abilityCooldowns, deltaMs);
+
+      if (defense.tauntTimerMs === 0) {
+        defense.tauntedByAdventurerId = null;
+      }
     });
 
     this.state.boss.attackTimerMs = Math.max(0, this.state.boss.attackTimerMs - deltaMs);
+    this.state.boss.tauntTimerMs = Math.max(0, this.state.boss.tauntTimerMs - deltaMs);
+    if (this.state.boss.tauntTimerMs === 0) {
+      this.state.boss.tauntedByAdventurerId = null;
+    }
     tickBossAbilities(this.state.boss, deltaMs);
 
     this.state.adventurers.forEach((adventurer) => {
       adventurer.attackTimerMs = Math.max(0, adventurer.attackTimerMs - deltaMs);
       adventurer.healTimerMs = Math.max(0, adventurer.healTimerMs - deltaMs);
+      adventurer.abilityFxTimerMs = Math.max(0, adventurer.abilityFxTimerMs - deltaMs);
+      adventurer.damageReductionTimerMs = Math.max(0, adventurer.damageReductionTimerMs - deltaMs);
       adventurer.stunnedTimerMs = Math.max(0, adventurer.stunnedTimerMs - deltaMs);
       adventurer.hesitationTimerMs = Math.max(0, adventurer.hesitationTimerMs - deltaMs);
       adventurer.retreatIntentTimerMs = Math.max(0, adventurer.retreatIntentTimerMs - deltaMs);
+      tickCombatAbilityCooldowns(adventurer.abilityCooldowns, deltaMs);
       tickAdventurerBarks(adventurer, deltaMs);
 
       if (adventurer.fearTimerMs > 0) {
@@ -923,8 +961,21 @@ export class DungeonSimulation {
         return;
       }
 
+      if (tryUseDefenseAbility(defense, {
+        adventurers: this.state.adventurers,
+        doors: this.state.doors,
+        stats: runtime.stats,
+        damageAdventurer: (target, damage, source) => this.damageAdventurer(target, damage, 'minion', source.type, source.cell, source),
+        message: (text) => {
+          this.state.message = text;
+        },
+      })) {
+        runtime.stats.combatEngagementMs += deltaMs;
+        return;
+      }
+
       const definition = getDefenseDefinition(defense.type);
-      const target = this.findNearestAdventurer(defense.x, defense.y, definition.attackRange ?? 1);
+      const target = this.findNearestAdventurer(defense.x, defense.y, definition.attackRange ?? 1, defense.tauntedByAdventurerId);
 
       if (!target) {
         return;
@@ -956,7 +1007,6 @@ export class DungeonSimulation {
         continue;
       }
 
-      const definition = getAdventurerDefinition(adventurer.role);
       this.maybeStartRetreat(adventurer);
 
       if (adventurer.hesitationTimerMs > 0) {
@@ -974,9 +1024,7 @@ export class DungeonSimulation {
         continue;
       }
 
-      const healed = this.tryHeal(adventurer, definition);
-
-      if (healed) {
+      if (this.tryUseCombatAbility(adventurer)) {
         continue;
       }
 
@@ -1005,34 +1053,6 @@ export class DungeonSimulation {
 
       this.moveAdventurer(adventurer, deltaMs);
     }
-  }
-
-  private tryHeal(adventurer: AdventurerEntity, definition: AdventurerDefinition): boolean {
-    const healAmount = definition.healAmount;
-    const healRange = definition.healRange;
-
-    if (adventurer.role !== 'healer' || adventurer.healTimerMs > 0 || !healAmount || !healRange) {
-      return false;
-    }
-
-    const target = this.state.adventurers
-      .filter((candidate) => candidate.alive && candidate.hp < candidate.maxHp)
-      .sort((a, b) => a.hp / a.maxHp - b.hp / b.maxHp)
-      .find((candidate) => distance(adventurer.x, adventurer.y, candidate.x, candidate.y) <= healRange);
-
-    if (!target) {
-      return false;
-    }
-
-    const healed = Math.min(healAmount, target.maxHp - target.hp);
-    target.hp += healed;
-    adventurer.healTimerMs = definition.healCooldownMs ?? 1200;
-
-    if (this.state.runtime) {
-      this.state.runtime.stats.healingDone += healed;
-    }
-
-    return true;
   }
 
   private moveAdventurer(adventurer: AdventurerEntity, deltaMs: number): void {
@@ -1395,8 +1415,16 @@ export class DungeonSimulation {
       return 0;
     }
 
-    const actualDamage = Math.min(adventurer.hp, damage);
+    const reduction = adventurer.damageReductionTimerMs > 0
+      ? Math.max(0, Math.round(damage * COMBAT_ABILITY_BALANCE.warriorDamageReduction))
+      : 0;
+    const mitigatedDamage = Math.max(0, damage - reduction);
+    const actualDamage = Math.min(adventurer.hp, mitigatedDamage);
     adventurer.hp -= actualDamage;
+
+    if (reduction > 0) {
+      this.state.runtime.stats.abilityStats.warriorProtectedDamage += Math.min(damage, reduction);
+    }
 
     if (source === 'trap' && sourceType) {
       recordStats(this.state.runtime.stats.trapStats, sourceType, actualDamage, 0);
@@ -1669,6 +1697,7 @@ export class DungeonSimulation {
       bossSurvivalBonusGold,
       preparationBudget,
       abilityUses: runtime.stats.abilityUses,
+      bossAbilityUses: runtime.stats.bossAbilityUses,
       doorsPicked: runtime.stats.doorsPicked,
       doorNoThiefRetreats: runtime.stats.doorNoThiefRetreats,
       fleeingTrapAvoidances: runtime.stats.fleeingTrapAvoidances,
@@ -1787,6 +1816,8 @@ export class DungeonSimulation {
     } else if (runtime.stats.doorsPicked > 0) {
       lines.push(`Crochetage observe: ${runtime.stats.doorsPicked} porte${runtime.stats.doorsPicked > 1 ? 's' : ''} verrouillee${runtime.stats.doorsPicked > 1 ? 's' : ''} ouverte${runtime.stats.doorsPicked > 1 ? 's' : ''}.`);
     }
+
+    lines.push(...buildCombatAbilityReportLines(runtime.stats));
 
     lines.push(
       runtime.stats.treasureStolen
@@ -1966,14 +1997,14 @@ export class DungeonSimulation {
   }
 
   private updateMonsterMovement(deltaMs: number): void {
-    const result = updateMonsterAI(this.state.defenses, this.state.adventurers, deltaMs, this.entityMovementGuard());
+    const result = updateMonsterAI(this.state.defenses, this.state.adventurers, deltaMs, this.monsterMovementGuard());
     const slowedIds = new Set(result.slowedAdventurerIds);
 
     this.state.adventurers.forEach((adventurer) => {
       adventurer.slowedTimerMs = Math.max(0, adventurer.slowedTimerMs - deltaMs);
 
       if (slowedIds.has(adventurer.id)) {
-        adventurer.slowedTimerMs = 620;
+        adventurer.slowedTimerMs = Math.max(adventurer.slowedTimerMs, 620);
       }
 
       adventurer.speedMultiplier = adventurer.slowedTimerMs > 0 ? 0.58 : 1;
@@ -2038,6 +2069,61 @@ export class DungeonSimulation {
     };
   }
 
+  private monsterMovementGuard(): {
+    canMoveBetween: (fromX: number, fromY: number, toX: number, toY: number) => boolean;
+    getNextWaypoint: (fromX: number, fromY: number, targetX: number, targetY: number) => GridCell | null;
+  } {
+    return {
+      canMoveBetween: (fromX, fromY, toX, toY) =>
+        canEntityMoveBetween(this.state.tiles, fromX, fromY, toX, toY) &&
+        !this.closedDoorBlocksMovementBetween(fromX, fromY, toX, toY),
+      getNextWaypoint: (fromX, fromY, targetX, targetY) => {
+        const start = { x: Math.round(fromX), y: Math.round(fromY) };
+        const goal = { x: Math.round(targetX), y: Math.round(targetY) };
+
+        if (isSameCell(start, goal)) {
+          return goal;
+        }
+
+        return findPath(start, goal, {
+          role: 'warrior',
+          trapAvoidance: 0,
+          trapDangerByCell: {},
+          knownTrapCells: new Set(),
+          blockedCellKeys: new Set([...getBlockedCellKeys(this.state.tiles), ...this.getClosedDoorCellKeys()]),
+        })[0] ?? null;
+      },
+    };
+  }
+
+  private closedDoorBlocksMovementBetween(fromX: number, fromY: number, toX: number, toY: number): boolean {
+    const closedDoorKeys = this.getClosedDoorCellKeys();
+    const travelDistance = Math.hypot(toX - fromX, toY - fromY);
+    const steps = Math.max(1, Math.ceil(travelDistance / 0.2));
+
+    for (let index = 1; index <= steps; index += 1) {
+      const ratio = index / steps;
+      const cell = {
+        x: Math.round(fromX + (toX - fromX) * ratio),
+        y: Math.round(fromY + (toY - fromY) * ratio),
+      };
+
+      if (closedDoorKeys.has(cellKey(cell))) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private getClosedDoorCellKeys(): Set<string> {
+    return new Set(
+      this.state.doors
+        .filter((door) => !door.destroyed && !door.openedForExpedition)
+        .map((door) => cellKey(door.cell)),
+    );
+  }
+
   private describeSurvival(adventurer: AdventurerEntity, injured: boolean): string {
     const profile = this.state.world.profiles[adventurer.profileId];
     const expeditionCount = profile?.expeditionCount ?? 1;
@@ -2048,6 +2134,53 @@ export class DungeonSimulation {
     }
 
     return `${adventurer.name} survit a sa ${expeditionLabel}. C'est exactement comme ca que naissent les problemes recurrents.`;
+  }
+
+  private tryUseCombatAbility(adventurer: AdventurerEntity): boolean {
+    const runtime = this.state.runtime;
+
+    if (!runtime) {
+      return false;
+    }
+
+    return tryUseAdventurerAbility(adventurer, {
+      adventurers: this.state.adventurers,
+      defenses: this.state.defenses,
+      boss: this.state.boss,
+      doors: this.state.doors,
+      stats: runtime.stats,
+      elapsedMs: runtime.elapsedMs,
+      damageMinion: (target, damage, attacker) => this.damageMinion(target, damage, attacker),
+      damageBoss: (damage, attacker) => this.damageBoss(damage, attacker),
+      healAdventurer: (target, amount) => this.healAdventurer(target, amount),
+      suppressTrap: (trap, durationMs) => {
+        trap.cooldownRemainingMs = Math.max(trap.cooldownRemainingMs, durationMs);
+        trap.abilityFxTimerMs = COMBAT_ABILITY_BALANCE.abilityFxMs;
+      },
+      bark: (target, kind) => {
+        tryBark(target, kind, this.visibleBarkCount());
+      },
+      message: (text) => {
+        this.state.message = text;
+      },
+      rememberTrap: (cell, danger) => {
+        this.state.memory.trapDangerByCell[cellKey(cell)] = Math.max(
+          this.state.memory.trapDangerByCell[cellKey(cell)] ?? 0,
+          danger,
+        );
+      },
+    });
+  }
+
+  private healAdventurer(target: AdventurerEntity, amount: number): number {
+    if (!target.alive || target.escaped) {
+      return 0;
+    }
+
+    const healed = Math.min(amount, target.maxHp - target.hp);
+    target.hp += healed;
+    target.abilityFxTimerMs = Math.max(target.abilityFxTimerMs, COMBAT_ABILITY_BALANCE.abilityFxMs);
+    return healed;
   }
 
   private applyLocalDecision(adventurer: AdventurerEntity): void {
@@ -2068,10 +2201,6 @@ export class DungeonSimulation {
 
     if (decision.bark) {
       tryBark(adventurer, decision.bark, this.visibleBarkCount());
-    }
-
-    if (adventurer.role === 'thief') {
-      this.tryThiefMitigateTrap(adventurer);
     }
 
     if (decision.forceExit && decision.bark === 'doorNoThief') {
@@ -2097,28 +2226,6 @@ export class DungeonSimulation {
       adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, decision.hesitateMs);
       this.state.runtime.stats.tacticalHesitations += 1;
     }
-  }
-
-  private tryThiefMitigateTrap(adventurer: AdventurerEntity): void {
-    if (!this.state.runtime || adventurer.attackTimerMs > 0) {
-      return;
-    }
-
-    const trap = findVisibleTrap(adventurer, this.state.defenses);
-
-    if (!trap || trap.cooldownRemainingMs > 0) {
-      return;
-    }
-
-    trap.cooldownRemainingMs = 3600;
-    adventurer.attackTimerMs = Math.max(adventurer.attackTimerMs, Math.round(adventurer.attackCooldownMs * 0.75));
-    this.state.runtime.stats.thiefTrapMitigations += 1;
-    this.state.runtime.stats.storyEvents.push(`${adventurer.name} neutralise une partie du ${getDefenseDefinition(trap.type).name}.`);
-    this.state.memory.trapDangerByCell[cellKey(trap.cell)] = Math.max(
-      this.state.memory.trapDangerByCell[cellKey(trap.cell)] ?? 0,
-      0.35,
-    );
-    tryBark(adventurer, 'trapThief', this.visibleBarkCount());
   }
 
   private createPartyBark(kind: 'bossAbility' | 'treasureTaken'): void {
@@ -2224,9 +2331,15 @@ export class DungeonSimulation {
     this.state.defenses = this.state.defenses.filter((defense) => defense.kind === 'trap' || defense.alive);
   }
 
-  private findNearestAdventurer(x: number, y: number, maxRange: number): AdventurerEntity | null {
-    return this.state.adventurers
-      .filter((adventurer) => adventurer.alive)
+  private findNearestAdventurer(x: number, y: number, maxRange: number, preferredId: string | null = null): AdventurerEntity | null {
+    const alive = this.state.adventurers.filter((adventurer) => adventurer.alive && !adventurer.escaped);
+    const preferred = preferredId ? alive.find((adventurer) => adventurer.id === preferredId) ?? null : null;
+
+    if (preferred && distance(x, y, preferred.x, preferred.y) <= maxRange + 0.8) {
+      return preferred;
+    }
+
+    return alive
       .map((adventurer) => ({
         adventurer,
         distance: distance(x, y, adventurer.x, adventurer.y),
@@ -2310,6 +2423,8 @@ function createEmptyWaveStats(): WaveStats {
     chronicleEvents: [],
     treasureStolen: false,
     abilityUses: 0,
+    bossAbilityUses: 0,
+    abilityStats: createEmptyCombatAbilityStats(),
     minionKillsByDefenseId: {},
     doorEncounters: 0,
     doorsPicked: 0,

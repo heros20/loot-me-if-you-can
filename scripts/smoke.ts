@@ -1,8 +1,164 @@
 /* Test de fumee headless: simule plusieurs vagues avec pieges, sbires et capacites du boss. */
 import { DIG_COST, DOOR_COST, PARTY_SIZE, STARTING_GOLD } from '../src/game/constants';
 import { DungeonSimulation } from '../src/game/DungeonSimulation';
+import {
+  COMBAT_ABILITY_BALANCE,
+  createEmptyCombatAbilityStats,
+  tryUseAdventurerAbility,
+  tryUseDefenseAbility,
+} from '../src/systems/combatAbilitySystem';
 import { computeDoorRemovalRefund } from '../src/systems/economyBalance';
-import type { GridCell } from '../src/game/types';
+import { updateMonsterAI } from '../src/systems/monsterAISystem';
+import type {
+  AdventurerEntity,
+  AdventurerRole,
+  BossEntity,
+  DefenseEntity,
+  DefenseType,
+  GridCell,
+  WaveStats,
+} from '../src/game/types';
+
+function createSmokeStats(): WaveStats {
+  return {
+    adventurersKilled: 0,
+    adventurersEscaped: 0,
+    bossDamageTaken: 0,
+    healingDone: 0,
+    combatEngagementMs: 0,
+    trapStats: {},
+    minionStats: {},
+    deaths: [],
+    survivors: [],
+    bossDamageByProfile: {},
+    storyEvents: [],
+    chronicleEvents: [],
+    treasureStolen: false,
+    abilityUses: 0,
+    bossAbilityUses: 0,
+    abilityStats: createEmptyCombatAbilityStats(),
+    minionKillsByDefenseId: {},
+    doorEncounters: 0,
+    doorsPicked: 0,
+    doorNoThiefRetreats: 0,
+    fleeingTrapAvoidances: 0,
+    groupRetreats: 0,
+    coverRetreats: 0,
+    panicRetreats: 0,
+    disobeys: 0,
+    tacticalHesitations: 0,
+    thiefTrapMitigations: 0,
+    thiefDoorLeads: 0,
+  };
+}
+
+function createSmokeAdventurer(role: AdventurerRole, id: string, x: number, y: number): AdventurerEntity {
+  return {
+    id,
+    profileId: `${id}-profile`,
+    role,
+    name: id,
+    level: 1,
+    personality: 'cautious',
+    traits: [],
+    nemesisDefenseType: null,
+    x,
+    y,
+    hp: role === 'warrior' ? 72 : 40,
+    maxHp: role === 'warrior' ? 72 : 40,
+    damage: role === 'mage' ? 13 : 6,
+    speed: 0.002,
+    attackRange: role === 'mage' ? 2.55 : 1.1,
+    attackCooldownMs: 800,
+    attackTimerMs: 0,
+    healTimerMs: 0,
+    abilityCooldowns: {},
+    abilityFxTimerMs: 0,
+    damageReductionTimerMs: 0,
+    thiefTrapInterventionsRemaining: role === 'thief' ? COMBAT_ABILITY_BALANCE.thiefTrapInterventionsPerExpedition : 0,
+    trapDamageMultiplier: role === 'thief' ? 0.48 : 1,
+    injuryPerformanceMultiplier: 1,
+    speedMultiplier: 1,
+    slowedTimerMs: 0,
+    targetStage: 'treasure',
+    path: [],
+    lastCellKey: '0,0',
+    alive: true,
+    escaped: false,
+    hasEnteredDungeon: true,
+    carryingTreasure: false,
+    stunnedTimerMs: 0,
+    fearTimerMs: 0,
+    fearPreviousStage: null,
+    retreatIntent: 'none',
+    retreatIntentTimerMs: 0,
+    hesitationTimerMs: 0,
+    decisionSpeedMultiplier: 1,
+    barkText: null,
+    barkTimerMs: 0,
+    barkCooldownMs: 0,
+    lastBarkKey: null,
+    lastAvoidedTrapKey: null,
+    isHeir: false,
+  };
+}
+
+function createSmokeDefense(type: DefenseType, id: string, x: number, y: number): DefenseEntity {
+  const kind = type === 'spikeTrap' || type === 'fireTrap' ? 'trap' : 'minion';
+  return {
+    id,
+    type,
+    kind,
+    name: id,
+    cell: { x: Math.round(x), y: Math.round(y) },
+    homeCell: { x: Math.round(x), y: Math.round(y) },
+    x,
+    y,
+    hp: 40,
+    maxHp: 40,
+    cooldownRemainingMs: 0,
+    abilityCooldowns: {},
+    abilityFxTimerMs: 0,
+    slowedTimerMs: 0,
+    tauntedByAdventurerId: null,
+    tauntTimerMs: 0,
+    alive: true,
+    aiState: 'idle',
+    targetAdventurerId: null,
+    patrolAngle: 0,
+    chaseTimerMs: 0,
+    stuckTimerMs: 0,
+    lastX: x,
+    lastY: y,
+    kills: 0,
+    wavesSurvived: 0,
+    summoned: false,
+  };
+}
+
+function createSmokeBoss(): BossEntity {
+  return {
+    homeCell: { x: 20, y: 8 },
+    x: 20,
+    y: 8,
+    hp: 340,
+    maxHp: 340,
+    damage: 16,
+    attackRange: 1.25,
+    detectionRange: 3.2,
+    leashRange: 5,
+    attackCooldownMs: 760,
+    attackTimerMs: 0,
+    targetAdventurerId: null,
+    tauntedByAdventurerId: null,
+    tauntTimerMs: 0,
+    abilities: {
+      shockwave: { type: 'shockwave', cooldownRemainingMs: 0, usesThisWave: 0 },
+      roar: { type: 'roar', cooldownRemainingMs: 0, usesThisWave: 0 },
+      summon: { type: 'summon', cooldownRemainingMs: 0, usesThisWave: 0 },
+    },
+  };
+}
 
 function validateDiggingRules(): void {
   const digSim = new DungeonSimulation();
@@ -279,6 +435,319 @@ function validateDoorNoThiefRetreat(): void {
   process.exit(1);
 }
 
+function validateDefensiveUnitsRespectClosedDoors(): void {
+  const goblin = createSmokeDefense('goblin', 'door-goblin', 9, 4);
+  const target = createSmokeAdventurer('mage', 'door-target', 11, 4);
+  const closedDoorCell = { x: 10, y: 4 };
+  const closedDoorKey = `${closedDoorCell.x},${closedDoorCell.y}`;
+  const closedMovement = {
+    canMoveBetween: (_fromX: number, _fromY: number, toX: number, toY: number) =>
+      `${Math.round(toX)},${Math.round(toY)}` !== closedDoorKey,
+    getNextWaypoint: () => null,
+  };
+
+  for (let elapsed = 0; elapsed < 2200; elapsed += 100) {
+    updateMonsterAI([goblin], [target], 100, closedMovement);
+  }
+
+  if (goblin.x >= 9.55) {
+    console.error('ECHEC: un gobelin ne devrait pas traverser une porte fermee.');
+    process.exit(1);
+  }
+
+  const openedDoorGoblin = createSmokeDefense('goblin', 'open-door-goblin', 9, 4);
+  const openMovement = {
+    canMoveBetween: () => true,
+    getNextWaypoint: (_fromX: number, _fromY: number, targetX: number, targetY: number) => ({ x: targetX, y: targetY }),
+  };
+
+  for (let elapsed = 0; elapsed < 1500; elapsed += 100) {
+    updateMonsterAI([openedDoorGoblin], [target], 100, openMovement);
+  }
+
+  if (openedDoorGoblin.x <= 10) {
+    console.error('ECHEC: un gobelin devrait pouvoir passer quand la porte est ouverte.');
+    process.exit(1);
+  }
+}
+
+function validateCombatAbilityRules(): void {
+  const warrior = createSmokeAdventurer('warrior', 'warrior', 4, 4);
+  const healer = createSmokeAdventurer('healer', 'healer', 4.7, 4);
+  healer.hp = 20;
+  const skeletonThreat = createSmokeDefense('skeleton', 'skeleton-threat', 5.1, 4);
+  const warriorStats = createSmokeStats();
+  const warriorUsed = tryUseAdventurerAbility(warrior, {
+    adventurers: [warrior, healer],
+    defenses: [skeletonThreat],
+    boss: createSmokeBoss(),
+    doors: [],
+    stats: warriorStats,
+    elapsedMs: 0,
+    damageMinion: (target, damage) => {
+      target.hp -= damage;
+    },
+    damageBoss: () => undefined,
+    healAdventurer: (target, amount) => {
+      const healed = Math.min(amount, target.maxHp - target.hp);
+      target.hp += healed;
+      return healed;
+    },
+    suppressTrap: (trap, durationMs) => {
+      trap.cooldownRemainingMs = durationMs;
+    },
+    bark: () => undefined,
+    message: () => undefined,
+    rememberTrap: () => undefined,
+  });
+
+  if (!warriorUsed || warriorStats.abilityStats.warriorTaunts !== 1 || skeletonThreat.tauntedByAdventurerId !== warrior.id) {
+    console.error('ECHEC: le guerrier devrait pouvoir provoquer une menace proche pour proteger un allie fragile.');
+    process.exit(1);
+  }
+
+  const thief = createSmokeAdventurer('thief', 'thief', 2, 2);
+  thief.path = [{ x: 3, y: 2 }];
+  const trap = createSmokeDefense('spikeTrap', 'trap-visible', 3, 2);
+  const thiefStats = createSmokeStats();
+  const thiefUsed = tryUseAdventurerAbility(thief, {
+    adventurers: [thief],
+    defenses: [trap],
+    boss: createSmokeBoss(),
+    doors: [],
+    stats: thiefStats,
+    elapsedMs: 0,
+    damageMinion: () => undefined,
+    damageBoss: () => undefined,
+    healAdventurer: () => 0,
+    suppressTrap: (target, durationMs) => {
+      target.cooldownRemainingMs = durationMs;
+    },
+    bark: () => undefined,
+    message: () => undefined,
+    rememberTrap: () => undefined,
+  });
+
+  if (!thiefUsed || thiefStats.abilityStats.thiefTrapMitigations !== 1 || trap.cooldownRemainingMs < COMBAT_ABILITY_BALANCE.thiefTrapSuppressionMs) {
+    console.error('ECHEC: le voleur devrait conserver son role de mitigation de piege.');
+    process.exit(1);
+  }
+
+  thief.abilityCooldowns.thiefTrapMitigation = 0;
+  trap.cooldownRemainingMs = 0;
+  const thiefSecondUse = tryUseAdventurerAbility(thief, {
+    adventurers: [thief],
+    defenses: [trap],
+    boss: createSmokeBoss(),
+    doors: [],
+    stats: thiefStats,
+    elapsedMs: 0,
+    damageMinion: () => undefined,
+    damageBoss: () => undefined,
+    healAdventurer: () => 0,
+    suppressTrap: (target, durationMs) => {
+      target.cooldownRemainingMs = durationMs;
+    },
+    bark: () => undefined,
+    message: () => undefined,
+    rememberTrap: () => undefined,
+  });
+  thief.abilityCooldowns.thiefTrapMitigation = 0;
+  trap.cooldownRemainingMs = 0;
+  const thiefThirdUse = tryUseAdventurerAbility(thief, {
+    adventurers: [thief],
+    defenses: [trap],
+    boss: createSmokeBoss(),
+    doors: [],
+    stats: thiefStats,
+    elapsedMs: 0,
+    damageMinion: () => undefined,
+    damageBoss: () => undefined,
+    healAdventurer: () => 0,
+    suppressTrap: (target, durationMs) => {
+      target.cooldownRemainingMs = durationMs;
+    },
+    bark: () => undefined,
+    message: () => undefined,
+    rememberTrap: () => undefined,
+  });
+
+  if (!thiefSecondUse || thiefThirdUse || thiefStats.abilityStats.thiefTrapMitigations !== 2 || thiefStats.abilityStats.thiefTrapOverwhelmed !== 1) {
+    console.error('ECHEC: le voleur devrait etre limite a deux mitigations de piege par expedition.');
+    process.exit(1);
+  }
+
+  const groupHealer = createSmokeAdventurer('healer', 'group-healer', 5, 5);
+  const woundedA = createSmokeAdventurer('warrior', 'wounded-a', 5.4, 5);
+  const woundedB = createSmokeAdventurer('mage', 'wounded-b', 4.8, 5.3);
+  const woundedC = createSmokeAdventurer('thief', 'wounded-c', 5.1, 4.7);
+  [woundedA, woundedB, woundedC].forEach((ally) => {
+    ally.hp = Math.floor(ally.maxHp * 0.45);
+  });
+  const healerStats = createSmokeStats();
+  const healerUsed = tryUseAdventurerAbility(groupHealer, {
+    adventurers: [groupHealer, woundedA, woundedB, woundedC],
+    defenses: [],
+    boss: createSmokeBoss(),
+    doors: [],
+    stats: healerStats,
+    elapsedMs: 0,
+    damageMinion: () => undefined,
+    damageBoss: () => undefined,
+    healAdventurer: (target, amount) => {
+      const healed = Math.min(amount, target.maxHp - target.hp);
+      target.hp += healed;
+      return healed;
+    },
+    suppressTrap: () => undefined,
+    bark: () => undefined,
+    message: () => undefined,
+    rememberTrap: () => undefined,
+  });
+
+  if (!healerUsed || healerStats.abilityStats.healerGroupHeals !== 1 || healerStats.abilityStats.healerHealing <= 0) {
+    console.error('ECHEC: le soigneur devrait pouvoir lancer un soin de groupe leger sur plusieurs blesses.');
+    process.exit(1);
+  }
+
+  const singleHealer = createSmokeAdventurer('healer', 'single-healer', 5, 5);
+  const woundedSingle = createSmokeAdventurer('mage', 'wounded-single', 5.3, 5);
+  woundedSingle.hp = 12;
+  const singleStats = createSmokeStats();
+  const singleHealUsed = tryUseAdventurerAbility(singleHealer, {
+    adventurers: [singleHealer, woundedSingle],
+    defenses: [],
+    boss: createSmokeBoss(),
+    doors: [],
+    stats: singleStats,
+    elapsedMs: 0,
+    damageMinion: () => undefined,
+    damageBoss: () => undefined,
+    healAdventurer: (target, amount) => {
+      const healed = Math.min(amount, target.maxHp - target.hp);
+      target.hp += healed;
+      return healed;
+    },
+    suppressTrap: () => undefined,
+    bark: () => undefined,
+    message: () => undefined,
+    rememberTrap: () => undefined,
+  });
+
+  if (!singleHealUsed || singleStats.abilityStats.healerSingleHeals !== 1) {
+    console.error('ECHEC: le soigneur devrait pouvoir lancer un soin cible.');
+    process.exit(1);
+  }
+
+  const mage = createSmokeAdventurer('mage', 'mage', 8, 8);
+  const goblinA = createSmokeDefense('goblin', 'goblin-a', 8.8, 8);
+  const goblinB = createSmokeDefense('goblin', 'goblin-b', 9.2, 8.2);
+  const mageStats = createSmokeStats();
+  const mageUsed = tryUseAdventurerAbility(mage, {
+    adventurers: [mage],
+    defenses: [goblinA, goblinB],
+    boss: createSmokeBoss(),
+    doors: [],
+    stats: mageStats,
+    elapsedMs: 0,
+    damageMinion: (target, damage) => {
+      target.hp -= damage;
+    },
+    damageBoss: () => undefined,
+    healAdventurer: () => 0,
+    suppressTrap: () => undefined,
+    bark: () => undefined,
+    message: () => undefined,
+    rememberTrap: () => undefined,
+  });
+
+  if (!mageUsed || mageStats.abilityStats.mageFrostZones !== 1 || goblinA.slowedTimerMs <= 0 || goblinB.slowedTimerMs <= 0) {
+    console.error('ECHEC: le mage devrait pouvoir ralentir plusieurs monstres proches.');
+    process.exit(1);
+  }
+
+  const iceMage = createSmokeAdventurer('mage', 'ice-mage', 8, 8);
+  const loneSlime = createSmokeDefense('slime', 'lone-slime', 8.8, 8);
+  const iceStats = createSmokeStats();
+  const iceUsed = tryUseAdventurerAbility(iceMage, {
+    adventurers: [iceMage],
+    defenses: [loneSlime],
+    boss: createSmokeBoss(),
+    doors: [],
+    stats: iceStats,
+    elapsedMs: 0,
+    damageMinion: (target, damage) => {
+      target.hp -= damage;
+    },
+    damageBoss: () => undefined,
+    healAdventurer: () => 0,
+    suppressTrap: () => undefined,
+    bark: () => undefined,
+    message: () => undefined,
+    rememberTrap: () => undefined,
+  });
+
+  if (!iceUsed || iceStats.abilityStats.mageIceShards !== 1 || loneSlime.slowedTimerMs <= 0) {
+    console.error('ECHEC: le mage devrait pouvoir lancer un eclat de glace sur une cible.');
+    process.exit(1);
+  }
+
+  const slowedTarget = createSmokeAdventurer('warrior', 'slowed-target', 10, 10);
+  slowedTarget.slowedTimerMs = 1200;
+  const goblin = createSmokeDefense('goblin', 'sneaky-goblin', 10.6, 10);
+  const goblinStats = createSmokeStats();
+  const goblinUsed = tryUseDefenseAbility(goblin, {
+    adventurers: [slowedTarget],
+    doors: [],
+    stats: goblinStats,
+    damageAdventurer: (target, damage) => {
+      target.hp -= damage;
+      return damage;
+    },
+    message: () => undefined,
+  });
+
+  if (!goblinUsed || goblinStats.abilityStats.goblinSneakAttacks !== 1) {
+    console.error('ECHEC: le gobelin devrait pouvoir utiliser Coup sournois sur une cible ralentie.');
+    process.exit(1);
+  }
+
+  const heavyTarget = createSmokeAdventurer('warrior', 'heavy-target', 12, 12);
+  const skeleton = createSmokeDefense('skeleton', 'heavy-skeleton', 12.7, 12);
+  const skeletonStats = createSmokeStats();
+  const skeletonUsed = tryUseDefenseAbility(skeleton, {
+    adventurers: [heavyTarget],
+    doors: [],
+    stats: skeletonStats,
+    damageAdventurer: (target, damage) => {
+      target.hp -= damage;
+      return damage;
+    },
+    message: () => undefined,
+  });
+
+  if (!skeletonUsed || skeletonStats.abilityStats.skeletonHeavyStrikes !== 1 || heavyTarget.slowedTimerMs <= 0) {
+    console.error('ECHEC: le squelette devrait pouvoir utiliser un coup lourd ralentissant.');
+    process.exit(1);
+  }
+
+  const stickyTarget = createSmokeAdventurer('thief', 'sticky-target', 14, 14);
+  const slime = createSmokeDefense('slime', 'sticky-slime', 14.8, 14);
+  const slimeStats = createSmokeStats();
+  const slimeUsed = tryUseDefenseAbility(slime, {
+    adventurers: [stickyTarget],
+    doors: [],
+    stats: slimeStats,
+    damageAdventurer: () => 0,
+    message: () => undefined,
+  });
+
+  if (!slimeUsed || slimeStats.abilityStats.slimeStickyGels !== 1 || stickyTarget.slowedTimerMs <= 0) {
+    console.error('ECHEC: le slime devrait pouvoir appliquer Gelee collante.');
+    process.exit(1);
+  }
+}
+
 function validateGoblinChaseRules(): void {
   const goblinSim = new DungeonSimulation();
   goblinSim.startNewGame();
@@ -335,6 +804,8 @@ validateDoorRules();
 validateDoorLockRules();
 validateDoorRemovalRules();
 validateDoorNoThiefRetreat();
+validateDefensiveUnitsRespectClosedDoors();
+validateCombatAbilityRules();
 validateGoblinChaseRules();
 
 const sim = new DungeonSimulation();
@@ -410,7 +881,7 @@ for (let wave = 1; wave <= 6; wave += 1) {
     process.exit(1);
   }
 
-  abilityFired += report.abilityUses;
+  abilityFired += report.bossAbilityUses;
   doorEverPicked ||= report.doorsPicked > 0;
   doorEverRetreatedNoThief ||= report.doorNoThiefRetreats > 0;
 
@@ -463,4 +934,4 @@ if (abilityFired <= 0) {
 }
 
 console.log(`Portes verrouillees: crochetee=${doorEverPicked} retraiteSansVoleur=${doorEverRetreatedNoThief} intactes=${!doorEverLostIntegrity}`);
-console.log(`Capacites automatiques declenchees ${abilityFired} fois. Test termine sans crash.`);
+console.log(`Pouvoirs automatiques du boss declenches ${abilityFired} fois. Test termine sans crash.`);

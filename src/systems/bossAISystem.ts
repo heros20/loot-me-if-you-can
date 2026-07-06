@@ -6,8 +6,16 @@ interface BossMovementOptions {
 }
 
 export function chooseBossTarget(boss: BossEntity, adventurers: AdventurerEntity[]): AdventurerEntity | null {
-  return adventurers
-    .filter((adventurer) => adventurer.alive && !adventurer.escaped)
+  const active = adventurers.filter((adventurer) => adventurer.alive && !adventurer.escaped);
+  const taunter = boss.tauntedByAdventurerId
+    ? active.find((adventurer) => adventurer.id === boss.tauntedByAdventurerId) ?? null
+    : null;
+
+  if (taunter && distance(boss.x, boss.y, taunter.x, taunter.y) <= boss.detectionRange + 0.8) {
+    return taunter;
+  }
+
+  return active
     .map((adventurer) => ({
       adventurer,
       distance: distance(boss.x, boss.y, adventurer.x, adventurer.y),

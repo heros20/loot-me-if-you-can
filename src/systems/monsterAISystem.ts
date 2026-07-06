@@ -138,7 +138,8 @@ function updateChaser(
     minion.aiState = 'chase';
     minion.targetAdventurerId = target.id;
     minion.chaseTimerMs += deltaMs;
-    const moved = moveToward(minion, target.x, target.y, config.speed * deltaMs, movement);
+    const slowMultiplier = minion.slowedTimerMs > 0 ? 0.58 : 1;
+    const moved = moveToward(minion, target.x, target.y, config.speed * slowMultiplier * deltaMs, movement);
     updateStuckState(minion, moved, deltaMs);
     return;
   }
@@ -149,7 +150,8 @@ function updateChaser(
 
   if (homeDistance > 0.18) {
     minion.aiState = 'return';
-    moveToward(minion, minion.homeCell.x, minion.homeCell.y, config.returnSpeed * deltaMs, movement);
+    const slowMultiplier = minion.slowedTimerMs > 0 ? 0.72 : 1;
+    moveToward(minion, minion.homeCell.x, minion.homeCell.y, config.returnSpeed * slowMultiplier * deltaMs, movement);
     return;
   }
 

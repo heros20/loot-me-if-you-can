@@ -2,6 +2,16 @@
 
 ## Unreleased - Direction studio gameplay
 
+- Added Bugfix + Asset Integration V1 without new gameplay systems, Kingdom memory, cartography, Cartographer, new classes, monsters, traps, doors, or abilities.
+- Defensive units now treat closed locked doors as movement blockers while still allowing passage through doors opened for the current expedition.
+- Limited thief trap mitigation to two interventions per thief per expedition, with debrief/bark feedback when the thief is overwhelmed.
+- Integrated selected Kenney Tiny Dungeon CC0 sprites for terrain, rooms, doors, treasure, boss, adventurers, monsters, and trap/object visuals through `src/assets/manifest.ts`, with generated fallbacks retained.
+- Added Combat Roles & Abilities V0 without starting Kingdom memory, cartography, Cartographer, new classes, new monsters, new traps, or new doors.
+- Added `src/systems/combatAbilitySystem.ts` with shared V0 cooldowns, simple automatic ability resolution, report stats, and short tactical debrief lines.
+- Adventurers now have light automatic role abilities: warrior taunt/protection, thief trap mitigation, healer targeted and group heals, and mage ice slow control.
+- Defensive minions now have simple identity abilities: goblin sneak attack, skeleton heavy strike, and slime sticky gel.
+- Added minimal combat feedback through barks and sprite tints for ability pulses, guard, and slows.
+- Added smoke assertions for every V0 adventurer and minion ability while keeping fixed 5-adventurer expeditions, locked doors, no-thief retreat, boss autopilot, and goblin stability covered.
 - Removed dead destructible-door report stats (`doorDamageTotal`, `doorDamageByThief`, `doorsDestroyed`, `doorDestroyedBeforeTreasure`, `doorSalvageGold`) now that doors are locked/picked obstacles.
 - Cleaned door debrief and economy text so reports no longer mention door damage, destroyed doors, or recovered materials from destroyed doors.
 - Added the Expedition Cohesion & Defense AI stabilization pass without starting Kingdom memory, cartography, Cartographer, or full class abilities.

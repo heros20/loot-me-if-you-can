@@ -11,6 +11,7 @@ export const TEXTURE_KEYS = {
   tileEntry: 'tile-entry',
   tileTreasure: 'tile-treasure',
   tileBoss: 'tile-boss',
+  door: 'door-reinforced',
   boss: 'boss-final',
   defense: {
     spikeTrap: 'defense-spike-trap',
@@ -26,3 +27,27 @@ export const TEXTURE_KEYS = {
     healer: 'adventurer-healer',
   } satisfies Record<AdventurerRole, string>,
 } as const;
+
+export const EXTERNAL_TEXTURES: Array<{ key: string; path: string }> = [
+  { key: TEXTURE_KEYS.tileFloor, path: '/assets/vendor/kenney/tiny-dungeon/Tiles/tile_0048.png' },
+  { key: TEXTURE_KEYS.tileRock, path: '/assets/vendor/kenney/tiny-dungeon/Tiles/tile_0041.png' },
+  { key: TEXTURE_KEYS.tileRoom, path: '/assets/vendor/kenney/tiny-dungeon/Tiles/tile_0049.png' },
+  { key: TEXTURE_KEYS.tileGuardRoom, path: '/assets/vendor/kenney/tiny-dungeon/Tiles/tile_0050.png' },
+  { key: TEXTURE_KEYS.tileCrypt, path: '/assets/vendor/kenney/tiny-dungeon/Tiles/tile_0051.png' },
+  { key: TEXTURE_KEYS.tileTreasureRoom, path: '/assets/vendor/kenney/tiny-dungeon/Tiles/tile_0052.png' },
+  { key: TEXTURE_KEYS.tileThroneRoom, path: '/assets/vendor/kenney/tiny-dungeon/Tiles/tile_0053.png' },
+  { key: TEXTURE_KEYS.tileEntry, path: '/assets/vendor/kenney/tiny-dungeon/Tiles/tile_0029.png' },
+  { key: TEXTURE_KEYS.tileTreasure, path: '/assets/vendor/kenney/tiny-dungeon/Tiles/tile_0090.png' },
+  { key: TEXTURE_KEYS.tileBoss, path: '/assets/vendor/kenney/tiny-dungeon/Tiles/tile_0079.png' },
+  { key: TEXTURE_KEYS.door, path: '/assets/vendor/kenney/tiny-dungeon/Tiles/tile_0045.png' },
+  { key: TEXTURE_KEYS.boss, path: '/assets/vendor/kenney/tiny-dungeon/Tiles/tile_0110.png' },
+  { key: TEXTURE_KEYS.defense.spikeTrap, path: '/assets/vendor/kenney/tiny-dungeon/Tiles/tile_0101.png' },
+  { key: TEXTURE_KEYS.defense.fireTrap, path: '/assets/vendor/kenney/tiny-dungeon/Tiles/tile_0029.png' },
+  { key: TEXTURE_KEYS.defense.slime, path: '/assets/vendor/kenney/tiny-dungeon/Tiles/tile_0108.png' },
+  { key: TEXTURE_KEYS.defense.skeleton, path: '/assets/vendor/kenney/tiny-dungeon/Tiles/tile_0096.png' },
+  { key: TEXTURE_KEYS.defense.goblin, path: '/assets/vendor/kenney/tiny-dungeon/Tiles/tile_0111.png' },
+  { key: TEXTURE_KEYS.adventurer.warrior, path: '/assets/vendor/kenney/tiny-dungeon/Tiles/tile_0087.png' },
+  { key: TEXTURE_KEYS.adventurer.thief, path: '/assets/vendor/kenney/tiny-dungeon/Tiles/tile_0097.png' },
+  { key: TEXTURE_KEYS.adventurer.mage, path: '/assets/vendor/kenney/tiny-dungeon/Tiles/tile_0084.png' },
+  { key: TEXTURE_KEYS.adventurer.healer, path: '/assets/vendor/kenney/tiny-dungeon/Tiles/tile_0085.png' },
+];

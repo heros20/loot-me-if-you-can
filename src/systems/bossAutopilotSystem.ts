@@ -28,6 +28,7 @@ export function chooseBossAutopilotAbility(
   const nearBoss = active.filter((adventurer) => distance(boss.x, boss.y, adventurer.x, adventurer.y) <= boss.detectionRange + 0.4);
   const carrier = active.find((adventurer) => adventurer.carryingTreasure || adventurer.targetStage === 'exit') ?? null;
   const healerNear = nearBoss.find((adventurer) => adventurer.role === 'healer') ?? null;
+  const slowedNear = nearBoss.find((adventurer) => adventurer.slowedTimerMs > 0) ?? null;
   const clustered = countClusteredAdventurers(boss, active, BOSS_ABILITY_DEFINITIONS.shockwave.radius);
   const doorPressure = context.doors.some((door) => !door.destroyed && !door.openedForExpedition && door.beingPickedById !== null && active.some(
     (adventurer) => distance(adventurer.x, adventurer.y, door.cell.x, door.cell.y) <= 1.6,
@@ -38,10 +39,16 @@ export function chooseBossAutopilotAbility(
     return { ability: 'roar', intent: 'Intercepter un porteur ou une fuite.' };
   }
 
-  if (canUseBossAbility(boss, 'shockwave') && (clustered >= 2 || healerNear || doorPressure)) {
+  if (canUseBossAbility(boss, 'shockwave') && (clustered >= 2 || healerNear || doorPressure || slowedNear)) {
     return {
       ability: 'shockwave',
-      intent: healerNear ? 'Punir le soigneur expose.' : doorPressure ? 'Exploiter le ralentissement d une porte.' : 'Casser un groupe trop serre.',
+      intent: healerNear
+        ? 'Punir le soigneur expose.'
+        : doorPressure
+          ? 'Exploiter le ralentissement d une porte.'
+          : slowedNear
+            ? 'Profiter d un intrus ralenti.'
+            : 'Casser un groupe trop serre.',
     };
   }
 

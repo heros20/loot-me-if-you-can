@@ -1,6 +1,7 @@
 # Runtime Assets
 
-This V0 uses generated placeholder textures from `src/assets/placeholderTextures.ts`.
+This V1 uses selected Kenney Tiny Dungeon CC0 sprites through `src/assets/manifest.ts`.
+Generated placeholder textures from `src/assets/placeholderTextures.ts` are still kept as runtime fallbacks.
 
 Drop future licensed assets here by domain:
 
@@ -10,4 +11,4 @@ Drop future licensed assets here by domain:
 - `fx/`
 - `audio/`
 
-When replacing placeholders, update `src/assets/manifest.ts` and keep `CREDITS.md` plus `ASSET_LICENSES.md` current.
+When replacing or adding assets, update `src/assets/manifest.ts` and keep `CREDITS.md` plus `ASSET_LICENSES.md` current.
