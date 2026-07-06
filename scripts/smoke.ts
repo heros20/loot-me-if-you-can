@@ -15,7 +15,12 @@ import {
   isInEntrySafeZone,
 } from '../src/game/constants';
 import { DungeonSimulation } from '../src/game/DungeonSimulation';
-import { createInitialDungeonTiles, getBlockedCellKeys, summarizeTiles } from '../src/game/dungeonTiles';
+import {
+  createInitialDungeonTiles,
+  getBlockedCellKeys,
+  getInitialDungeonZones,
+  summarizeTiles,
+} from '../src/game/dungeonTiles';
 import {
   COMBAT_ABILITY_BALANCE,
   createEmptyCombatAbilityStats,
@@ -186,6 +191,33 @@ function createSmokeDefense(type: DefenseType, id: string, x: number, y: number)
   };
 }
 
+function countPathTurns(path: GridCell[], start: GridCell): number {
+  const full = [start, ...path];
+  let turns = 0;
+  let lastDirection: string | null = null;
+
+  for (let index = 1; index < full.length; index += 1) {
+    const dx = full[index].x - full[index - 1].x;
+    const dy = full[index].y - full[index - 1].y;
+    const direction = `${dx},${dy}`;
+
+    if (lastDirection !== null && direction !== lastDirection) {
+      turns += 1;
+    }
+
+    lastDirection = direction;
+  }
+
+  return turns;
+}
+
+function isRoughlyAligned(a: GridCell, b: GridCell, c: GridCell): boolean {
+  // Cross product of (b - a) and (c - a): near zero means the three anchors sit
+  // almost on a single straight line (a de-facto highway), regardless of scale.
+  const cross = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+  return Math.abs(cross) < 8;
+}
+
 function validateInitialDungeonLayoutRules(): void {
   const tiles = createInitialDungeonTiles();
   const summary = summarizeTiles(tiles);
@@ -194,45 +226,73 @@ function validateInitialDungeonLayoutRules(): void {
   const dugRatio = dug / total;
   const rockRatio = summary.rock / total;
   const blockedCellKeys = getBlockedCellKeys(tiles);
-  const entryToTreasurePath = findPath(ENTRY_CELL, TREASURE_CELL, {
-    role: 'warrior',
+  const straightPathOptions = {
+    role: 'warrior' as const,
     trapAvoidance: 0,
     trapDangerByCell: {},
-    knownTrapCells: new Set(),
+    knownTrapCells: new Set<string>(),
     blockedCellKeys,
-  });
-  const treasureToBossPath = findPath(TREASURE_CELL, BOSS_CELL, {
-    role: 'warrior',
-    trapAvoidance: 0,
-    trapDangerByCell: {},
-    knownTrapCells: new Set(),
-    blockedCellKeys,
-  });
+  };
+  const entryToTreasurePath = findPath(ENTRY_CELL, TREASURE_CELL, straightPathOptions);
+  const treasureToBossPath = findPath(TREASURE_CELL, BOSS_CELL, straightPathOptions);
+  const entryToBossPath = findPath(ENTRY_CELL, BOSS_CELL, straightPathOptions);
 
-  if (dugRatio > 0.12 || rockRatio < 0.85) {
-    console.error(`ECHEC: layout initial trop ouvert (dug=${dugRatio.toFixed(3)}, rock=${rockRatio.toFixed(3)}).`);
+  // 1. Dug ratio: a real dungeon (~50%), not a mostly-solid block and not an
+  // open field. See docs/INITIAL_DUNGEON_LAYOUT_V1.md for the rationale.
+  if (dugRatio < 0.4 || dugRatio > 0.6) {
+    console.error(`ECHEC: ratio creuse hors cible 40-60% (dug=${dugRatio.toFixed(3)}, rock=${rockRatio.toFixed(3)}).`);
     process.exit(1);
   }
 
+  // 2. Valid route: entree -> tresor -> boss must stay connected.
   if (!hasWalkablePath(ENTRY_CELL, TREASURE_CELL, blockedCellKeys) || !hasWalkablePath(TREASURE_CELL, BOSS_CELL, blockedCellKeys)) {
     console.error('ECHEC: layout initial devrait garder un chemin entree -> tresor -> boss valide.');
     process.exit(1);
   }
 
-  if (entryToTreasurePath.length < 18 || treasureToBossPath.length < 13) {
+  // 3. Minimum distance: the boss must not be reachable in a handful of steps.
+  if (entryToBossPath.length < 25) {
+    console.error(`ECHEC: chemin entree->boss trop court (${entryToBossPath.length} cases, seuil 25).`);
+    process.exit(1);
+  }
+
+  if (entryToTreasurePath.length < 15 || treasureToBossPath.length < 10) {
     console.error(`ECHEC: chemin initial trop direct (entree->tresor=${entryToTreasurePath.length}, tresor->boss=${treasureToBossPath.length}).`);
     process.exit(1);
   }
 
+  // 4. Turns: the entree -> boss route must wind through the dungeon, not run
+  // straight through it.
+  const entryToBossTurns = countPathTurns(entryToBossPath, ENTRY_CELL);
+  if (entryToBossTurns < 4) {
+    console.error(`ECHEC: chemin entree->boss pas assez sinueux (${entryToBossTurns} virages, seuil 4).`);
+    process.exit(1);
+  }
+
+  // 5. No highway alignment: entry, treasure and boss should not sit on (or
+  // almost on) a single straight line.
+  if (isRoughlyAligned(ENTRY_CELL, TREASURE_CELL, BOSS_CELL)) {
+    console.error('ECHEC: entree, tresor et boss sont quasiment alignes sur une ligne droite.');
+    process.exit(1);
+  }
+
+  // 6. Real rooms: several distinct, sizeable zones instead of one corridor.
+  const zones = getInitialDungeonZones();
+  const usableZones = zones.filter((zone) => zone.cells.length >= 6);
+  if (usableZones.length < 4) {
+    console.error(`ECHEC: pas assez de vraies salles au depart (${usableZones.length} zones utilisables, seuil 4).`);
+    process.exit(1);
+  }
+
+  // 7. Safe zone: treasure and boss anchors must stay outside SAFE_ZONE_RADIUS.
   if (isInEntrySafeZone(TREASURE_CELL) || isInEntrySafeZone(BOSS_CELL)) {
     console.error('ECHEC: tresor et boss initiaux doivent rester hors zone de surete.');
     process.exit(1);
   }
 
-  if (summary.rooms > 12) {
-    console.error(`ECHEC: trop de salles gratuites au depart (${summary.rooms}).`);
-    process.exit(1);
-  }
+  console.log(
+    `Layout initial: dug=${dugRatio.toFixed(3)} rock=${rockRatio.toFixed(3)} entree->boss=${entryToBossPath.length} cases / ${entryToBossTurns} virages / ${usableZones.length} salles.`,
+  );
 }
 
 function createSmokeBoss(): BossEntity {
@@ -265,7 +325,7 @@ function validateDiggingRules(): void {
   const startingGold = digSim.getSnapshot().gold;
 
   digSim.selectConstructionTool('dig');
-  [{ x: 5, y: 7 }, { x: 6, y: 7 }, { x: 7, y: 7 }].forEach((cell) => digSim.placeSelectedDefense(cell));
+  [{ x: 2, y: 11 }, { x: 2, y: 12 }, { x: 2, y: 13 }].forEach((cell) => digSim.placeSelectedDefense(cell));
 
   const afterDigging = digSim.getSnapshot();
 
@@ -275,7 +335,7 @@ function validateDiggingRules(): void {
   }
 
   (digSim as unknown as { state: { gold: number } }).state.gold = 0;
-  digSim.placeSelectedDefense({ x: 8, y: 7 });
+  digSim.placeSelectedDefense({ x: 2, y: 14 });
   const afterInsufficientDig = digSim.getSnapshot();
 
   if (afterInsufficientDig.gold !== 0 || !afterInsufficientDig.message.includes('Il faut')) {
@@ -374,7 +434,7 @@ function validateDoorRules(): void {
   const acceptSim = new DungeonSimulation();
   acceptSim.startNewGame();
   acceptSim.selectConstructionTool('door');
-  acceptSim.placeSelectedDefense({ x: 10, y: 4 });
+  acceptSim.placeSelectedDefense({ x: 10, y: 11 });
   const afterAccept = acceptSim.getSnapshot();
 
   if (afterAccept.gold !== STARTING_GOLD - DOOR_COST || acceptSim.getRenderState().doors.length !== 1) {
@@ -389,7 +449,7 @@ function validateDoorRules(): void {
     process.exit(1);
   }
 
-  acceptSim.placeSelectedDefense({ x: 10, y: 4 });
+  acceptSim.placeSelectedDefense({ x: 10, y: 11 });
 
   if (acceptSim.getRenderState().doors.length !== 1) {
     console.error('ECHEC: une deuxieme porte a ete posee sur une case deja occupee par une porte.');
@@ -397,9 +457,9 @@ function validateDoorRules(): void {
   }
 
   (acceptSim as unknown as { state: { gold: number } }).state.gold = DOOR_COST * 2;
-  [{ x: 11, y: 4 }, { x: 12, y: 4 }].forEach((cell) => acceptSim.placeSelectedDefense(cell));
+  [{ x: 11, y: 11 }, { x: 12, y: 11 }].forEach((cell) => acceptSim.placeSelectedDefense(cell));
   const afterMoreDoors = acceptSim.getSnapshot();
-  acceptSim.placeSelectedDefense({ x: 13, y: 4 });
+  acceptSim.placeSelectedDefense({ x: 13, y: 11 });
   const afterInsufficientGold = acceptSim.getSnapshot();
 
   if (afterInsufficientGold.gold !== afterMoreDoors.gold || acceptSim.getRenderState().doors.length !== 3) {
@@ -427,9 +487,9 @@ function validateDoorRules(): void {
   const trapOverlapSim = new DungeonSimulation();
   trapOverlapSim.startNewGame();
   trapOverlapSim.selectDefense('spikeTrap');
-  trapOverlapSim.placeSelectedDefense({ x: 10, y: 4 });
+  trapOverlapSim.placeSelectedDefense({ x: 10, y: 11 });
   trapOverlapSim.selectConstructionTool('door');
-  trapOverlapSim.placeSelectedDefense({ x: 10, y: 4 });
+  trapOverlapSim.placeSelectedDefense({ x: 10, y: 11 });
 
   if (trapOverlapSim.getRenderState().doors.length !== 0) {
     console.error('ECHEC: une porte a ete posee sur une case deja occupee par un piege.');
@@ -490,7 +550,7 @@ function validateDungeonAnchorRules(): void {
 
   const goldBeforeDeposit = anchorSim.getSnapshot().gold;
   anchorSim.selectConstructionTool('addGoldTreasure');
-  anchorSim.placeSelectedDefense({ x: 18, y: 5 });
+  anchorSim.placeSelectedDefense({ x: 20, y: 5 });
 
   if (
     anchorSim.getSnapshot().gold !== goldBeforeDeposit - GOLD_TREASURE_DEFAULT_VALUE ||
@@ -501,7 +561,7 @@ function validateDungeonAnchorRules(): void {
   }
 
   anchorSim.selectConstructionTool('removeTreasure');
-  anchorSim.placeSelectedDefense({ x: 18, y: 5 });
+  anchorSim.placeSelectedDefense({ x: 20, y: 5 });
 
   if (
     anchorSim.getSnapshot().gold !== goldBeforeDeposit ||
@@ -512,9 +572,9 @@ function validateDungeonAnchorRules(): void {
   }
 
   anchorSim.selectConstructionTool('addGoldTreasure');
-  anchorSim.placeSelectedDefense({ x: 18, y: 5 });
-  anchorSim.placeSelectedDefense({ x: 18, y: 6 });
-  anchorSim.placeSelectedDefense({ x: 18, y: 7 });
+  anchorSim.placeSelectedDefense({ x: 20, y: 5 });
+  anchorSim.placeSelectedDefense({ x: 21, y: 5 });
+  anchorSim.placeSelectedDefense({ x: 20, y: 6 });
 
   if (anchorSim.getRenderState().treasures.length !== MAX_TREASURES_V1) {
     console.error(`ECHEC: le plafond V1 devrait limiter les tresors a ${MAX_TREASURES_V1}.`);
@@ -675,7 +735,7 @@ function validateDoorLockRules(): void {
   const lockSim = new DungeonSimulation();
   lockSim.startNewGame();
   lockSim.selectConstructionTool('door');
-  lockSim.placeSelectedDefense({ x: 10, y: 4 });
+  lockSim.placeSelectedDefense({ x: 10, y: 11 });
   const door = lockSim.getRenderState().doors[0];
 
   if (!door?.locked || door.openedForExpedition || door.pickProgressMs !== 0 || door.destroyed) {
@@ -688,11 +748,11 @@ function validateDoorRemovalRules(): void {
   const removeSim = new DungeonSimulation();
   removeSim.startNewGame();
   removeSim.selectConstructionTool('door');
-  removeSim.placeSelectedDefense({ x: 10, y: 4 });
+  removeSim.placeSelectedDefense({ x: 10, y: 11 });
   const afterPlaceGold = removeSim.getSnapshot().gold;
 
   removeSim.selectConstructionTool('removeDoor');
-  removeSim.placeSelectedDefense({ x: 10, y: 4 });
+  removeSim.placeSelectedDefense({ x: 10, y: 11 });
   const afterRemove = removeSim.getSnapshot();
 
   if (removeSim.getRenderState().doors.length !== 0) {
@@ -710,7 +770,7 @@ function validateDoorNoThiefRetreat(): void {
   const noThiefSim = new DungeonSimulation();
   noThiefSim.startNewGame();
   noThiefSim.selectConstructionTool('door');
-  noThiefSim.placeSelectedDefense({ x: 10, y: 4 });
+  noThiefSim.placeSelectedDefense({ x: 12, y: 11 });
   noThiefSim.launchWave();
 
   let elapsed = 0;
@@ -1132,7 +1192,7 @@ function validateGoblinChaseRules(): void {
   const goblinSim = new DungeonSimulation();
   goblinSim.startNewGame();
   goblinSim.selectDefense('goblin');
-  goblinSim.placeSelectedDefense({ x: 5, y: 6 });
+  goblinSim.placeSelectedDefense({ x: 7, y: 10 });
   const testGoblin = (goblinSim as unknown as {
     state: { defenses: Array<{ type: string; hp: number; maxHp: number }> };
   }).state.defenses.find((defense) => defense.type === 'goblin');
@@ -1206,11 +1266,11 @@ function buildPhase(): void {
   sim.placeSelectedDefense({ x: 3, y: 7 });
   sim.placeSelectedDefense({ x: 4, y: 7 });
   sim.selectDefense('skeleton');
-  sim.placeSelectedDefense({ x: 8, y: 4 });
+  sim.placeSelectedDefense({ x: 7, y: 10 });
   sim.selectDefense('goblin');
-  sim.placeSelectedDefense({ x: 5, y: 6 });
+  sim.placeSelectedDefense({ x: 8, y: 10 });
   sim.selectConstructionTool('door');
-  sim.placeSelectedDefense({ x: 10, y: 4 });
+  sim.placeSelectedDefense({ x: 12, y: 11 });
 }
 
 let abilityFired = 0;
@@ -1229,7 +1289,7 @@ for (let wave = 1; wave <= 6; wave += 1) {
 
   const hasDoorOnPath = sim
     .getRenderState()
-    .doors.some((door) => !door.destroyed && door.cell.x === 10 && door.cell.y === 4);
+    .doors.some((door) => !door.destroyed && door.cell.x === 12 && door.cell.y === 11);
 
   if (hasDoorOnPath && (!buildSnapshot.dungeonValidation.valid || !buildSnapshot.canLaunchWave)) {
     console.error('ECHEC: une porte renforcee sur le chemin ne devrait pas empecher le lancement de l expedition.');
@@ -1304,7 +1364,7 @@ for (let wave = 1; wave <= 6; wave += 1) {
 
   sim.continueBuild();
 
-  const resetDoor = sim.getRenderState().doors.find((door) => door.cell.x === 10 && door.cell.y === 4);
+  const resetDoor = sim.getRenderState().doors.find((door) => door.cell.x === 12 && door.cell.y === 11);
 
   if (resetDoor && (!resetDoor.locked || resetDoor.openedForExpedition || resetDoor.pickProgressMs !== 0)) {
     console.error('ECHEC: une porte crochetee devrait etre reverrouillee entre expeditions.');

@@ -11,34 +11,128 @@ import {
 } from './constants';
 import type { DungeonTile, GridCell, RoomSpecialization, TileType } from './types';
 
+// Initial Dungeon Layout V1.1: a hand-authored, deterministic ~50/50 dug/rock map.
+// Seven real zones (entry, defense room, lateral branch, a gold-pocket dead end,
+// treasure room, antichamber, boss room) connected by narrow corridors full of
+// turns, so the entry -> treasure -> boss route is valid but never a straight
+// "highway". See docs/INITIAL_DUNGEON_LAYOUT_V1.md for the design rationale and
+// measured stats.
+
+// Zone E: entry cavity around ENTRY_CELL (0,7). Large enough to place early defenses
+// once the safe zone is cleared, but the safe zone itself stays free of hazards.
+const ENTRY_ROOM_CELLS: GridCell[] = [
+  ...rect(0, 4, 4, 10),
+];
+
+// Corridor from the entry room east, then a hard turn south into a narrow
+// choke before the defense room.
+const CORRIDOR_ENTRY_TO_DEFENSE: GridCell[] = [
+  ...horizontal(7, 4, 6),
+  ...vertical(6, 7, 9),
+];
+
+// Zone D: a defense room close to the entry (about 7 tiles away) but outside the
+// SAFE_ZONE_RADIUS = 2 diamond, so it is the natural first choke point to fortify.
+const DEFENSE_ROOM_CELLS: GridCell[] = [
+  ...rect(5, 9, 10, 13),
+];
+
+// A lower alcove of the defense room itself (not a separate branch off the main
+// corridor): the only way to reach it is through the defense room, so it can
+// never shortcut around the door choke point at the defense room's exit.
+const LATERAL_ROOM_CELLS: GridCell[] = [
+  ...rect(5, 14, 10, 15),
+];
+
+// Corridor climbing north out of the defense room, with another turn, toward the
+// fork that leads onward to the treasure.
+const CORRIDOR_DEFENSE_TO_FORK: GridCell[] = [
+  ...horizontal(11, 10, 13),
+  ...vertical(13, 6, 11),
+];
+
+// Main branch continues east then north, with two more turns, into the treasure room.
+const CORRIDOR_FORK_TO_TREASURE: GridCell[] = [
+  ...horizontal(6, 13, 16),
+  ...vertical(16, 2, 6),
+];
+
+// Zone T: treasure room, offset above the fork instead of sitting on a straight
+// line between the entry and the boss.
+const TREASURE_ROOM_CELLS: GridCell[] = [
+  ...rect(12, 1, 17, 5),
+];
+
+// Long south-east corridor with more turns leading away from the treasure and down
+// toward the boss side of the map. A short dead-end spur pokes north-east off this
+// corridor into a rock pocket reserved for a future gold treasure or ambush spot,
+// giving the player one more branch to exploit later.
+const CORRIDOR_TREASURE_TO_ANTECHAMBER: GridCell[] = [
+  ...vertical(17, 5, 9),
+  ...horizontal(9, 17, 19),
+  ...vertical(19, 9, 12),
+];
+const CORRIDOR_TO_GOLD_POCKET: GridCell[] = [
+  ...horizontal(6, 17, 21),
+];
+const GOLD_POCKET_ROOM_CELLS: GridCell[] = [
+  ...rect(20, 4, 22, 7),
+];
+
+// Zone A: antichamber the party must cross before reaching the throne room -
+// a last real room, not just a corridor widening.
+const ANTECHAMBER_CELLS: GridCell[] = [
+  ...rect(16, 9, 20, 12),
+];
+
+// Final turn into the boss room.
+const CORRIDOR_ANTECHAMBER_TO_BOSS: GridCell[] = [
+  ...horizontal(12, 20, 22),
+];
+
+// Zone B: boss room, far from the entry and separated from the treasure by the
+// antichamber and several turns.
+const THRONE_ROOM_CELLS: GridCell[] = [
+  ...rect(18, 11, 22, 15),
+];
+
 const INITIAL_FLOOR_CELLS: GridCell[] = [
-  ...horizontal(7, 0, 4),
-  ...vertical(3, 5, 7),
-  ...horizontal(5, 3, 6),
-  ...vertical(6, 4, 5),
-  ...horizontal(4, 6, 14),
-  ...horizontal(5, 18, 19),
-  ...vertical(18, 5, 7),
-  ...horizontal(7, 18, 20),
-  ...vertical(20, 7, 10),
+  ...CORRIDOR_ENTRY_TO_DEFENSE,
+  ...CORRIDOR_DEFENSE_TO_FORK,
+  ...CORRIDOR_FORK_TO_TREASURE,
+  ...CORRIDOR_TREASURE_TO_ANTECHAMBER,
+  ...CORRIDOR_TO_GOLD_POCKET,
+  ...CORRIDOR_ANTECHAMBER_TO_BOSS,
 ];
 
 const INITIAL_ROOM_CELLS: GridCell[] = [
-  ...rect(4, 6, 5, 6),
+  ...ENTRY_ROOM_CELLS,
+  ...DEFENSE_ROOM_CELLS,
+  ...LATERAL_ROOM_CELLS,
+  ...GOLD_POCKET_ROOM_CELLS,
+  ...ANTECHAMBER_CELLS,
 ];
 
-const TREASURE_ROOM_CELLS: GridCell[] = [
-  { x: 15, y: 4 },
-  { x: 16, y: 5 },
-  { x: 17, y: 5 },
-];
-const THRONE_ROOM_CELLS: GridCell[] = [
-  { x: 20, y: 11 },
-  { x: 21, y: 11 },
-  { x: 22, y: 11 },
-  { x: 20, y: 12 },
-  { x: 21, y: 12 },
-];
+/**
+ * Named room zones for the deterministic V1.1 layout, exposed purely for
+ * topology tests and documentation/tooling. Not used by gameplay logic.
+ */
+export interface NamedDungeonZone {
+  name: string;
+  cells: GridCell[];
+}
+
+export function getInitialDungeonZones(): NamedDungeonZone[] {
+  return [
+    { name: 'entry', cells: ENTRY_ROOM_CELLS },
+    { name: 'defense', cells: DEFENSE_ROOM_CELLS },
+    { name: 'lateral', cells: LATERAL_ROOM_CELLS },
+    { name: 'goldPocket', cells: GOLD_POCKET_ROOM_CELLS },
+    { name: 'treasure', cells: TREASURE_ROOM_CELLS },
+    { name: 'antechamber', cells: ANTECHAMBER_CELLS },
+    { name: 'throne', cells: THRONE_ROOM_CELLS },
+  ];
+}
 
 export function createInitialDungeonTiles(): DungeonTile[] {
   const tiles = new Map<string, DungeonTile>();

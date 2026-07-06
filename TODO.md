@@ -2,11 +2,11 @@
 
 ## Near Term
 
-- Dungeon Structure V2 (see `docs/DUNGEON_STRUCTURE_V2.md` and `docs/DUNGEON_ANCHORS_V1.md`):
+- Dungeon Structure V2 (see `docs/DUNGEON_STRUCTURE_V2.md`, `docs/DUNGEON_ANCHORS_V1.md`, and `docs/INITIAL_DUNGEON_LAYOUT_V1.md`):
   - V1.2 Dungeon Anchors V1 is implemented: safe zone, movable boss, movable main treasure, and gold treasures.
   - V1.3 mur constructible (rebouchage d'une case creusee, coherent avec D-009) + validation de chemin bidirectionnelle.
-  - V1.4 Initial Dungeon Layout V1 is implemented: 40 dug cells, about 10.9% dug / 89.1% rock, no three free large rooms.
-  - V2.0 generation aleatoire de la carte au lancement d'un run (seed, une seule fois par partie, jamais par expedition).
+  - V1.4 Initial Dungeon Layout V1.1 is implemented: corrected the over-carved V1 (10.9% dug, straight highway) into a ~48% dug / ~52% rock layout with 7 real rooms/corridors, an 11-turn 37-cell entry -> boss route, and a mandatory defense-room choke point.
+  - V2.0 generation aleatoire de la carte au lancement d'un run (seed, une seule fois par partie, jamais par expedition) should use the V1.1 room/corridor/choke-point shape as its baseline, not just its dug ratio.
   - V2.1 zones/antichambres sur une meme carte, V3.0 plusieurs niveaux + sous-boss.
 - Future treasure types: weapon, armor, and technique treasures are not started; decide later whether they are loot, equipment hooks, or named legendary objects.
 - Future survivor continuity: connect survivor chronicle consequences into the next expedition only after the current profile/chronicle loop is playtested.
@@ -91,3 +91,4 @@
 - Dungeon Anchors V1: added entry safe zone, movable boss, movable main treasure, gold treasure deposit/removal, multi-treasure targeting, route validation over active anchors, rendered treasure markers, and smoke coverage. Deplacer boss is no longer a placeholder; Mur remains future.
 - Survivor Continuity V1: survivors return automatically next expedition, keep profile memory, fill party slots before new adaptive recruits, preview as revenants in the sidebar, and appear in the survivor chronicle. Group size remains exactly 5.
 - Initial Dungeon Layout V1: reduced the deterministic starting map from about 19.0% dug to about 10.9% dug, kept entry -> treasure -> boss valid, and added smoke guards for density, safe-zone compatibility, and non-trivial path length.
+- Initial Dungeon Layout V1.1: corrected the V1 map (too linear despite the low dug ratio) into a hand-authored ~48% dug / ~52% rock layout with 7 named rooms/corridors (entry, defense room, lateral alcove, gold pocket, treasure room, antechamber, throne room), an 11-turn 37-cell entry -> boss route, and a mandatory defense-room choke point that cannot be bypassed. Smoke tests now check path length, turn count, alignment, and named-zone count in addition to the dug-ratio band. See `docs/INITIAL_DUNGEON_LAYOUT_V1.md`.

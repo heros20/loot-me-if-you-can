@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Note V1.4** | Initial Dungeon Layout V1 implémenté : 40 cases creusées (~10.9%) au lieu de 70 (~19.0%). Détails : [INITIAL_DUNGEON_LAYOUT_V1.md](./INITIAL_DUNGEON_LAYOUT_V1.md). |
-| **Statut** | Spec vivante — Initial Dungeon Layout V1 est implémenté, le reste demeure proposition |
+| **Note V1.4** | Initial Dungeon Layout V1.1 implémenté : ~177 cases creusées (~48.1%) réparties en 7 salles/couloirs nommés, corrigeant la V1 (40 cases, ~10.9%) qui s'était révélée *plus* linéaire malgré son faible taux de creusement. Détails : [INITIAL_DUNGEON_LAYOUT_V1.md](./INITIAL_DUNGEON_LAYOUT_V1.md). |
+| **Statut** | Spec vivante — Initial Dungeon Layout V1.1 est implémenté, le reste demeure proposition |
 | **Propriétaire** | Game Design |
 | **Dernière mise à jour** | 2026-07-06 |
 | **Documents liés** | [DECISIONS.md](./DECISIONS.md) (D-009) · [GAME_DESIGN_DOCUMENT.md](./GAME_DESIGN_DOCUMENT.md) (§4-6) · [ROADMAP.md](./ROADMAP.md) (Milestone 2) · [IDEAS.md](./IDEAS.md) |
@@ -48,15 +48,16 @@ Ce document répond à une demande studio : préparer l'évolution du donjon ver
 - Objectif : garantir qu'aucune expédition ne meure à la sortie littérale de l'entrée — la tension doit venir de la progression dans le donjon, pas d'un mur de la mort au démarrage.
 - Cette règle est un **prérequis** du boss déplaçable (§3) : sans zone de sûreté, un joueur pourrait déplacer le boss juste devant l'entrée.
 
-## 5. Moins de sol creusé au départ
+## 5. Une vraie structure de donjon au départ (et non "le moins creusé possible")
 
-**Constat chiffré (voir §1) :** 19 % de la carte est déjà creusée, répartie en un réseau de couloirs ramifiés et trois salles prêtes à l'emploi.
+**Historique :** une première passe (V1.4 initiale) a réduit le sol creusé de 19 % à 10.9 % en rabougrissant chaque zone à une cavité minimale. En jeu, le résultat était pire : le chemin entrée → trésor → boss était **plus** direct qu'avant, sans vraies salles ni embranchements. Le problème n'était pas le pourcentage de sol creusé, c'était la **topologie**.
 
-**Cible proposée :**
-- Réduire à une unique route minimale entrée → trésor → boss, sans embranchement ni salle pré-dégagée.
-- Concrètement : garder seulement un couloir de départ (quelques cases après l'entrée) plutôt que les neuf segments actuels de `INITIAL_FLOOR_CELLS`, et supprimer les trois salles `INITIAL_ROOM_CELLS` pré-creusées — elles doivent naître du creusement du joueur, pas de l'état initial.
-- Le trésor et le boss restent atteignables via un chemin qui existe dès le début (validation de chemin déjà en place), mais ce chemin doit être délibérément long, étroit et sans confort.
-- Cette modification est **isolée et simple** (données pures dans `src/game/dungeonTiles.ts`, aucune logique à changer), mais elle est volontairement **repoussée à une passe dédiée (V1.4)** plutôt que glissée dans cette passe UI/design, pour ne pas mélanger un changement de balance/lisibilité avec une passe purement UI et pour laisser le temps d'un playtest isolé sur ce seul changement.
+**Cible retenue (V1.1, voir [INITIAL_DUNGEON_LAYOUT_V1.md](./INITIAL_DUNGEON_LAYOUT_V1.md)) :**
+- Viser environ 45-55 % de sol creusé (salles + couloirs), pas un minimum absolu.
+- Construire de vraies salles dimensionnées (zone d'entrée, salle de défense proche mais hors zone de sûreté, une poche latérale optionnelle, salle du trésor décalée, antichambre, salle du boss), reliées par des couloirs étroits pleins de virages.
+- Garantir un **point d'étranglement obligatoire** (aujourd'hui la salle de défense et son unique sortie) que toute expédition doit traverser, pour que portes/pièges/monstres placés là comptent systématiquement.
+- Le chemin entrée → boss doit être long (37 cases) et sinueux (11 virages), sans que l'entrée, le trésor et le boss soient à peu près alignés.
+- Cette modification reste **isolée** (données pures dans `src/game/dungeonTiles.ts`), mais elle a nécessité d'ajouter des tests de topologie (longueur de chemin, nombre de virages, alignement, nombre de zones) en plus du seul ratio creusé — un ratio bas ne suffit pas à garantir un bon donjon.
 
 ## 6. Construction de murs
 
@@ -113,7 +114,7 @@ Le jeu ne doit plus proposer un unique couloir direct vers le boss. Deux idées 
 | **V1.1** | Sidebar propre (audit, hiérarchie, actions principales visibles, accordéons réduits, emplacements UI pour Mur/Déplacer boss désactivés) | ✅ Cette passe |
 | **V1.2** | Boss déplaçable + zone de sûreté | ⚪ Spec seulement (§3, §4) |
 | **V1.3** | Murs constructibles (rebouchage) + validation de chemin bidirectionnelle | ⚪ Spec seulement (§6) |
-| **V1.4** | Map initiale moins creusée | Implémenté — voir `docs/INITIAL_DUNGEON_LAYOUT_V1.md` |
+| **V1.4** | Map initiale avec vraies salles/couloirs (~48-52% sol/roche) | Implémenté (V1.1) — voir `docs/INITIAL_DUNGEON_LAYOUT_V1.md` |
 | **V2.0** | Génération aléatoire par run (seed, cavernes initiales, validation) | ⚪ Spec seulement (§7, §8) |
 | **V2.1** | Zones / antichambres sur une même carte | ⚪ Spec seulement (§9) |
 | **V3.0** | Plusieurs niveaux + sous-boss | ⚪ Spec seulement (§10, §11) |
