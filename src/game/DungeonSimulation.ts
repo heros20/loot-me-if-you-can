@@ -1250,7 +1250,7 @@ export class DungeonSimulation {
       world: createInitialWorldMemory(),
       runtime: null,
       report: null,
-      message: 'Ton donjon attend ses premieres victimes administratives.',
+      message: "Le donjon commence brut: creuse tes routes, puis transforme-les en pieges.",
       paused: false,
       gameSpeed: 1,
       inspectedAdventurerId: null,

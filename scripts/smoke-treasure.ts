@@ -22,7 +22,7 @@ for (let wave = 1; wave <= 8; wave += 1) {
   sim.selectDefense('skeleton');
   sim.placeSelectedDefense({ x: 8, y: 4 });
   sim.selectDefense('goblin');
-  sim.placeSelectedDefense({ x: 6, y: 6 });
+  sim.placeSelectedDefense({ x: 5, y: 6 });
   sim.launchWave();
 
   let t = 0;

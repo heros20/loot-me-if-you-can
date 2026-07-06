@@ -6,10 +6,10 @@ const sim = new DungeonSimulation();
 sim.startNewGame();
 
 const BUILD_SPOTS: Array<{ type: DefenseType; cell: GridCell }> = [
-  { type: 'skeleton', cell: { x: 11, y: 6 } },
-  { type: 'skeleton', cell: { x: 12, y: 6 } },
-  { type: 'goblin', cell: { x: 10, y: 3 } },
-  { type: 'slime', cell: { x: 2, y: 8 } },
+  { type: 'skeleton', cell: { x: 9, y: 4 } },
+  { type: 'skeleton', cell: { x: 12, y: 4 } },
+  { type: 'goblin', cell: { x: 5, y: 5 } },
+  { type: 'slime', cell: { x: 5, y: 6 } },
   { type: 'fireTrap', cell: { x: 3, y: 7 } },
   { type: 'spikeTrap', cell: { x: 4, y: 7 } },
   { type: 'spikeTrap', cell: { x: 6, y: 5 } },

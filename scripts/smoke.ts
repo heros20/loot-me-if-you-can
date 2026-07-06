@@ -3,12 +3,19 @@ import {
   DIG_COST,
   DOOR_COST,
   GOLD_TREASURE_DEFAULT_VALUE,
+  BOSS_CELL,
+  ENTRY_CELL,
+  GRID_COLS,
+  GRID_ROWS,
   MAX_TREASURES_V1,
   PARTY_SIZE,
   SAFE_ZONE_RADIUS,
   STARTING_GOLD,
+  TREASURE_CELL,
+  isInEntrySafeZone,
 } from '../src/game/constants';
 import { DungeonSimulation } from '../src/game/DungeonSimulation';
+import { createInitialDungeonTiles, getBlockedCellKeys, summarizeTiles } from '../src/game/dungeonTiles';
 import {
   COMBAT_ABILITY_BALANCE,
   createEmptyCombatAbilityStats,
@@ -28,6 +35,7 @@ import {
   selectProfilesForWave,
 } from '../src/systems/adventurerProfiles';
 import { buildWaveRoster } from '../src/systems/waveDirector';
+import { findPath, hasWalkablePath } from '../src/systems/pathfinding';
 import type {
   AdventurerEntity,
   AdventurerRole,
@@ -178,6 +186,55 @@ function createSmokeDefense(type: DefenseType, id: string, x: number, y: number)
   };
 }
 
+function validateInitialDungeonLayoutRules(): void {
+  const tiles = createInitialDungeonTiles();
+  const summary = summarizeTiles(tiles);
+  const total = GRID_COLS * GRID_ROWS;
+  const dug = summary.floor + summary.rooms + summary.special;
+  const dugRatio = dug / total;
+  const rockRatio = summary.rock / total;
+  const blockedCellKeys = getBlockedCellKeys(tiles);
+  const entryToTreasurePath = findPath(ENTRY_CELL, TREASURE_CELL, {
+    role: 'warrior',
+    trapAvoidance: 0,
+    trapDangerByCell: {},
+    knownTrapCells: new Set(),
+    blockedCellKeys,
+  });
+  const treasureToBossPath = findPath(TREASURE_CELL, BOSS_CELL, {
+    role: 'warrior',
+    trapAvoidance: 0,
+    trapDangerByCell: {},
+    knownTrapCells: new Set(),
+    blockedCellKeys,
+  });
+
+  if (dugRatio > 0.12 || rockRatio < 0.85) {
+    console.error(`ECHEC: layout initial trop ouvert (dug=${dugRatio.toFixed(3)}, rock=${rockRatio.toFixed(3)}).`);
+    process.exit(1);
+  }
+
+  if (!hasWalkablePath(ENTRY_CELL, TREASURE_CELL, blockedCellKeys) || !hasWalkablePath(TREASURE_CELL, BOSS_CELL, blockedCellKeys)) {
+    console.error('ECHEC: layout initial devrait garder un chemin entree -> tresor -> boss valide.');
+    process.exit(1);
+  }
+
+  if (entryToTreasurePath.length < 18 || treasureToBossPath.length < 13) {
+    console.error(`ECHEC: chemin initial trop direct (entree->tresor=${entryToTreasurePath.length}, tresor->boss=${treasureToBossPath.length}).`);
+    process.exit(1);
+  }
+
+  if (isInEntrySafeZone(TREASURE_CELL) || isInEntrySafeZone(BOSS_CELL)) {
+    console.error('ECHEC: tresor et boss initiaux doivent rester hors zone de surete.');
+    process.exit(1);
+  }
+
+  if (summary.rooms > 12) {
+    console.error(`ECHEC: trop de salles gratuites au depart (${summary.rooms}).`);
+    process.exit(1);
+  }
+}
+
 function createSmokeBoss(): BossEntity {
   return {
     homeCell: { x: 20, y: 8 },
@@ -208,7 +265,7 @@ function validateDiggingRules(): void {
   const startingGold = digSim.getSnapshot().gold;
 
   digSim.selectConstructionTool('dig');
-  [{ x: 7, y: 7 }, { x: 8, y: 7 }, { x: 9, y: 7 }].forEach((cell) => digSim.placeSelectedDefense(cell));
+  [{ x: 5, y: 7 }, { x: 6, y: 7 }, { x: 7, y: 7 }].forEach((cell) => digSim.placeSelectedDefense(cell));
 
   const afterDigging = digSim.getSnapshot();
 
@@ -218,7 +275,7 @@ function validateDiggingRules(): void {
   }
 
   (digSim as unknown as { state: { gold: number } }).state.gold = 0;
-  digSim.placeSelectedDefense({ x: 10, y: 7 });
+  digSim.placeSelectedDefense({ x: 8, y: 7 });
   const afterInsufficientDig = digSim.getSnapshot();
 
   if (afterInsufficientDig.gold !== 0 || !afterInsufficientDig.message.includes('Il faut')) {
@@ -1075,7 +1132,7 @@ function validateGoblinChaseRules(): void {
   const goblinSim = new DungeonSimulation();
   goblinSim.startNewGame();
   goblinSim.selectDefense('goblin');
-  goblinSim.placeSelectedDefense({ x: 6, y: 6 });
+  goblinSim.placeSelectedDefense({ x: 5, y: 6 });
   const testGoblin = (goblinSim as unknown as {
     state: { defenses: Array<{ type: string; hp: number; maxHp: number }> };
   }).state.defenses.find((defense) => defense.type === 'goblin');
@@ -1122,6 +1179,7 @@ function validateGoblinChaseRules(): void {
 }
 
 validateDiggingRules();
+validateInitialDungeonLayoutRules();
 validateSpecialRoomBuildRules();
 validateDoorRules();
 validateDungeonAnchorRules();
@@ -1150,7 +1208,7 @@ function buildPhase(): void {
   sim.selectDefense('skeleton');
   sim.placeSelectedDefense({ x: 8, y: 4 });
   sim.selectDefense('goblin');
-  sim.placeSelectedDefense({ x: 6, y: 6 });
+  sim.placeSelectedDefense({ x: 5, y: 6 });
   sim.selectConstructionTool('door');
   sim.placeSelectedDefense({ x: 10, y: 4 });
 }

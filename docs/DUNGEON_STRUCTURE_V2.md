@@ -2,7 +2,8 @@
 
 | | |
 |---|---|
-| **Statut** | Proposition — spec de design, rien de ce document n'est implémenté |
+| **Note V1.4** | Initial Dungeon Layout V1 implémenté : 40 cases creusées (~10.9%) au lieu de 70 (~19.0%). Détails : [INITIAL_DUNGEON_LAYOUT_V1.md](./INITIAL_DUNGEON_LAYOUT_V1.md). |
+| **Statut** | Spec vivante — Initial Dungeon Layout V1 est implémenté, le reste demeure proposition |
 | **Propriétaire** | Game Design |
 | **Dernière mise à jour** | 2026-07-06 |
 | **Documents liés** | [DECISIONS.md](./DECISIONS.md) (D-009) · [GAME_DESIGN_DOCUMENT.md](./GAME_DESIGN_DOCUMENT.md) (§4-6) · [ROADMAP.md](./ROADMAP.md) (Milestone 2) · [IDEAS.md](./IDEAS.md) |
@@ -112,7 +113,7 @@ Le jeu ne doit plus proposer un unique couloir direct vers le boss. Deux idées 
 | **V1.1** | Sidebar propre (audit, hiérarchie, actions principales visibles, accordéons réduits, emplacements UI pour Mur/Déplacer boss désactivés) | ✅ Cette passe |
 | **V1.2** | Boss déplaçable + zone de sûreté | ⚪ Spec seulement (§3, §4) |
 | **V1.3** | Murs constructibles (rebouchage) + validation de chemin bidirectionnelle | ⚪ Spec seulement (§6) |
-| **V1.4** | Map initiale moins creusée | ⚪ Spec seulement (§5) |
+| **V1.4** | Map initiale moins creusée | Implémenté — voir `docs/INITIAL_DUNGEON_LAYOUT_V1.md` |
 | **V2.0** | Génération aléatoire par run (seed, cavernes initiales, validation) | ⚪ Spec seulement (§7, §8) |
 | **V2.1** | Zones / antichambres sur une même carte | ⚪ Spec seulement (§9) |
 | **V3.0** | Plusieurs niveaux + sous-boss | ⚪ Spec seulement (§10, §11) |

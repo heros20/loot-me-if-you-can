@@ -12,25 +12,33 @@ import {
 import type { DungeonTile, GridCell, RoomSpecialization, TileType } from './types';
 
 const INITIAL_FLOOR_CELLS: GridCell[] = [
-  ...horizontal(7, 0, 6),
-  ...vertical(6, 4, 7),
+  ...horizontal(7, 0, 4),
+  ...vertical(3, 5, 7),
+  ...horizontal(5, 3, 6),
+  ...vertical(6, 4, 5),
   ...horizontal(4, 6, 14),
-  ...vertical(12, 4, 6),
-  ...horizontal(4, 17, 18),
-  ...vertical(18, 4, 7),
+  ...horizontal(5, 18, 19),
+  ...vertical(18, 5, 7),
   ...horizontal(7, 18, 20),
-  ...vertical(20, 7, 11),
-  ...horizontal(11, 20, 22),
+  ...vertical(20, 7, 10),
 ];
 
 const INITIAL_ROOM_CELLS: GridCell[] = [
-  ...rect(2, 8, 4, 10),
-  ...rect(8, 2, 10, 3),
-  ...rect(11, 6, 13, 8),
+  ...rect(4, 6, 5, 6),
 ];
 
-const TREASURE_ROOM_CELLS = rect(15, 3, 17, 5);
-const THRONE_ROOM_CELLS = rect(20, 11, 22, 13);
+const TREASURE_ROOM_CELLS: GridCell[] = [
+  { x: 15, y: 4 },
+  { x: 16, y: 5 },
+  { x: 17, y: 5 },
+];
+const THRONE_ROOM_CELLS: GridCell[] = [
+  { x: 20, y: 11 },
+  { x: 21, y: 11 },
+  { x: 22, y: 11 },
+  { x: 20, y: 12 },
+  { x: 21, y: 12 },
+];
 
 export function createInitialDungeonTiles(): DungeonTile[] {
   const tiles = new Map<string, DungeonTile>();
