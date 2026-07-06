@@ -21,6 +21,8 @@ export function buildWaveStoryLines(input: BuildWaveStoryInput): string[] {
 
   if (input.stats.treasureStolen) {
     lines.push('Le tresor du donjon a quitte le batiment. Les tavernes en riront pendant des semaines.');
+  } else if (input.stats.goldTreasureValueStolen > 0) {
+    lines.push(`Un tresor d'or quitte le donjon avec ${input.stats.goldTreasureValueStolen} or deja deposes.`);
   }
 
   if (input.stats.treasureCarrierName && input.stats.treasureGroupDecision === 'escapeWithTreasure') {

@@ -207,12 +207,14 @@ export class GameDomUi {
   private renderBuildControls(snapshot: DungeonSnapshot): string {
     const constructionTools = snapshot.constructionTools.filter((item) => item.category === 'construction');
     const roomTools = snapshot.constructionTools.filter((item) => item.category === 'rooms');
+    const objectiveTools = snapshot.constructionTools.filter((item) => item.category === 'objectives');
     const traps = snapshot.availableDefenses.filter((item) => item.kind === 'trap');
     const minions = snapshot.availableDefenses.filter((item) => item.kind === 'minion');
     const defensesActive = snapshot.defensesByKind.reduce((total, item) => total + item.count, 0);
     const journalCount = snapshot.recentRumors.length + snapshot.recentJournal.length + snapshot.recentChronicles.length
       + (snapshot.report ? 1 : 0);
     const roomsOpen = snapshot.selectedConstructionTool === 'guardRoom' || snapshot.selectedConstructionTool === 'crypt';
+    const objectivesOpen = objectiveTools.some((item) => item.type === snapshot.selectedConstructionTool);
     const defensesOpen = snapshot.selectedDefense !== null;
 
     return `
@@ -231,16 +233,27 @@ export class GameDomUi {
           <strong>Mur</strong>
           <span class="tool-card__cost">Bientot</span>
         </button>
-        <button class="tool-card tool-card--soon" type="button" disabled
-          title="Bientot disponible : replacer le boss ailleurs dans le donjon, hors de la zone de surete.">
-          <strong>Deplacer boss</strong>
-          <span class="tool-card__cost">Bientot</span>
-        </button>
       </div>
 
       ${this.renderSelectedToolDetail(snapshot)}
 
       <div class="accordion">
+        ${this.renderAccordion(
+          'objectives',
+          'Objectifs',
+          String(snapshot.treasures.length),
+          `
+            <div class="tool-grid">${objectiveTools.map((item) => this.renderToolCard(item, snapshot)).join('')}</div>
+            <p class="accordion__subtitle">Ancres</p>
+            <div class="pill-row">
+              <span class="pill">Zone sure entree: ${snapshot.safeZoneRadius}</span>
+              <span class="pill">${snapshot.treasures.length} tresor${snapshot.treasures.length > 1 ? 's' : ''}</span>
+              <span class="pill">${snapshot.treasures.filter((treasure) => treasure.kind === 'gold').length} or</span>
+            </div>
+          `,
+          objectivesOpen,
+        )}
+
         ${this.renderAccordion(
           'rooms',
           'Salles & terrain',
@@ -837,8 +850,8 @@ function toneIcon(tone: MessageTone): string {
   }
 }
 
-const ERROR_MESSAGE_HINTS = ['pas assez', 'insuffisant', 'refuse', 'impossible', 'aucune porte', 'aucun outil', 'aucune defense'];
-const SUCCESS_MESSAGE_HINTS = ['recupere', 'demonte'];
+const ERROR_MESSAGE_HINTS = ['pas assez', 'insuffisant', 'refuse', 'impossible', 'zone de surete', 'aucune porte', 'aucun outil', 'aucune defense'];
+const SUCCESS_MESSAGE_HINTS = ['recupere', 'demonte', 'deplace', 'depose'];
 
 function classifyMessageTone(message: string): MessageTone {
   const lower = message.toLowerCase();
@@ -889,6 +902,14 @@ function placementHintFor(type: ConstructionTool): string {
       return 'Placement : couloir creuse, sans piege ni monstre sur la case.';
     case 'removeDoor':
       return 'Placement : clique sur une porte existante pour la retirer.';
+    case 'moveBoss':
+      return 'Placement : sol ou salle creusee, hors entree, tresors, portes, defenses et zone de surete.';
+    case 'moveTreasure':
+      return 'Placement : sol ou salle creusee accessible, hors boss, portes, defenses et zone de surete.';
+    case 'addGoldTreasure':
+      return "Placement : sol ou salle creusee accessible. Le depot coute 20 or et ne sera pas penalise deux fois.";
+    case 'removeTreasure':
+      return "Placement : clique sur un tresor d'or non vole pour recuperer sa valeur.";
     case 'guardRoom':
     case 'crypt':
       return 'Placement : case deja creusee.';

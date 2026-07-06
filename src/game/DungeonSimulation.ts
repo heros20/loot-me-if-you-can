@@ -3,10 +3,14 @@ import {
   DIG_COST,
   DOOR_COST,
   ENTRY_CELL,
+  GOLD_TREASURE_DEFAULT_VALUE,
+  MAX_TREASURES_V1,
   PARTY_SIZE,
+  SAFE_ZONE_RADIUS,
   STARTING_GOLD,
   TREASURE_CELL,
   cellKey,
+  isInEntrySafeZone,
   isInsideGrid,
   isSameCell,
 } from './constants';
@@ -14,6 +18,8 @@ import {
   canEntityMoveBetween,
   createInitialDungeonTiles,
   getBlockedCellKeys,
+  getTileAt,
+  setDungeonTile,
   summarizeTiles,
 } from './dungeonTiles';
 import type {
@@ -26,6 +32,7 @@ import type {
   DefenseStatsByType,
   DefenseType,
   DungeonDoor,
+  DungeonTreasure,
   DungeonValidation,
   EffectStats,
   ExpeditionParticipantReport,
@@ -177,6 +184,34 @@ const CONSTRUCTION_TOOLS: Array<{
     cost: null,
   },
   {
+    type: 'moveBoss',
+    name: 'Deplacer boss',
+    description: "Deplace l'ancre du boss sur une case creusee valide, sans casser la route du donjon.",
+    category: 'objectives',
+    cost: null,
+  },
+  {
+    type: 'moveTreasure',
+    name: 'Deplacer tresor',
+    description: "Deplace le tresor principal sur une case creusee valide et accessible.",
+    category: 'objectives',
+    cost: null,
+  },
+  {
+    type: 'addGoldTreasure',
+    name: "Ajouter tresor d'or",
+    description: `Depose ${GOLD_TREASURE_DEFAULT_VALUE} or comme objectif secondaire. Maximum ${MAX_TREASURES_V1} tresors.`,
+    category: 'objectives',
+    cost: GOLD_TREASURE_DEFAULT_VALUE,
+  },
+  {
+    type: 'removeTreasure',
+    name: 'Retirer tresor',
+    description: "Retire un tresor d'or non vole et rembourse sa valeur.",
+    category: 'objectives',
+    cost: null,
+  },
+  {
     type: 'guardRoom',
     name: ROOM_TOOL_LABELS.guardRoom,
     description: 'Marque une zone creusee autour de la case.',
@@ -197,6 +232,7 @@ export class DungeonSimulation {
   private nextDefenseId = 1;
   private nextAdventurerId = 1;
   private nextDoorId = 1;
+  private nextTreasureId = 1;
   private minionNameCounters: Partial<Record<DefenseType, number>> = {};
 
   constructor() {
@@ -207,6 +243,7 @@ export class DungeonSimulation {
     this.nextDefenseId = 1;
     this.nextAdventurerId = 1;
     this.nextDoorId = 1;
+    this.nextTreasureId = 1;
     this.minionNameCounters = {};
     this.state = this.createInitialState();
   }
@@ -440,6 +477,26 @@ export class DungeonSimulation {
 
     if (tool === 'removeDoor') {
       this.removeDoor(cell);
+      return;
+    }
+
+    if (tool === 'moveBoss') {
+      this.moveBoss(cell);
+      return;
+    }
+
+    if (tool === 'moveTreasure') {
+      this.moveMainTreasure(cell);
+      return;
+    }
+
+    if (tool === 'addGoldTreasure') {
+      this.addGoldTreasure(cell);
+      return;
+    }
+
+    if (tool === 'removeTreasure') {
+      this.removeGoldTreasure(cell);
     }
   }
 
@@ -495,6 +552,108 @@ export class DungeonSimulation {
 
     this.state.doors = result.doors;
     this.state.gold += result.refundGold;
+  }
+
+  private moveBoss(cell: GridCell): void {
+    const rejection = this.describeObjectiveAnchorRejection(cell, 'boss');
+
+    if (rejection) {
+      this.state.message = rejection;
+      return;
+    }
+
+    const oldCell = { ...this.state.boss.homeCell };
+    const nextBossCell = { ...cell };
+    const validation = this.validateDungeonLayout(this.state.treasures, nextBossCell);
+
+    if (!validation.valid) {
+      this.state.message = validation.reason ?? 'Deplacement refuse: la route du boss doit rester lisible.';
+      return;
+    }
+
+    this.state.tiles = this.replaceAnchorTile(this.state.tiles, oldCell, nextBossCell, 'throne');
+    this.state.boss.homeCell = nextBossCell;
+    this.state.boss.x = nextBossCell.x;
+    this.state.boss.y = nextBossCell.y;
+    this.state.boss.targetAdventurerId = null;
+    this.state.message = 'Boss deplace. Le trone suit, les menaces restent.';
+  }
+
+  private moveMainTreasure(cell: GridCell): void {
+    const treasure = this.getMainTreasure();
+
+    if (!treasure) {
+      this.state.message = 'Aucun tresor principal a deplacer.';
+      return;
+    }
+
+    const rejection = this.describeObjectiveAnchorRejection(cell, 'treasure', treasure.id);
+
+    if (rejection) {
+      this.state.message = rejection;
+      return;
+    }
+
+    const movedTreasure = { ...treasure, cell: { ...cell }, status: 'secure' as const, holderAdventurerId: null, droppedCell: null };
+    const nextTreasures = this.state.treasures.map((candidate) => (candidate.id === treasure.id ? movedTreasure : candidate));
+    const validation = this.validateDungeonLayout(nextTreasures, this.getBossCell());
+
+    if (!validation.valid) {
+      this.state.message = validation.reason ?? 'Deplacement refuse: le tresor doit rester sur la route du boss.';
+      return;
+    }
+
+    this.state.tiles = this.replaceAnchorTile(this.state.tiles, treasure.cell, cell, 'treasure');
+    this.state.treasures = nextTreasures;
+    this.state.treasure = this.toLegacyTreasureState(movedTreasure);
+    this.state.message = 'Tresor principal deplace. La Guilde devra refaire ses cartes.';
+  }
+
+  private addGoldTreasure(cell: GridCell): void {
+    if (this.state.treasures.length >= MAX_TREASURES_V1) {
+      this.state.message = `Maximum atteint: ${MAX_TREASURES_V1} tresors suffisent a attirer les problemes.`;
+      return;
+    }
+
+    if (this.state.gold < GOLD_TREASURE_DEFAULT_VALUE) {
+      this.state.message = `Pas assez d'or: il faut deposer ${GOLD_TREASURE_DEFAULT_VALUE} or dans ce tresor.`;
+      return;
+    }
+
+    const rejection = this.describeObjectiveAnchorRejection(cell, 'treasure');
+
+    if (rejection) {
+      this.state.message = rejection;
+      return;
+    }
+
+    const treasure = this.createGoldTreasure(cell);
+    const nextTreasures = [...this.state.treasures, treasure];
+    const validation = this.validateDungeonLayout(nextTreasures, this.getBossCell());
+
+    if (!validation.valid) {
+      this.state.message = validation.reason ?? "Tresor d'or refuse: il doit rester accessible.";
+      return;
+    }
+
+    this.state.gold -= GOLD_TREASURE_DEFAULT_VALUE;
+    this.state.treasures = nextTreasures;
+    this.state.message = `Tresor d'or depose: -${GOLD_TREASURE_DEFAULT_VALUE} or maintenant, pas de double punition s'il est vole.`;
+  }
+
+  private removeGoldTreasure(cell: GridCell): void {
+    const treasure = this.state.treasures.find(
+      (candidate) => candidate.kind === 'gold' && candidate.status !== 'stolen' && isSameCell(candidate.cell, cell),
+    );
+
+    if (!treasure) {
+      this.state.message = "Aucun tresor d'or non vole a retirer ici.";
+      return;
+    }
+
+    this.state.treasures = this.state.treasures.filter((candidate) => candidate.id !== treasure.id);
+    this.state.gold += treasure.value;
+    this.state.message = `Tresor d'or retire: ${treasure.value} or recuperes.`;
   }
 
   private createDefenseEntity(type: DefenseType, cell: GridCell, summoned: boolean): DefenseEntity {
@@ -583,6 +742,14 @@ export class DungeonSimulation {
     const lastRumor = this.state.world.rumors[this.state.world.rumors.length - 1] ?? null;
 
     this.state.phase = 'wave';
+    this.state.treasures = this.state.treasures.map((treasure) => ({
+      ...treasure,
+      status: 'secure',
+      holderAdventurerId: null,
+      droppedCell: null,
+    }));
+    this.state.treasure = this.toLegacyTreasureState(this.getMainTreasure());
+    const targetTreasure = this.chooseWaveTreasureTarget();
     this.state.runtime = {
       elapsedMs: 0,
       spawnTimerMs: 0,
@@ -593,12 +760,12 @@ export class DungeonSimulation {
       stats: createEmptyWaveStats(),
       doorsEngagedIds: new Set<string>(),
       bossAutopilotTimerMs: 0,
+      targetTreasureId: targetTreasure?.id ?? null,
     };
     this.state.report = null;
     this.state.adventurers = [];
     this.state.paused = false;
     this.state.inspectedAdventurerId = null;
-    this.state.treasure = createSecureTreasure();
     this.state.bossAutopilotIntent = 'Attend une ouverture.';
     this.state.bossLastAbilityName = null;
     this.state.boss.tauntedByAdventurerId = null;
@@ -622,6 +789,15 @@ export class DungeonSimulation {
 
     const hadSurvivors = this.state.report?.chronicle.hasSurvivors ?? false;
     this.state.phase = 'build';
+    this.state.treasures = this.state.treasures
+      .filter((treasure) => treasure.kind === 'main' || treasure.status !== 'stolen')
+      .map((treasure) => ({
+        ...treasure,
+        status: 'secure',
+        holderAdventurerId: null,
+        droppedCell: null,
+      }));
+    this.state.treasure = this.toLegacyTreasureState(this.getMainTreasure());
     this.state.defenses = this.state.defenses.filter((defense) => defense.alive && !defense.summoned);
     this.state.defenses.forEach((defense) => {
       if (defense.kind === 'minion') {
@@ -671,6 +847,7 @@ export class DungeonSimulation {
         disabled:
           this.state.phase !== 'build' ||
           tool.disabled === true ||
+          (tool.type === 'addGoldTreasure' && this.state.treasures.length >= MAX_TREASURES_V1) ||
           (tool.cost !== null && this.state.gold < tool.cost),
       })),
       availableDefenses: DEFENSE_ORDER.map((type) => {
@@ -709,6 +886,8 @@ export class DungeonSimulation {
       gameSpeed: this.state.gameSpeed,
       treasureStatus: this.state.treasure.status,
       treasureCarrierName: this.getTreasureCarrierName(),
+      treasures: this.state.treasures,
+      safeZoneRadius: SAFE_ZONE_RADIUS,
       recentRumors: this.state.world.rumors.slice(-3).map((rumor) => rumor.text),
       inspectedAdventurer: this.buildInspectedAdventurer(),
       namedMinions: this.buildNamedMinions(),
@@ -717,7 +896,7 @@ export class DungeonSimulation {
     };
   }
 
-  getRenderState(): Pick<GameState, 'defenses' | 'adventurers' | 'boss' | 'phase' | 'gold' | 'selectedDefense' | 'selectedConstructionTool' | 'treasure' | 'tiles' | 'doors'> {
+  getRenderState(): Pick<GameState, 'defenses' | 'adventurers' | 'boss' | 'phase' | 'gold' | 'selectedDefense' | 'selectedConstructionTool' | 'treasure' | 'treasures' | 'tiles' | 'doors'> {
     return {
       defenses: this.state.defenses,
       adventurers: this.state.adventurers,
@@ -727,6 +906,7 @@ export class DungeonSimulation {
       selectedDefense: this.state.selectedDefense,
       selectedConstructionTool: this.state.selectedConstructionTool,
       treasure: this.state.treasure,
+      treasures: this.state.treasures,
       tiles: this.state.tiles,
       doors: this.state.doors,
     };
@@ -741,10 +921,18 @@ export class DungeonSimulation {
     return createPartyPlan(this.state.wave, this.state.world.dungeonReputation.value, lastRumor?.effect ?? null);
   }
 
-  private validateDungeonLayout(): DungeonValidation {
+  private validateDungeonLayout(
+    treasures = this.state.treasures,
+    bossCell = this.getBossCell(),
+  ): DungeonValidation {
     const blockedCellKeys = getBlockedCellKeys(this.state.tiles);
-    const entryToTreasure = hasWalkablePath(ENTRY_CELL, TREASURE_CELL, blockedCellKeys);
-    const treasureToBoss = hasWalkablePath(TREASURE_CELL, BOSS_CELL, blockedCellKeys);
+    const activeTreasures = this.getActiveTreasures(treasures);
+    const entryToTreasure = activeTreasures.length === 0
+      ? hasWalkablePath(ENTRY_CELL, bossCell, blockedCellKeys)
+      : activeTreasures.every((treasure) => hasWalkablePath(ENTRY_CELL, treasure.cell, blockedCellKeys));
+    const treasureToBoss = activeTreasures.length === 0
+      ? entryToTreasure
+      : activeTreasures.every((treasure) => hasWalkablePath(treasure.cell, bossCell, blockedCellKeys));
     const valid = entryToTreasure && treasureToBoss;
 
     return {
@@ -754,8 +942,8 @@ export class DungeonSimulation {
       reason: valid
         ? null
         : !entryToTreasure
-          ? 'Chemin bloque: les aventuriers ne peuvent plus rejoindre le tresor depuis l entree.'
-          : 'Chemin bloque: le tresor et la salle du boss ne sont plus relies.',
+          ? "Chemin bloque: les aventuriers ne peuvent plus rejoindre tous les tresors depuis l'entree."
+          : 'Chemin bloque: les tresors et la salle du boss ne sont plus relies.',
     };
   }
 
@@ -777,12 +965,14 @@ export class DungeonSimulation {
   }
 
   private getTreasureCarrierName(): string | null {
-    if (this.state.treasure.status !== 'carried' || !this.state.treasure.holderAdventurerId) {
+    const carriedTreasure = this.state.treasures.find((treasure) => treasure.status === 'carried' && treasure.holderAdventurerId);
+
+    if (!carriedTreasure?.holderAdventurerId) {
       return null;
     }
 
     return (
-      this.state.adventurers.find((adventurer) => adventurer.id === this.state.treasure.holderAdventurerId)?.name ?? null
+      this.state.adventurers.find((adventurer) => adventurer.id === carriedTreasure.holderAdventurerId)?.name ?? null
     );
   }
 
@@ -840,6 +1030,159 @@ export class DungeonSimulation {
       }));
   }
 
+  private describeObjectiveAnchorRejection(
+    cell: GridCell,
+    target: 'boss' | 'treasure',
+    movingTreasureId: string | null = null,
+  ): string | null {
+    const tile = getTileAt(this.state.tiles, cell);
+
+    if (!tile || tile.type === 'rock') {
+      return 'Impossible ici: il faut une case deja creusee.';
+    }
+
+    if (isInEntrySafeZone(cell)) {
+      return "Zone de surete : laisse une chance aux intrus d'entrer.";
+    }
+
+    if (tile.type === 'entrance') {
+      return "Impossible pres de l'entree.";
+    }
+
+    if (target === 'boss' && tile.type === 'treasure') {
+      return 'Impossible: le boss ne peut pas s empiler sur un tresor.';
+    }
+
+    if (target === 'treasure' && tile.type === 'throne') {
+      return 'Impossible: le tresor ne peut pas remplacer le trone du boss.';
+    }
+
+    if (tile.type !== 'floor' && tile.type !== 'room') {
+      return 'Impossible ici: choisis un sol ou une salle creusee.';
+    }
+
+    if (isSameCell(cell, ENTRY_CELL)) {
+      return "Impossible pres de l'entree.";
+    }
+
+    if (target === 'treasure' && isSameCell(cell, this.getBossCell())) {
+      return 'Impossible: le boss occupe deja cette dalle.';
+    }
+
+    if (
+      target === 'boss' &&
+      this.state.treasures.some((treasure) => treasure.id !== movingTreasureId && treasure.status !== 'stolen' && isSameCell(treasure.cell, cell))
+    ) {
+      return 'Impossible: un tresor occupe deja cette dalle.';
+    }
+
+    if (
+      target === 'treasure' &&
+      this.state.treasures.some((treasure) => treasure.id !== movingTreasureId && treasure.status !== 'stolen' && isSameCell(treasure.cell, cell))
+    ) {
+      return 'Impossible: un autre tresor occupe deja cette dalle.';
+    }
+
+    if (hasDefenseOnCell(this.state.defenses, cell)) {
+      return 'Impossible: une defense occupe deja cette dalle.';
+    }
+
+    if (findActiveDoorAt(this.state.doors, cell)) {
+      return 'Impossible: une porte occupe deja cette dalle.';
+    }
+
+    return null;
+  }
+
+  private replaceAnchorTile(
+    tiles: GameState['tiles'],
+    oldCell: GridCell,
+    newCell: GridCell,
+    type: 'treasure' | 'throne',
+  ): GameState['tiles'] {
+    const oldTile = getTileAt(tiles, oldCell);
+    const newTile = getTileAt(tiles, newCell);
+    const oldFallbackType = oldTile?.roomType ? 'room' : 'floor';
+    const nextRoomType = newTile?.roomType ?? (type === 'treasure' ? 'treasureRoom' : 'throneRoom');
+
+    return setDungeonTile(
+      setDungeonTile(tiles, oldCell, oldFallbackType, oldTile?.roomType ?? null),
+      newCell,
+      type,
+      nextRoomType,
+    );
+  }
+
+  private getMainTreasure(): DungeonTreasure | null {
+    return this.state.treasures.find((treasure) => treasure.kind === 'main') ?? null;
+  }
+
+  private getBossCell(): GridCell {
+    return { x: Math.round(this.state.boss.homeCell.x), y: Math.round(this.state.boss.homeCell.y) };
+  }
+
+  private getActiveTreasures(treasures = this.state.treasures): DungeonTreasure[] {
+    return treasures.filter((treasure) => treasure.status !== 'stolen');
+  }
+
+  private chooseWaveTreasureTarget(): DungeonTreasure | null {
+    const blockedCellKeys = getBlockedCellKeys(this.state.tiles);
+
+    return this.getActiveTreasures()
+      .map((treasure) => ({
+        treasure,
+        accessible: hasWalkablePath(ENTRY_CELL, treasure.cell, blockedCellKeys),
+        distance: Math.abs(ENTRY_CELL.x - treasure.cell.x) + Math.abs(ENTRY_CELL.y - treasure.cell.y),
+      }))
+      .filter((entry) => entry.accessible)
+      .sort((a, b) => a.distance - b.distance || (a.treasure.kind === 'main' ? -1 : 1))[0]?.treasure ?? null;
+  }
+
+  private getRuntimeTreasureTarget(): DungeonTreasure | null {
+    const runtime = this.state.runtime;
+    const preferred = runtime?.targetTreasureId
+      ? this.state.treasures.find((treasure) => treasure.id === runtime.targetTreasureId && treasure.status !== 'stolen') ?? null
+      : null;
+
+    if (preferred && (preferred.status === 'secure' || preferred.status === 'dropped')) {
+      return preferred;
+    }
+
+    const fallback = this.chooseWaveTreasureTarget();
+
+    if (runtime) {
+      runtime.targetTreasureId = fallback?.id ?? null;
+    }
+
+    return fallback;
+  }
+
+  private createGoldTreasure(cell: GridCell): DungeonTreasure {
+    const treasure: DungeonTreasure = {
+      id: `gold-${this.nextTreasureId}`,
+      kind: 'gold',
+      cell: { ...cell },
+      value: GOLD_TREASURE_DEFAULT_VALUE,
+      status: 'secure',
+      holderAdventurerId: null,
+      droppedCell: null,
+    };
+    this.nextTreasureId += 1;
+    return treasure;
+  }
+
+  private toLegacyTreasureState(treasure: DungeonTreasure | null): TreasureState {
+    if (!treasure) {
+      return createSecureTreasure();
+    }
+
+    return {
+      status: treasure.status,
+      holderAdventurerId: treasure.holderAdventurerId,
+      droppedCell: treasure.droppedCell ? { ...treasure.droppedCell } : null,
+    };
+  }
+
   private createInitialState(): GameState {
     return {
       phase: 'build',
@@ -858,6 +1201,7 @@ export class DungeonSimulation {
         abilities: createBossAbilities(),
       },
       treasure: createSecureTreasure(),
+      treasures: [createMainTreasure()],
       memory: {
         trapAvoidance: 0.35,
         trapDangerByCell: {},
@@ -1303,9 +1647,9 @@ export class DungeonSimulation {
 
   private handleObjectiveReached(adventurer: AdventurerEntity): void {
     if (adventurer.targetStage === 'treasure') {
-      const treasure = this.state.treasure;
+      const treasure = this.getRuntimeTreasureTarget();
 
-      if (treasure.status !== 'secure' && treasure.status !== 'dropped') {
+      if (!treasure || (treasure.status !== 'secure' && treasure.status !== 'dropped')) {
         this.resolveTreasureStage(adventurer);
         return;
       }
@@ -1313,13 +1657,19 @@ export class DungeonSimulation {
       treasure.status = 'carried';
       treasure.holderAdventurerId = adventurer.id;
       treasure.droppedCell = null;
+      this.state.treasure = this.toLegacyTreasureState(treasure);
       adventurer.carryingTreasure = true;
 
       if (this.state.runtime) {
         const runtime = this.state.runtime;
         runtime.partyPlan.treasureClaimed = true;
         runtime.stats.treasureCarrierName = adventurer.name;
-        runtime.stats.storyEvents.push(`${adventurer.name} s'empare du tresor du donjon.`);
+        runtime.stats.treasureTargetId = treasure.id;
+        runtime.stats.storyEvents.push(
+          treasure.kind === 'gold'
+            ? `${adventurer.name} s'empare d'un tresor d'or (${treasure.value} or).`
+            : `${adventurer.name} s'empare du tresor du donjon.`,
+        );
         const groupObjective = chooseTreasureGroupObjective(
           runtime.partyPlan,
           adventurer,
@@ -1346,7 +1696,9 @@ export class DungeonSimulation {
         ? choosePostTreasureGoal(this.state.runtime.partyPlan, adventurer)
         : 'boss';
       adventurer.path = [];
-      this.state.message = `${adventurer.name} empoche le Tresor du Donjon. Rattrape-le ou paie l'addition.`;
+      this.state.message = treasure.kind === 'gold'
+        ? `${adventurer.name} empoche ${treasure.value} or de depot. Rattrape-le avant la sortie.`
+        : `${adventurer.name} empoche le Tresor du Donjon. Rattrape-le ou paie l'addition.`;
       this.createPartyBark('treasureTaken');
 
       if (!this.state.world.chronicles.some((entry) => entry.text.includes('atteint la salle du boss'))) {
@@ -1366,9 +1718,9 @@ export class DungeonSimulation {
       return;
     }
 
-    const treasure = this.state.treasure;
+    const treasure = this.getRuntimeTreasureTarget();
 
-    if (treasure.status === 'secure' || treasure.status === 'dropped') {
+    if (treasure && (treasure.status === 'secure' || treasure.status === 'dropped')) {
       return;
     }
 
@@ -1384,11 +1736,15 @@ export class DungeonSimulation {
     }
 
     adventurer.carryingTreasure = false;
-    this.state.treasure = {
-      status: 'dropped',
-      holderAdventurerId: null,
-      droppedCell: { x: Math.round(adventurer.x), y: Math.round(adventurer.y) },
-    };
+    const treasure = this.state.treasures.find((candidate) => candidate.holderAdventurerId === adventurer.id);
+    const droppedCell = { x: Math.round(adventurer.x), y: Math.round(adventurer.y) };
+
+    if (treasure) {
+      treasure.status = 'dropped';
+      treasure.holderAdventurerId = null;
+      treasure.droppedCell = droppedCell;
+      this.state.treasure = this.toLegacyTreasureState(treasure);
+    }
 
     this.state.adventurers.forEach((other) => {
       if (other.alive && !other.escaped && other.targetStage === 'treasure') {
@@ -1586,7 +1942,11 @@ export class DungeonSimulation {
       adaptationNotes.push('Le tresor vole alimente toutes les conversations. Un tresor de remplacement est commande.');
     }
 
-    if (this.state.treasure.status !== 'secure' && !treasureStolen) {
+    if (runtime.stats.goldTreasureValueStolen > 0) {
+      adaptationNotes.push(`${runtime.stats.goldTreasureValueStolen} or de tresors secondaires ont ete emportes sans nouvelle facture.`);
+    }
+
+    if (this.state.treasures.some((treasure) => treasure.status === 'dropped' || treasure.status === 'carried') && !treasureStolen) {
       addChronicle(this.state.world, 'Le tresor est recupere sur les depouilles et remis sur son socle.');
     }
 
@@ -1853,11 +2213,13 @@ export class DungeonSimulation {
 
     lines.push(...buildCombatAbilityReportLines(runtime.stats));
 
-    lines.push(
-      runtime.stats.treasureStolen
-        ? 'Le chemin vers le tresor est confirme et vendable en taverne.'
-        : 'Le tresor n est pas sorti: la route existe, mais le prix a payer reste dissuasif.',
-    );
+    if (runtime.stats.treasureStolen) {
+      lines.push('Le chemin vers le tresor est confirme et vendable en taverne.');
+    } else if (runtime.stats.goldTreasureValueStolen > 0) {
+      lines.push(`Un tresor d'or est sorti (${runtime.stats.goldTreasureValueStolen} or), mais le tresor principal reste protege.`);
+    } else {
+      lines.push('Le tresor n est pas sorti: la route existe, mais le prix a payer reste dissuasif.');
+    }
 
     return lines;
   }
@@ -1891,11 +2253,21 @@ export class DungeonSimulation {
     const losses = runtime.stats.adventurersKilled;
     const escaped = runtime.stats.adventurersEscaped;
 
-    return [
+    const lines = [
       `${participants.length} dossiers traites: ${losses} mort${losses > 1 ? 's' : ''}, ${escaped} retour${escaped > 1 ? 's' : ''} ou fuite${escaped > 1 ? 's' : ''}.`,
       `${injuredCount} blessure${injuredCount > 1 ? 's' : ''} durable${injuredCount > 1 ? 's' : ''}; les survivants gagnent experience, trauma et mauvaises idees.`,
       `Niveau maximum observe dans l equipe: ${highestLevel}.`,
     ];
+
+    if (runtime.stats.goldTreasureValueStolen > 0) {
+      lines.push(`Tresors d'or voles: ${runtime.stats.goldTreasureValueStolen} or deja deposes, aucune penalite de remplacement.`);
+    }
+
+    if (runtime.stats.treasureValueStolen > 0 && runtime.stats.treasureCarrierName) {
+      lines.push(`Butin sorti par ${runtime.stats.treasureCarrierName}: ${runtime.stats.treasureValueStolen} valeur d'objectif.`);
+    }
+
+    return lines;
   }
 
   private buildGuildChanges(wave: number, adaptationNotes: string[]): string[] {
@@ -1958,11 +2330,13 @@ export class DungeonSimulation {
 
   private getTargetCell(adventurer: AdventurerEntity): GridCell {
     if (adventurer.targetStage === 'treasure') {
-      if (this.state.treasure.status === 'dropped' && this.state.treasure.droppedCell) {
-        return this.state.treasure.droppedCell;
+      const treasure = this.getRuntimeTreasureTarget();
+
+      if (treasure?.status === 'dropped' && treasure.droppedCell) {
+        return treasure.droppedCell;
       }
 
-      return TREASURE_CELL;
+      return treasure?.cell ?? this.getBossCell();
     }
 
     if (adventurer.targetStage === 'exit') {
@@ -1982,11 +2356,34 @@ export class DungeonSimulation {
 
     if (adventurer.carryingTreasure) {
       adventurer.carryingTreasure = false;
-      this.state.treasure = { status: 'stolen', holderAdventurerId: null, droppedCell: null };
-      this.state.runtime.stats.treasureStolen = true;
+      const treasure = this.state.treasures.find((candidate) => candidate.holderAdventurerId === adventurer.id);
+
+      if (treasure) {
+        treasure.status = 'stolen';
+        treasure.holderAdventurerId = null;
+        treasure.droppedCell = null;
+        this.state.treasure = this.toLegacyTreasureState(treasure);
+        this.state.runtime.stats.treasureValueStolen += treasure.value;
+
+        if (treasure.kind === 'gold') {
+          this.state.runtime.stats.goldTreasureValueStolen += treasure.value;
+        } else {
+          this.state.runtime.stats.treasureStolen = true;
+        }
+      } else {
+        this.state.runtime.stats.treasureStolen = true;
+        this.state.treasure = { status: 'stolen', holderAdventurerId: null, droppedCell: null };
+      }
+
       recordTreasureTheft(this.state.world, adventurer.profileId);
-      this.state.runtime.stats.storyEvents.push(`${adventurer.name} s'echappe avec le tresor du donjon.`);
-      this.state.message = `${adventurer.name} sort avec TON tresor. La comptabilite exige des represailles.`;
+      this.state.runtime.stats.storyEvents.push(
+        treasure?.kind === 'gold'
+          ? `${adventurer.name} s'echappe avec ${treasure.value} or deja deposes.`
+          : `${adventurer.name} s'echappe avec le tresor du donjon.`,
+      );
+      this.state.message = treasure?.kind === 'gold'
+        ? `${adventurer.name} sort avec un tresor d'or. L'or etait deja depose: pas de double facture.`
+        : `${adventurer.name} sort avec TON tresor. La comptabilite exige des represailles.`;
     }
 
     const injury = createInjury(
@@ -2487,11 +2884,26 @@ function createEmptyWaveStats(): WaveStats {
     thiefDoorLeads: 0,
     treasureCarrierName: null,
     treasureGroupDecision: null,
+    treasureTargetId: null,
+    treasureValueStolen: 0,
+    goldTreasureValueStolen: 0,
   };
 }
 
 function createSecureTreasure(): TreasureState {
   return {
+    status: 'secure',
+    holderAdventurerId: null,
+    droppedCell: null,
+  };
+}
+
+function createMainTreasure(): DungeonTreasure {
+  return {
+    id: 'main-treasure',
+    kind: 'main',
+    cell: { ...TREASURE_CELL },
+    value: 0,
     status: 'secure',
     holderAdventurerId: null,
     droppedCell: null,

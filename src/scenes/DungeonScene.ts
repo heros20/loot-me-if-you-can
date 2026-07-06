@@ -4,6 +4,7 @@ import {
   BOSS_CELL,
   DIG_COST,
   DOOR_COST,
+  ENTRY_CELL,
   GRID_COLS,
   GRID_OFFSET_X,
   GRID_OFFSET_Y,
@@ -12,6 +13,7 @@ import {
   cellKey,
   cellToWorld,
   gridPositionToWorld,
+  isInEntrySafeZone,
   isSameCell,
   worldToCell,
 } from '../game/constants';
@@ -54,6 +56,7 @@ export class DungeonScene extends Phaser.Scene {
   private bossView: RenderedEntity | null = null;
   private previousBossHp = 0;
   private hoverGraphics!: Phaser.GameObjects.Graphics;
+  private safeZoneGraphics!: Phaser.GameObjects.Graphics;
   private hpGraphics!: Phaser.GameObjects.Graphics;
   private pathGraphics!: Phaser.GameObjects.Graphics;
   private treasureGraphics!: Phaser.GameObjects.Graphics;
@@ -67,6 +70,7 @@ export class DungeonScene extends Phaser.Scene {
   create(): void {
     this.simulation.startNewGame();
     this.drawDungeon();
+    this.safeZoneGraphics = this.add.graphics();
     this.hoverGraphics = this.add.graphics();
     this.pathGraphics = this.add.graphics();
     this.treasureGraphics = this.add.graphics();
@@ -82,6 +86,7 @@ export class DungeonScene extends Phaser.Scene {
     this.drawHealthBars();
     this.drawPaths();
     this.drawTreasure();
+    this.drawSafeZone();
     this.uiPublishTimerMs -= delta;
 
     if (this.uiPublishTimerMs <= 0) {
@@ -614,29 +619,84 @@ export class DungeonScene extends Phaser.Scene {
     const renderState = this.simulation.getRenderState();
     this.treasureGraphics.clear();
 
-    if (renderState.treasure.status === 'dropped' && renderState.treasure.droppedCell) {
-      const world = cellToWorld(renderState.treasure.droppedCell);
-      this.treasureGraphics.fillStyle(0xf6d88a, 0.95);
-      this.treasureGraphics.fillCircle(world.x, world.y, 7);
-      this.treasureGraphics.lineStyle(2, 0xa8791f, 1);
-      this.treasureGraphics.strokeCircle(world.x, world.y, 7);
-      return;
-    }
-
-    if (renderState.treasure.status === 'carried' && renderState.treasure.holderAdventurerId) {
-      const carrier = renderState.adventurers.find(
-        (adventurer) => adventurer.id === renderState.treasure.holderAdventurerId,
-      );
-
-      if (!carrier) {
+    renderState.treasures.forEach((treasure) => {
+      if (treasure.status === 'stolen') {
         return;
       }
 
-      const world = gridPositionToWorld(carrier.x, carrier.y);
-      this.treasureGraphics.fillStyle(0xf6d88a, 0.95);
-      this.treasureGraphics.fillCircle(world.x + 12, world.y - 12, 5);
-      this.treasureGraphics.lineStyle(1.5, 0xa8791f, 1);
-      this.treasureGraphics.strokeCircle(world.x + 12, world.y - 12, 5);
+      if (treasure.status === 'carried' && treasure.holderAdventurerId) {
+        const carrier = renderState.adventurers.find((adventurer) => adventurer.id === treasure.holderAdventurerId);
+
+        if (!carrier) {
+          return;
+        }
+
+        const world = gridPositionToWorld(carrier.x, carrier.y);
+        this.drawTreasureMarker(world.x + 12, world.y - 12, treasure.kind, 5);
+        return;
+      }
+
+      const cell = treasure.status === 'dropped' && treasure.droppedCell ? treasure.droppedCell : treasure.cell;
+
+      if (!cell) {
+        return;
+      }
+
+      const world = cellToWorld(cell);
+      this.drawTreasureMarker(world.x, world.y, treasure.kind, treasure.kind === 'main' ? 8 : 6);
+    });
+  }
+
+  private drawTreasureMarker(x: number, y: number, kind: 'main' | 'gold', radius: number): void {
+    const fill = kind === 'main' ? 0xf6d88a : 0xffc44d;
+    const stroke = kind === 'main' ? 0xa8791f : 0x7a4a13;
+
+    this.treasureGraphics.fillStyle(fill, 0.96);
+    this.treasureGraphics.fillCircle(x, y, radius);
+    this.treasureGraphics.lineStyle(2, stroke, 1);
+    this.treasureGraphics.strokeCircle(x, y, radius);
+
+    if (kind === 'gold') {
+      this.treasureGraphics.lineStyle(1, 0x3a220a, 0.9);
+      this.treasureGraphics.beginPath();
+      this.treasureGraphics.moveTo(x - radius + 2, y);
+      this.treasureGraphics.lineTo(x + radius - 2, y);
+      this.treasureGraphics.strokePath();
+    }
+  }
+
+  private drawSafeZone(): void {
+    const renderState = this.simulation.getRenderState();
+    this.safeZoneGraphics.clear();
+
+    if (renderState.phase !== 'build') {
+      return;
+    }
+
+    this.safeZoneGraphics.fillStyle(0x79b8ff, 0.08);
+    this.safeZoneGraphics.lineStyle(1, 0x79b8ff, 0.28);
+
+    for (let y = 0; y < GRID_ROWS; y += 1) {
+      for (let x = 0; x < GRID_COLS; x += 1) {
+        const cell = { x, y };
+
+        if (!isInEntrySafeZone(cell)) {
+          continue;
+        }
+
+        this.safeZoneGraphics.fillRect(
+          GRID_OFFSET_X + x * TILE_SIZE + 1,
+          GRID_OFFSET_Y + y * TILE_SIZE + 1,
+          TILE_SIZE - 2,
+          TILE_SIZE - 2,
+        );
+        this.safeZoneGraphics.strokeRect(
+          GRID_OFFSET_X + x * TILE_SIZE + 1,
+          GRID_OFFSET_Y + y * TILE_SIZE + 1,
+          TILE_SIZE - 2,
+          TILE_SIZE - 2,
+        );
+      }
     }
   }
 
@@ -651,6 +711,7 @@ export class DungeonScene extends Phaser.Scene {
     const renderState = this.simulation.getRenderState();
     const tile = getTileAt(renderState.tiles, cell);
     const constructionTool = renderState.selectedConstructionTool;
+    const activeTreasureOnCell = renderState.treasures.some((treasure) => treasure.status !== 'stolen' && isSameCell(treasure.cell, cell));
     const invalid = constructionTool === 'dig'
       ? tile?.type !== 'rock' || !hasAdjacentDugTile(renderState.tiles, cell) || renderState.gold < DIG_COST
       : constructionTool === 'guardRoom' || constructionTool === 'crypt'
@@ -662,6 +723,26 @@ export class DungeonScene extends Phaser.Scene {
             || renderState.gold < DOOR_COST
           : constructionTool === 'removeDoor'
             ? !findDoorAt(renderState.doors, cell)
+          : constructionTool === 'moveBoss'
+            ? !tile
+              || tile.type !== 'floor' && tile.type !== 'room'
+              || isInEntrySafeZone(cell)
+              || isSameCell(cell, ENTRY_CELL)
+              || activeTreasureOnCell
+              || Boolean(findActiveDoorAt(renderState.doors, cell))
+              || renderState.defenses.some((defense) => defense.alive && isSameCell(defense.cell, cell))
+          : constructionTool === 'moveTreasure' || constructionTool === 'addGoldTreasure'
+            ? !tile
+              || tile.type !== 'floor' && tile.type !== 'room'
+              || isInEntrySafeZone(cell)
+              || isSameCell(cell, ENTRY_CELL)
+              || isSameCell(cell, renderState.boss.homeCell)
+              || activeTreasureOnCell
+              || Boolean(findActiveDoorAt(renderState.doors, cell))
+              || renderState.defenses.some((defense) => defense.alive && isSameCell(defense.cell, cell))
+              || (constructionTool === 'addGoldTreasure' && renderState.gold < 20)
+          : constructionTool === 'removeTreasure'
+            ? !renderState.treasures.some((treasure) => treasure.kind === 'gold' && treasure.status !== 'stolen' && isSameCell(treasure.cell, cell))
           : !canBuildDefenseOnTile(tile);
     const color = invalid ? 0x8f2631 : 0xe1b35a;
     this.hoverGraphics.lineStyle(3, color, 0.86);

@@ -1,4 +1,4 @@
-import { DOOR_COST, DOOR_HP, isSameCell } from '../game/constants';
+import { DOOR_COST, DOOR_HP, isInEntrySafeZone, isSameCell } from '../game/constants';
 import { getTileAt } from '../game/dungeonTiles';
 import { ECONOMY_BALANCE } from './economyBalance';
 import type { DungeonDoor, DungeonTile, GridCell } from '../game/types';
@@ -32,7 +32,7 @@ export function isDoorPlaceableTile(tile: DungeonTile | null): boolean {
 }
 
 export function canPlaceDoorAt(tiles: DungeonTile[], cell: GridCell): boolean {
-  return isDoorPlaceableTile(getTileAt(tiles, cell));
+  return !isInEntrySafeZone(cell) && isDoorPlaceableTile(getTileAt(tiles, cell));
 }
 
 export function describeDoorTileRejection(tile: DungeonTile | null): string {
@@ -77,6 +77,10 @@ export function placeDoorAt(
   cellOccupiedByDefense: boolean,
   id: string,
 ): DoorPlacementResult {
+  if (isInEntrySafeZone(cell)) {
+    return blocked(doors, "Zone de surete : laisse une chance aux intrus d'entrer.");
+  }
+
   if (!canPlaceDoorAt(tiles, cell)) {
     return blocked(doors, describeDoorTileRejection(getTileAt(tiles, cell)));
   }

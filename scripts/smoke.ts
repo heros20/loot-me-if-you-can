@@ -1,5 +1,13 @@
 /* Test de fumee headless: simule plusieurs vagues avec pieges, sbires et capacites du boss. */
-import { DIG_COST, DOOR_COST, PARTY_SIZE, STARTING_GOLD } from '../src/game/constants';
+import {
+  DIG_COST,
+  DOOR_COST,
+  GOLD_TREASURE_DEFAULT_VALUE,
+  MAX_TREASURES_V1,
+  PARTY_SIZE,
+  SAFE_ZONE_RADIUS,
+  STARTING_GOLD,
+} from '../src/game/constants';
 import { DungeonSimulation } from '../src/game/DungeonSimulation';
 import {
   COMBAT_ABILITY_BALANCE,
@@ -52,7 +60,14 @@ function createSmokeStats(): WaveStats {
     thiefDoorLeads: 0,
     treasureCarrierName: null,
     treasureGroupDecision: null,
+    treasureTargetId: null,
+    treasureValueStolen: 0,
+    goldTreasureValueStolen: 0,
   };
+}
+
+function isCell(a: GridCell, b: GridCell): boolean {
+  return a.x === b.x && a.y === b.y;
 }
 
 function createSmokeAdventurer(role: AdventurerRole, id: string, x: number, y: number): AdventurerEntity {
@@ -337,6 +352,130 @@ function validateDoorRules(): void {
 
   if (trapOverlapSim.getRenderState().doors.length !== 0) {
     console.error('ECHEC: une porte a ete posee sur une case deja occupee par un piege.');
+    process.exit(1);
+  }
+}
+
+function validateDungeonAnchorRules(): void {
+  const safeSim = new DungeonSimulation();
+  safeSim.startNewGame();
+  const startGold = safeSim.getSnapshot().gold;
+
+  safeSim.selectDefense('spikeTrap');
+  safeSim.placeSelectedDefense({ x: 1, y: 7 });
+
+  if (safeSim.getSnapshot().gold !== startGold || !safeSim.getSnapshot().message.includes('Zone de surete')) {
+    console.error(`ECHEC: la zone de surete rayon ${SAFE_ZONE_RADIUS} devrait refuser les pieges pres de l entree.`);
+    process.exit(1);
+  }
+
+  safeSim.selectConstructionTool('door');
+  safeSim.placeSelectedDefense({ x: 1, y: 7 });
+
+  if (safeSim.getRenderState().doors.length !== 0) {
+    console.error('ECHEC: une porte a ete acceptee dans la zone de surete.');
+    process.exit(1);
+  }
+
+  const anchorSim = new DungeonSimulation();
+  anchorSim.startNewGame();
+  anchorSim.selectConstructionTool('moveBoss');
+  anchorSim.placeSelectedDefense({ x: 20, y: 11 });
+
+  if (!isCell(anchorSim.getRenderState().boss.homeCell, { x: 20, y: 11 })) {
+    console.error('ECHEC: Deplacer boss devrait changer l ancre du boss.');
+    process.exit(1);
+  }
+
+  if (anchorSim.getRenderState().tiles.filter((tile) => tile.type === 'throne').length !== 1) {
+    console.error('ECHEC: Deplacer boss ne devrait pas dupliquer le trone.');
+    process.exit(1);
+  }
+
+  anchorSim.selectConstructionTool('moveTreasure');
+  anchorSim.placeSelectedDefense({ x: 15, y: 4 });
+
+  const movedMainTreasure = anchorSim.getRenderState().treasures.find((treasure) => treasure.kind === 'main');
+
+  if (!movedMainTreasure || !isCell(movedMainTreasure.cell, { x: 15, y: 4 })) {
+    console.error('ECHEC: Deplacer tresor devrait changer l ancre du tresor principal.');
+    process.exit(1);
+  }
+
+  if (!anchorSim.getSnapshot().dungeonValidation.valid) {
+    console.error('ECHEC: le donjon devrait rester valide apres deplacements boss/tresor.');
+    process.exit(1);
+  }
+
+  const goldBeforeDeposit = anchorSim.getSnapshot().gold;
+  anchorSim.selectConstructionTool('addGoldTreasure');
+  anchorSim.placeSelectedDefense({ x: 18, y: 5 });
+
+  if (
+    anchorSim.getSnapshot().gold !== goldBeforeDeposit - GOLD_TREASURE_DEFAULT_VALUE ||
+    anchorSim.getRenderState().treasures.filter((treasure) => treasure.kind === 'gold').length !== 1
+  ) {
+    console.error("ECHEC: Ajouter tresor d'or devrait deposer 20 or et creer un tresor secondaire.");
+    process.exit(1);
+  }
+
+  anchorSim.selectConstructionTool('removeTreasure');
+  anchorSim.placeSelectedDefense({ x: 18, y: 5 });
+
+  if (
+    anchorSim.getSnapshot().gold !== goldBeforeDeposit ||
+    anchorSim.getRenderState().treasures.some((treasure) => treasure.kind === 'gold')
+  ) {
+    console.error("ECHEC: Retirer tresor devrait rembourser un tresor d'or non vole.");
+    process.exit(1);
+  }
+
+  anchorSim.selectConstructionTool('addGoldTreasure');
+  anchorSim.placeSelectedDefense({ x: 18, y: 5 });
+  anchorSim.placeSelectedDefense({ x: 18, y: 6 });
+  anchorSim.placeSelectedDefense({ x: 18, y: 7 });
+
+  if (anchorSim.getRenderState().treasures.length !== MAX_TREASURES_V1) {
+    console.error(`ECHEC: le plafond V1 devrait limiter les tresors a ${MAX_TREASURES_V1}.`);
+    process.exit(1);
+  }
+
+  const maxedTool = anchorSim.getSnapshot().constructionTools.find((tool) => tool.type === 'addGoldTreasure');
+
+  if (!maxedTool?.disabled) {
+    console.error("ECHEC: Ajouter tresor d'or devrait etre desactive au plafond.");
+    process.exit(1);
+  }
+
+  const economySim = new DungeonSimulation();
+  economySim.startNewGame();
+  const economyState = (economySim as unknown as { state: import('../src/game/types').GameState }).state;
+  const profiles = Object.values(economyState.world.profiles).slice(0, PARTY_SIZE);
+  economyState.phase = 'wave';
+  economyState.runtime = {
+    elapsedMs: 1000,
+    spawnTimerMs: 0,
+    spawnQueue: [],
+    partyProfiles: profiles,
+    spawned: profiles.length,
+    partyPlan: createPartyPlan(1, economyState.world.dungeonReputation.value, null),
+    stats: {
+      ...createSmokeStats(),
+      goldTreasureValueStolen: GOLD_TREASURE_DEFAULT_VALUE,
+      treasureValueStolen: GOLD_TREASURE_DEFAULT_VALUE,
+      treasureCarrierName: profiles[0]?.name ?? 'Porteur',
+    },
+    doorsEngagedIds: new Set<string>(),
+    bossAutopilotTimerMs: 0,
+    targetTreasureId: 'gold-test',
+  };
+
+  (economySim as unknown as { finishWaveVictory(): void }).finishWaveVictory();
+
+  const report = economySim.getSnapshot().report;
+
+  if (!report || report.treasurePenaltyGold !== 0 || !report.gainsLosses.some((line) => line.includes('aucune penalite'))) {
+    console.error("ECHEC: un tresor d'or vole ne devrait pas creer de double perte en rapport.");
     process.exit(1);
   }
 }
@@ -851,6 +990,7 @@ function validateGoblinChaseRules(): void {
 validateDiggingRules();
 validateSpecialRoomBuildRules();
 validateDoorRules();
+validateDungeonAnchorRules();
 validateDoorLockRules();
 validateDoorRemovalRules();
 validateDoorNoThiefRetreat();

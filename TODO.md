@@ -2,12 +2,15 @@
 
 ## Near Term
 
-- Dungeon Structure V2 (see `docs/DUNGEON_STRUCTURE_V2.md` for the full spec, not yet implemented):
-  - V1.2 boss deplacable + zone de surete autour de l'entree.
+- Dungeon Structure V2 (see `docs/DUNGEON_STRUCTURE_V2.md` and `docs/DUNGEON_ANCHORS_V1.md`):
+  - V1.2 Dungeon Anchors V1 is implemented: safe zone, movable boss, movable main treasure, and gold treasures.
   - V1.3 mur constructible (rebouchage d'une case creusee, coherent avec D-009) + validation de chemin bidirectionnelle.
   - V1.4 map initiale moins creusee (actuellement 19% de la carte est deja creusee au demarrage, en reseau ramifie avec 3 salles pretes a l'emploi).
   - V2.0 generation aleatoire de la carte au lancement d'un run (seed, une seule fois par partie, jamais par expedition).
   - V2.1 zones/antichambres sur une meme carte, V3.0 plusieurs niveaux + sous-boss.
+- Future treasure types: weapon, armor, and technique treasures are not started; decide later whether they are loot, equipment hooks, or named legendary objects.
+- Future survivor continuity: connect survivor chronicle consequences into the next expedition only after the current profile/chronicle loop is playtested.
+- Future guild tavern scene: expand rumors into a true tavern screen only when expedition prep needs it.
 - Expand Kenney-based asset coverage for ability-specific particles/icons if V1 readability needs more than tint/pulse feedback.
 - Add sound effects and a mute toggle.
 - Add clearer placement previews for trap range and minion attack range.
@@ -82,4 +85,5 @@
 - Menu & sidebar UI/UX pass: redesigned the home menu (title, subtitle, ambiance copy, disabled Continue, credits toggle, prototype badge) and rebuilt the "Salle de controle" sidebar with a sticky header, one contextual message at a time, collapsible sections, compact cards with a selected-tool detail fiche, pill counters, and a compact scrollable journal feed. Presentation only; no snapshot, simulation, or balance changes.
 - Expedition Clarity & Survivor Chronicle V1: treasure pickup now produces a collective group objective, combat readability uses short role/intent/ability labels, barks are shorter and spatially de-overlapped, and the post-wave report starts with a skippable survivor/no-survivor chronicle.
 - Full-viewport layout pass: the app shell now fills the real browser window (docked play area + docked sidebar via `--sidebar-width`/`--hud-height` CSS custom properties) instead of a small fixed-size box centered on the page, and the existing Phaser `Scale.FIT` config scales the unchanged 960x640 game resolution to fill the larger canvas area. `src/styles.css` only; no grid, coordinate, or gameplay constant was touched.
-- Sidebar audit & cleanup pass: primary build tools (dig/door/remove-door) are now always visible instead of hidden in an accordion, the header/next-expedition summaries were compressed from stat-card grids and 5-pill rows down to single compact lines, territory/door counters moved into a secondary "Salles & terrain" accordion, and every accordion defaults to closed unless its tool/defense is already selected. Added disabled "Bientot" placeholders for the future Mur and Deplacer boss actions. The survivor chronicle/debrief overlay was left untouched. See `docs/DUNGEON_STRUCTURE_V2.md` for the design spec this prepares the UI for.
+- Sidebar audit & cleanup pass: primary build tools (dig/door/remove-door) are now always visible instead of hidden in an accordion, the header/next-expedition summaries were compressed from stat-card grids and 5-pill rows down to single compact lines, territory/door counters moved into a secondary "Salles & terrain" accordion, and every accordion defaults to closed unless its tool/defense is already selected. The remaining disabled "Bientot" placeholder is Mur; Deplacer boss is live in Objectifs. The survivor chronicle/debrief overlay was left untouched. See `docs/DUNGEON_STRUCTURE_V2.md` for the design spec this prepares the UI for.
+- Dungeon Anchors V1: added entry safe zone, movable boss, movable main treasure, gold treasure deposit/removal, multi-treasure targeting, route validation over active anchors, rendered treasure markers, and smoke coverage. Deplacer boss is no longer a placeholder; Mur remains future.

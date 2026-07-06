@@ -4,6 +4,7 @@ import type {
   BossAbilityType,
   ConstructionTool,
   DungeonTile,
+  DungeonTreasure,
   DefenseKind,
   DefenseType,
   DungeonValidation,
@@ -12,7 +13,7 @@ import type {
   WaveReport,
 } from './types';
 
-export type ConstructionCategory = 'construction' | 'rooms';
+export type ConstructionCategory = 'construction' | 'rooms' | 'objectives';
 
 export interface DefenseUiItem {
   type: DefenseType;
@@ -122,6 +123,8 @@ export interface DungeonSnapshot {
   gameSpeed: number;
   treasureStatus: TreasureStatus;
   treasureCarrierName: string | null;
+  treasures: DungeonTreasure[];
+  safeZoneRadius: number;
   recentRumors: string[];
   inspectedAdventurer: InspectedAdventurer | null;
   namedMinions: NamedMinionUiItem[];

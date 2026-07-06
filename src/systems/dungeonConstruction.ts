@@ -1,4 +1,4 @@
-import { DIG_COST, cellKey, isInsideGrid, isSameCell } from '../game/constants';
+import { DIG_COST, cellKey, isInEntrySafeZone, isInsideGrid, isSameCell } from '../game/constants';
 import {
   getTileAt,
   hasAdjacentDugTile,
@@ -73,7 +73,7 @@ export function canBuildDefenseOnTile(tile: DungeonTile | null): boolean {
 }
 
 export function canBuildDefenseAt(tiles: DungeonTile[], cell: GridCell): boolean {
-  return isInsideGrid(cell) && canBuildDefenseOnTile(getTileAt(tiles, cell));
+  return isInsideGrid(cell) && !isInEntrySafeZone(cell) && canBuildDefenseOnTile(getTileAt(tiles, cell));
 }
 
 export function canMarkRoomTile(tile: DungeonTile | null): boolean {
@@ -94,6 +94,10 @@ export function buildRejectionReason(tiles: DungeonTile[], cell: GridCell): stri
 
   if (!tile || tile.type === 'rock') {
     return 'Cette defense exige un sol creuse: la roche refuse de cooperer.';
+  }
+
+  if (isInEntrySafeZone(cell)) {
+    return "Zone de surete : laisse une chance aux intrus d'entrer.";
   }
 
   if (tile.type === 'entrance') {

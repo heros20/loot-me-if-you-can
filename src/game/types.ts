@@ -13,7 +13,16 @@ export type TileType = 'rock' | 'floor' | 'room' | 'entrance' | 'treasure' | 'th
 
 export type RoomSpecialization = 'guardRoom' | 'crypt' | 'treasureRoom' | 'throneRoom';
 
-export type ConstructionTool = 'dig' | 'guardRoom' | 'crypt' | 'door' | 'removeDoor';
+export type ConstructionTool =
+  | 'dig'
+  | 'guardRoom'
+  | 'crypt'
+  | 'door'
+  | 'removeDoor'
+  | 'moveBoss'
+  | 'moveTreasure'
+  | 'addGoldTreasure'
+  | 'removeTreasure';
 
 export type AdventurerRole = 'warrior' | 'thief' | 'mage' | 'healer';
 
@@ -73,8 +82,19 @@ export interface TavernRumor {
 }
 
 export type TreasureStatus = 'secure' | 'carried' | 'dropped' | 'stolen';
+export type DungeonTreasureKind = 'main' | 'gold';
 
 export interface TreasureState {
+  status: TreasureStatus;
+  holderAdventurerId: string | null;
+  droppedCell: GridCell | null;
+}
+
+export interface DungeonTreasure {
+  id: string;
+  kind: DungeonTreasureKind;
+  cell: GridCell;
+  value: number;
   status: TreasureStatus;
   holderAdventurerId: string | null;
   droppedCell: GridCell | null;
@@ -413,6 +433,9 @@ export interface WaveStats {
   thiefDoorLeads: number;
   treasureCarrierName: string | null;
   treasureGroupDecision: 'escapeWithTreasure' | 'challengeBoss' | null;
+  treasureTargetId: string | null;
+  treasureValueStolen: number;
+  goldTreasureValueStolen: number;
 }
 
 export interface WaveRuntime {
@@ -425,6 +448,7 @@ export interface WaveRuntime {
   stats: WaveStats;
   doorsEngagedIds: Set<string>;
   bossAutopilotTimerMs: number;
+  targetTreasureId: string | null;
 }
 
 export interface PartyPlan {
@@ -528,6 +552,7 @@ export interface GameState {
   adventurers: AdventurerEntity[];
   boss: BossEntity;
   treasure: TreasureState;
+  treasures: DungeonTreasure[];
   memory: AdaptationMemory;
   world: RunWorldMemory;
   runtime: WaveRuntime | null;
