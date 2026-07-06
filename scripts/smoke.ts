@@ -190,7 +190,7 @@ function validateDoorLockRules(): void {
   const door = lockSim.getRenderState().doors[0];
 
   if (!door?.locked || door.openedForExpedition || door.pickProgressMs !== 0 || door.destroyed) {
-    console.error('ECHEC: une porte devrait demarrer verrouillee, non ouverte et non detruite.');
+    console.error('ECHEC: une porte devrait demarrer verrouillee, fermee et intacte.');
     process.exit(1);
   }
 }
@@ -361,8 +361,7 @@ function buildPhase(): void {
 let abilityFired = 0;
 let doorEverPicked = false;
 let doorEverRetreatedNoThief = false;
-let doorEverDamaged = false;
-let doorEverDestroyed = false;
+let doorEverLostIntegrity = false;
 
 for (let wave = 1; wave <= 6; wave += 1) {
   buildPhase();
@@ -418,11 +417,11 @@ for (let wave = 1; wave <= 6; wave += 1) {
   const doorsAfterWave = sim.getRenderState().doors;
 
   if (doorsAfterWave.some((door) => door.hp < door.maxHp)) {
-    doorEverDamaged = true;
+    doorEverLostIntegrity = true;
   }
 
   if (doorsAfterWave.some((door) => door.destroyed)) {
-    doorEverDestroyed = true;
+    doorEverLostIntegrity = true;
   }
 
   console.log(
@@ -453,8 +452,8 @@ if (!doorEverPicked) {
   process.exit(1);
 }
 
-if (doorEverDamaged || doorEverDestroyed) {
-  console.error('ECHEC: les portes verrouillees ne doivent plus etre endommagees ni detruites par combat.');
+if (doorEverLostIntegrity) {
+  console.error('ECHEC: les portes verrouillees doivent rester intactes pendant les expeditions.');
   process.exit(1);
 }
 
@@ -463,5 +462,5 @@ if (abilityFired <= 0) {
   process.exit(1);
 }
 
-console.log(`Portes verrouillees: crochetee=${doorEverPicked} retraiteSansVoleur=${doorEverRetreatedNoThief} endommagee=${doorEverDamaged} detruite=${doorEverDestroyed}`);
+console.log(`Portes verrouillees: crochetee=${doorEverPicked} retraiteSansVoleur=${doorEverRetreatedNoThief} intactes=${!doorEverLostIntegrity}`);
 console.log(`Capacites automatiques declenchees ${abilityFired} fois. Test termine sans crash.`);

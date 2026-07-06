@@ -40,8 +40,6 @@ export interface CountItem {
 
 export interface DoorSummary {
   active: number;
-  averageHp: number;
-  maxHp: number;
   locked: number;
   opened: number;
   beingPicked: number;

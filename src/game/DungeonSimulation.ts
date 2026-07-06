@@ -2,7 +2,6 @@ import {
   BOSS_CELL,
   DIG_COST,
   DOOR_COST,
-  DOOR_HP,
   ENTRY_CELL,
   PARTY_SIZE,
   STARTING_GOLD,
@@ -158,7 +157,7 @@ const CONSTRUCTION_TOOLS: Array<{
   {
     type: 'door',
     name: 'Porte renforcee',
-    description: `Bloque un couloir jusqu'a crochetage par un voleur. ${DOOR_HP} solidite, serrure reinitialisee entre expeditions.`,
+    description: "Bloque un couloir jusqu'a crochetage par un voleur. Serrure reinitialisee entre expeditions.",
     category: 'construction',
     cost: DOOR_COST,
   },
@@ -1505,7 +1504,6 @@ export class DungeonSimulation {
       treasurePenaltyGold,
     });
     const goldAwarded = economy.goldAwarded;
-    const doorSalvageGold = 0;
     const preparationBudget = economy.preparationBudget;
     const adaptationNotes = this.applyAdaptation(runtime.stats, runtime.elapsedMs);
     this.recordTopMinionFeat(runtime.stats);
@@ -1553,7 +1551,6 @@ export class DungeonSimulation {
       runtime,
       goldAwarded,
       trapRefundGold,
-      doorSalvageGold,
       treasurePenaltyGold,
       economy.treasureProtectedBonusGold,
       economy.bossSurvivalBonusGold,
@@ -1623,7 +1620,6 @@ export class DungeonSimulation {
       0,
       0,
       0,
-      0,
       adaptationNotes,
       reputationDelta,
     );
@@ -1638,7 +1634,6 @@ export class DungeonSimulation {
     runtime: WaveRuntime,
     goldAwarded: number,
     trapRefundGold: number,
-    doorSalvageGold: number,
     treasurePenaltyGold: number,
     treasureProtectedBonusGold: number,
     bossSurvivalBonusGold: number,
@@ -1669,7 +1664,6 @@ export class DungeonSimulation {
       bossDamageTaken: Math.round(runtime.stats.bossDamageTaken),
       goldAwarded,
       trapRefundGold,
-      doorSalvageGold,
       treasurePenaltyGold,
       treasureProtectedBonusGold,
       bossSurvivalBonusGold,
@@ -1695,7 +1689,6 @@ export class DungeonSimulation {
       economyLines: this.buildEconomyLines(
         goldAwarded,
         trapRefundGold,
-        doorSalvageGold,
         treasurePenaltyGold,
         treasureProtectedBonusGold,
         bossSurvivalBonusGold,
@@ -1792,7 +1785,7 @@ export class DungeonSimulation {
     if (runtime.stats.doorNoThiefRetreats > 0) {
       lines.push("La Guilde retient qu'une porte verrouillee exige un voleur vivant.");
     } else if (runtime.stats.doorsPicked > 0) {
-      lines.push(`Crochetage observe: ${runtime.stats.doorsPicked} porte${runtime.stats.doorsPicked > 1 ? 's' : ''} ouverte${runtime.stats.doorsPicked > 1 ? 's' : ''} sans degats.`);
+      lines.push(`Crochetage observe: ${runtime.stats.doorsPicked} porte${runtime.stats.doorsPicked > 1 ? 's' : ''} verrouillee${runtime.stats.doorsPicked > 1 ? 's' : ''} ouverte${runtime.stats.doorsPicked > 1 ? 's' : ''}.`);
     }
 
     lines.push(
@@ -1851,7 +1844,6 @@ export class DungeonSimulation {
   private buildEconomyLines(
     goldAwarded: number,
     trapRefundGold: number,
-    doorSalvageGold: number,
     treasurePenaltyGold: number,
     treasureProtectedBonusGold: number,
     bossSurvivalBonusGold: number,
@@ -1868,10 +1860,6 @@ export class DungeonSimulation {
 
     if (bossSurvivalBonusGold > 0) {
       lines.push(`Boss encore debout: +${bossSurvivalBonusGold}.`);
-    }
-
-    if (doorSalvageGold > 0) {
-      lines.push(`Materiaux recuperes sur portes detruites: +${doorSalvageGold}.`);
     }
 
     if (treasurePenaltyGold > 0) {
@@ -2287,14 +2275,9 @@ export class DungeonSimulation {
     const locked = activeDoors.filter((door) => !door.openedForExpedition).length;
     const opened = activeDoors.filter((door) => door.openedForExpedition).length;
     const beingPicked = activeDoors.filter((door) => door.beingPickedById !== null).length;
-    const averageHp = activeDoors.length > 0
-      ? Math.round(activeDoors.reduce((total, door) => total + door.hp, 0) / activeDoors.length)
-      : 0;
 
     return {
       active: activeDoors.length,
-      averageHp,
-      maxHp: DOOR_HP,
       locked,
       opened,
       beingPicked,
@@ -2329,11 +2312,6 @@ function createEmptyWaveStats(): WaveStats {
     abilityUses: 0,
     minionKillsByDefenseId: {},
     doorEncounters: 0,
-    doorsDestroyed: 0,
-    doorDamageTotal: 0,
-    doorDamageByThief: 0,
-    doorDestroyedBeforeTreasure: false,
-    doorSalvageGold: 0,
     doorsPicked: 0,
     doorNoThiefRetreats: 0,
     fleeingTrapAvoidances: 0,

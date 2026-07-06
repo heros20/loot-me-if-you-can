@@ -356,11 +356,6 @@ export interface WaveStats {
   abilityUses: number;
   minionKillsByDefenseId: Record<string, number>;
   doorEncounters: number;
-  doorsDestroyed: number;
-  doorDamageTotal: number;
-  doorDamageByThief: number;
-  doorDestroyedBeforeTreasure: boolean;
-  doorSalvageGold: number;
   doorsPicked: number;
   doorNoThiefRetreats: number;
   fleeingTrapAvoidances: number;
@@ -426,7 +421,6 @@ export interface WaveReport {
   goldAwarded: number;
   trapRefundGold: number;
   treasurePenaltyGold: number;
-  doorSalvageGold: number;
   treasureProtectedBonusGold: number;
   bossSurvivalBonusGold: number;
   preparationBudget: number;

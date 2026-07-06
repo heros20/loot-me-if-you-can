@@ -40,8 +40,6 @@
 - Doors future: richer lock interactions or upgrades only if V1 needs more depth; no repair economy is needed while doors are non-destructible.
 - Doors future: advanced door variants (locks, one-way doors, portcullises) once Portes V1 needs more depth — none of this is started yet.
 - Doors future: revisit door placement/readability once dungeons include larger open rooms rather than mostly corridors, since a single door overlay reads less clearly in a wide-open specialized room than in a narrow passage.
-- Doors cleanup: `WaveStats`/`WaveReport` still carry `doorDamageTotal`, `doorDamageByThief`, `doorsDestroyed`, `doorDestroyedBeforeTreasure`, and `doorSalvageGold` from the pre-lockpicking combat model. They are dead (never incremented, always render as hidden/zero) now that doors are locked/picked instead of damaged. Safe to remove in a dedicated cleanup pass; left alone here to avoid unrelated churn.
-
 ## Done in 0.5.0
 
 - Boss abilities with cooldowns (shockwave, roar, summon).

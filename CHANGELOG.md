@@ -2,6 +2,8 @@
 
 ## Unreleased - Direction studio gameplay
 
+- Removed dead destructible-door report stats (`doorDamageTotal`, `doorDamageByThief`, `doorsDestroyed`, `doorDestroyedBeforeTreasure`, `doorSalvageGold`) now that doors are locked/picked obstacles.
+- Cleaned door debrief and economy text so reports no longer mention door damage, destroyed doors, or recovered materials from destroyed doors.
 - Added the Expedition Cohesion & Defense AI stabilization pass without starting Kingdom memory, cartography, Cartographer, or full class abilities.
 - Added `src/systems/partyRetreatSystem.ts`: door-without-living-thief and party-level retreats now assign simple group intents (`followRetreat`, `coverRetreat`, `panicRetreat`, `disobey`) with contextual barks and debrief stats.
 - Doors now persist as locked obstacles between expeditions, reset their lock state after each wave, and can be voluntarily removed during build phase for a partial gold refund.
@@ -17,7 +19,7 @@
 - Expeditions without a living thief now recognize a locked door as a blocker, bark about it, retreat, record the failure in the debrief, and push adaptive composition toward future thieves.
 - Improved retreat pathing around visible lethal traps: badly wounded fleeing adventurers try a short alternative before stepping onto obvious death, without becoming perfect path solvers.
 - Improved bark readability and repetition control with a global phrase cooldown, fewer simultaneous barks, longer display time, higher battlefield placement, and a semi-opaque bubble.
-- Debriefs now surface defensive strategy more clearly: door delay, thief trap mitigation, thief door work, boss autopilot usage, tactical hesitations, and recovered door materials can all appear in the report.
+- Debriefs now surface defensive strategy more clearly: door delay, thief trap mitigation, thief door work, boss autopilot usage, and tactical hesitations can all appear in the report.
 - Updated smoke coverage so boss powers are validated as automatic, expedition reports still contain exactly 5 adventurers, doors remain non-destructible, thieves pick doors, no-thief parties retreat, and the richer first build budget supports a real defensive plan.
 - Fixed expedition size at exactly 5 adventurers via the new `PARTY_SIZE` constant; difficulty now shifts through class composition, levels, memory, and tactics instead of larger waves.
 - Reworked class composition into a fixed-size adaptive roster: traps push the guild toward thieves, long fights toward healers, lethal minions toward warriors, boss pressure toward tanks/healers, and treasure theft toward more aggressive boss-capable teams.
@@ -38,7 +40,7 @@
 - Added Portes V1: a Porte renforcee construction (18 gold, locked) placeable on any dug floor/room cell, including around the treasure and throne rooms, but never on rock, the exact entrance/treasure/throne cells, or a cell already holding a trap, minion, or another door.
 - Doors stay traversable for pathfinding but block movement at runtime: adventurers stop until a thief picks the lock; parties without a living thief retreat and learn to bring one.
 - Doors render as a distinct placeholder with locked/picking/open states; picked doors persist and reset locked at the next build phase.
-- Debriefs now mention a door's impact (delay, thief efficiency, destruction before the treasure) when it mattered during the expedition.
+- Debriefs now mention a door's impact (delay, thief efficiency, no-thief retreat) when it mattered during the expedition.
 - Added door smoke assertions: placement refusals on rock/entrance/treasure/throne, acceptance on floor and around the treasure room, gold cost and disabled-button feedback, occupied-cell refusal, lock initialization, thief lockpicking, reset between expeditions, and no-thief retreat.
 
 ### Expedition Cohesion & Defense AI - Polish follow-up
@@ -49,7 +51,7 @@
 ### Portes V1.1 - Polish & Documentation
 
 - Documented the door's design intent as `D-011` in `docs/DECISIONS.md`: a passive tactical obstacle (no damage dealt), can also block a fleeing adventurer on purpose, and is deliberately ignored by the player's own monsters and boss.
-- Added a door summary to the Construction panel ("Portes actives : N — Solidite : X / 82 en moyenne", or "Portes actives : 0") so the player always knows how many reinforced doors are still standing without scanning the map.
+- Added a door summary to the Construction panel so the player always knows how many reinforced doors are active without scanning the map.
 - Gave door placement refusals a specific reason instead of one generic message: rock, entrance, exact treasure, exact throne, an already-occupied door cell, an already-occupied trap/monster cell, and insufficient gold now each report their own short explanation.
 - Superseded by Economy & Locked Doors: doors now use locked/picking/open states rather than combat damage.
 
