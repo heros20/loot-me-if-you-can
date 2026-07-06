@@ -4,7 +4,7 @@
 |---|---|
 | **Statut** | Vivant — journal append-only, on n'édite jamais une décision passée |
 | **Propriétaire** | Game Design |
-| **Dernière mise à jour** | 2026-07-03 |
+| **Dernière mise à jour** | 2026-07-07 (D-018) |
 | **Documents liés** | [DESIGN_PRINCIPLES.md](./DESIGN_PRINCIPLES.md) · [GAME_DESIGN_DOCUMENT.md](./GAME_DESIGN_DOCUMENT.md) |
 
 ---
@@ -26,6 +26,42 @@ Chaque décision structurante obtient une entrée, numérotée dans l'ordre chro
 **Conséquences** : impact sur le design, le code ou la production
 **Remplace / Remplacé par** : lien vers une autre entrée le cas échéant
 ```
+
+---
+
+## D-018 - Les roles strategiques appris peuvent ecarter temporairement un survivant
+
+**Date** : 2026-07-07
+**Statut** : Actif
+**Contexte** : bugfix Survivor Continuity V1 + portes verrouillees. Quand cinq survivants revenaient sans voleur alors que la Guilde avait deja appris qu'une porte active ou une retraite sans voleur exigeait un specialiste, la continuite remplissait les cinq slots et bloquait toute adaptation.
+**Decision** : la composition respecte toujours `PARTY_SIZE = 5`, puis impose les roles strategiques appris s'ils ne sont pas couverts par les survivants disponibles (V1 : au moins un voleur si porte verrouillee active, ou si la derniere expedition a du rebrousser chemin sans voleur et qu'il reste des survivants), puis remplit avec le maximum de survivants possibles, puis complete avec des recrues adaptatives. Un survivant ecarte reste vivant, garde son profil, et peut revenir plus tard ; la sidebar, la chronique et la taverne expliquent explicitement pourquoi il reste au rapport.
+**Alternatives envisagees** : envoyer six aventuriers (rejete : contredit D-001) ; ignorer le besoin de voleur pour honorer la continuite (rejete : casse l'apprentissage des portes) ; supprimer definitivement le survivant ecarte (rejete : casse la promesse de persistance des profils).
+**Consequences** : `selectProfilesForWave` vit dans `expeditionComposition.ts` ; `doorBlockedWithoutThief` et `rolePressure.thief >= 3` n'imposent un voleur que s'il reste des survivants a arbitrer, tandis qu'une porte active impose toujours un voleur meme sans survivant. D-015 reste vrai dans l'esprit mais n'est plus absolu face a un role indispensable appris.
+**Remplace / Remplace par** :
+
+---
+
+## D-017 - La scene de taverne est un espace avec des acteurs positionnes, pas des cartes de rapport
+
+**Date** : 2026-07-06
+**Statut** : Actif
+**Contexte** : passe Guild Tavern Scene V2. La V1 (D-016) remplacait deja le texte brut par une "scene", mais le rendu restait en pratique un encart de rapport stylise : cartes de survivants alignees, liste de badges, bulles de dialogue empilees hors de tout espace. Le studio a juge que ca ne "ressemblait pas a une vraie scene de jeu".
+**Decision** : la scene devient un vrai lieu compose d'acteurs positionnes : une table qui garde toujours PARTY_SIZE (5) chaises (un survivant assis ou une chaise vide nommee pour chaque mort/disparu), un comptoir avec des PNJ fixes (tavernier, archiviste), un fond de salle avec des volontaires generiques, et un panneau mural qui reprend les noms des disparus. Les dialogues deviennent une sequence de 3 a 6 "beats" reveles un par un : chaque beat affiche une bulle ancree au-dessus de l'acteur qui parle dans la scene (pas une carte separee), avec un journal discret en dessous pour les repliques deja jouees. Aucun nouveau survivant ou volontaire n'est invente : chaque acteur/beat provient reellement du rapport de vague.
+**Alternatives envisagees** : construire une vraie Phaser Scene dediee pour la taverne (ecarte pour cette passe : risque architectural trop eleve pour le gain, le flow report/build actuel repose entierement sur le DOM ; garde comme option V3 si l'immersion doit encore monter) ; garder la V1 et se contenter de retirer les badges (ecarte : ne resout pas le probleme de fond, l'absence d'espace et de personnages positionnes) ; afficher tous les beats simultanement comme en V1 (ecarte comme cible, garde comme fallback documente si la sequence posait probleme).
+**Consequences** : `guildTavernSceneSystem.ts` expose desormais `TavernActor`/`TavernSceneLayout`/`TavernBeat` au lieu de `survivors`/`dialogueLines`/`badges` ; le rendu vit dans un module dedie `src/ui/guildTavernView.ts` (pur, sans regle de jeu) et `domUi.ts` ne gere plus que l'etat local de progression des beats. Toute future evolution (portraits, animations, relations, Remains & Relics) doit continuer a s'appuyer sur ces acteurs/positions plutot que de recreer un panneau de synthese.
+**Remplace / Remplace par** :
+
+---
+
+## D-016 - Le debriefing entre expeditions est une scene jouee, pas un rapport texte
+
+**Date** : 2026-07-06
+**Statut** : Actif
+**Contexte** : passe Guild Tavern Scene V1. Le debriefing de fin de vague etait fonctionnel (chronique + badges + sections tactiques) mais se lisait comme un ecran de rapport, sans lieu ni personnages, alors que le GDD promet des aventuriers qui deviennent des personnages persistants (voir D-005, D-010).
+**Decision** : l'ecran affiche apres chaque expedition ouvre sur une scene de guilde/taverne : les survivants sont assis a une table avec role, niveau et statut (veteran/revenant), les morts sont nommes dans un panneau dedie plutot que reduits a un compteur, et si personne ne revient, aucun aventurier n'est invente comme temoin — seules des voix generiques de la Guilde et des rumeurs reagissent. Le rapport texte complet (participants, lecture tactique, economie) n'est pas supprime : il reste disponible juste en dessous, replie par defaut.
+**Alternatives envisagees** : garder le seul texte de chronique et se contenter d'ameliorer sa redaction (ecarte : ne resout pas le probleme de lisibilite emotionnelle identifie par le studio) ; construire tout de suite une taverne interactive avec deplacement et dialogues cliquables (ecarte : hors perimetre V1, risque de retarder Kingdom Remembers) ; supprimer purement le rapport texte existant (ecarte : perte d'information deja utile en debrief).
+**Consequences** : `survivorChronicleSystem.ts` reste la source factuelle (badges reutilises tel quel) ; un nouveau `guildTavernSceneSystem.ts` genere uniquement la couche scenique/dialogue au-dessus. Toute future evolution narrative (Kingdom Remembers, relations, objets personnels) doit se brancher sur cette meme scene plutot que recreer un second ecran de debriefing.
+**Remplace / Remplace par** :
 
 ---
 

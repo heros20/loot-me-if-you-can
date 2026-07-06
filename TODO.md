@@ -12,7 +12,7 @@
 - Future survivor continuity: connect survivor chronicle consequences into the next expedition only after the current profile/chronicle loop is playtested.
 - Future survivor availability: explicit rest/refusal/hospital rules only after Survivor Continuity V1 has enough playtest data.
 - Future veteran leadership: turn the current narrative veteran into a mechanical leader only if repeated returnees need gameplay weight.
-- Future guild tavern scene: expand rumors into a true tavern screen only when expedition prep needs it.
+- Guild Tavern Scene V2 is implemented (see `docs/GUILD_TAVERN_SCENE_V2.md`): future work is portrait art instead of role-initial avatars, per-actor movement/animation instead of static positions, relationship-aware dialogue between recurring characters, naming new volunteers before the expedition instead of generic NPC placeholders, Remains & Relics (personal items on the empty chairs/board), and feeding survivor/witness lines into a future full Kingdom Remembers memory once that chantier starts.
 - Expand Kenney-based asset coverage for ability-specific particles/icons if V1 readability needs more than tint/pulse feedback.
 - Add sound effects and a mute toggle.
 - Add clearer placement previews for trap range and minion attack range.
@@ -66,6 +66,7 @@
 
 ## Done in current studio pass
 
+- Fixed Survivor Continuity composition arbitration: mandatory strategic roles (V1 thief for active locked doors or prior no-thief retreat) can temporarily bench one survivor while keeping party size at 5; see `src/systems/expeditionComposition.ts` and D-018.
 - Fixed every expedition at exactly 5 adventurers.
 - Added adaptive class composition without increasing party size.
 - Replaced wall editing with a mostly-rock 23x16 dungeon and explicit rock/floor/room/special tile semantics.
@@ -92,3 +93,5 @@
 - Survivor Continuity V1: survivors return automatically next expedition, keep profile memory, fill party slots before new adaptive recruits, preview as revenants in the sidebar, and appear in the survivor chronicle. Group size remains exactly 5.
 - Initial Dungeon Layout V1: reduced the deterministic starting map from about 19.0% dug to about 10.9% dug, kept entry -> treasure -> boss valid, and added smoke guards for density, safe-zone compatibility, and non-trivial path length.
 - Initial Dungeon Layout V1.1: corrected the V1 map (too linear despite the low dug ratio) into a hand-authored ~48% dug / ~52% rock layout with 7 named rooms/corridors (entry, defense room, lateral alcove, gold pocket, treasure room, antechamber, throne room), an 11-turn 37-cell entry -> boss route, and a mandatory defense-room choke point that cannot be bypassed. Smoke tests now check path length, turn count, alignment, and named-zone count in addition to the dug-ratio band. See `docs/INITIAL_DUNGEON_LAYOUT_V1.md`.
+- Guild Tavern Scene V1: the between-expeditions debrief now opens on a visual tavern/guild scene (seated survivors with role/level/veteran badges, an empty-table "no survivors" variant, a named "ne sont pas revenus" panel, short fact-based dialogue lines, rumor lines when nobody returns, and a compact facts row) instead of a plain text chronicle block; the previous full debrief detail is preserved underneath in a collapsible "Rapport complet" section, and Space/Enter/Escape now skip past the report screen. See `docs/GUILD_TAVERN_SCENE_V1.md`.
+- Guild Tavern Scene V2: refonded V1 (which still read as a stylized report overlay) into a real positioned scene - a taverne room with a table, bar counter, and wall board; real survivors seated in their chair with an empty named chair per dead/missing adventurer; always-present generic NPCs (tavernier, archiviste, volontaires) at the counter/background; and a 3-6 beat dialogue sequence with a speech bubble anchored above the currently speaking character plus a caption log for earlier beats. Continuer/Passer and Space/Enter/Escape now drive the beat sequence before handing off to preparation. See `docs/GUILD_TAVERN_SCENE_V2.md`.

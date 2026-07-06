@@ -81,11 +81,16 @@ import {
   recordProfileTrapTriggered,
   recordTreasureTheft,
   releaseUndeployedExpedition,
-  selectProfilesForWave,
   updateDungeonReputation,
 } from '../systems/adventurerProfiles';
+import {
+  planExpeditionComposition,
+  selectProfilesForWave,
+  type ExpeditionCompositionContext,
+} from '../systems/expeditionComposition';
 import { buildWaveStoryLines } from '../systems/narrativeReports';
 import { buildSurvivorChronicle } from '../systems/survivorChronicleSystem';
+import { buildGuildTavernScene } from '../systems/guildTavernSceneSystem';
 import { chooseBossTarget, updateBossMovement } from '../systems/bossAISystem';
 import { updateMonsterAI } from '../systems/monsterAISystem';
 import {
@@ -742,7 +747,7 @@ export class DungeonSimulation {
 
     advanceWorldDay(this.state.world, 3 + this.state.wave);
     const roster = this.buildPlannedRoster(this.state.wave);
-    const profiles = selectProfilesForWave(roster, this.state.world, this.state.wave);
+    const { profiles } = selectProfilesForWave(roster, this.state.world, this.state.wave, this.buildCompositionContext(this.state.wave));
     const lastRumor = this.state.world.rumors[this.state.world.rumors.length - 1] ?? null;
 
     this.state.phase = 'wave';
@@ -879,6 +884,8 @@ export class DungeonSimulation {
       liveAdventurers: this.state.adventurers.length,
       nextWaveSize: previewRoster.length,
       nextExpeditionReturningNames: continuityPreview.returningNames,
+      nextExpeditionHeldBackNames: continuityPreview.heldBackNames,
+      nextExpeditionImposedRoleNote: continuityPreview.imposedRoleNote,
       nextExpeditionNewVolunteers: continuityPreview.newVolunteerCount,
       nextExpeditionVeteranName: continuityPreview.veteranName,
       canLaunchWave: this.state.phase === 'build' && dungeonValidation.valid,
@@ -929,26 +936,49 @@ export class DungeonSimulation {
     return createPartyPlan(this.state.wave, this.state.world.dungeonReputation.value, lastRumor?.effect ?? null);
   }
 
+  private buildAdaptiveRoster(wave: number): AdventurerRole[] {
+    const candidateRoles = getReturningSurvivorCandidates(this.state.world, PARTY_SIZE).map((profile) => profile.role);
+    return buildWaveRoster(wave, this.state.memory, this.hasActiveLockedDoor(), candidateRoles);
+  }
+
   private buildPlannedRoster(wave: number): AdventurerRole[] {
-    const returning = getReturningSurvivorCandidates(this.state.world, PARTY_SIZE);
-    return buildWaveRoster(wave, this.state.memory, this.hasActiveDoor(), returning.map((profile) => profile.role));
+    return this.buildAdaptiveRoster(wave);
+  }
+
+  private buildCompositionContext(wave: number): ExpeditionCompositionContext {
+    return {
+      wave,
+      hasActiveLockedDoor: this.hasActiveLockedDoor(),
+      doorBlockedWithoutThief: this.state.memory.doorBlockedWithoutThief,
+      rolePressure: this.state.memory.rolePressure,
+    };
+  }
+
+  private previewExpeditionComposition(wave: number) {
+    return planExpeditionComposition(this.buildAdaptiveRoster(wave), this.state.world, this.buildCompositionContext(wave));
   }
 
   private buildContinuityPreview(wave: number): {
     returningNames: string[];
+    heldBackNames: string[];
+    imposedRoleNote: string | null;
     newVolunteerCount: number;
     veteranName: string | null;
     plannedRoles: AdventurerRole[];
   } {
-    const returning = getReturningSurvivorCandidates(this.state.world, PARTY_SIZE);
-    const plannedRoles = buildWaveRoster(wave, this.state.memory, this.hasActiveDoor(), returning.map((profile) => profile.role));
-    const veteran = returning[0] ?? null;
+    const composition = this.previewExpeditionComposition(wave);
+    const veteran = composition.returningProfiles[0] ?? null;
 
     return {
-      returningNames: returning.map((profile) => profile.name),
-      newVolunteerCount: Math.max(0, PARTY_SIZE - returning.length),
+      returningNames: composition.returningProfiles.map((profile) => profile.name),
+      heldBackNames: composition.benchedProfiles.map((profile) => profile.name),
+      imposedRoleNote: composition.imposedRoleLabel,
+      newVolunteerCount: Math.max(0, PARTY_SIZE - composition.returningProfiles.length),
       veteranName: veteran ? veteran.name : null,
-      plannedRoles,
+      plannedRoles: [
+        ...composition.returningProfiles.map((profile) => profile.role),
+        ...composition.recruitRoles.slice(0, PARTY_SIZE - composition.returningProfiles.length),
+      ].slice(0, PARTY_SIZE),
     };
   }
 
@@ -1246,6 +1276,7 @@ export class DungeonSimulation {
           mage: 0,
           healer: 0,
         },
+        doorBlockedWithoutThief: false,
       },
       world: createInitialWorldMemory(),
       runtime: null,
@@ -1909,6 +1940,13 @@ export class DungeonSimulation {
   private damageMinion(minion: DefenseEntity, damage: number, attacker: AdventurerEntity): void {
     minion.hp -= damage;
 
+    if (minion.hp > 0) {
+      minion.targetAdventurerId = attacker.id;
+      minion.aiState = 'chase';
+      minion.chaseTimerMs = 0;
+      minion.stuckTimerMs = 0;
+    }
+
     if (minion.hp <= 0) {
       minion.alive = false;
       recordProfileMonsterKill(this.state.world, attacker.profileId);
@@ -2119,7 +2157,7 @@ export class DungeonSimulation {
       reputationDelta,
     });
 
-    const report: Omit<WaveReport, 'chronicle'> = {
+    const report: Omit<WaveReport, 'chronicle' | 'guildTavernScene'> = {
       wave,
       cleared,
       partyLabel: runtime.partyPlan.label,
@@ -2163,6 +2201,8 @@ export class DungeonSimulation {
       participants,
       notableAdventurers: buildNotableAdventurers(runtime.stats),
       returningSurvivorNames: continuity.returningNames,
+      heldBackSurvivorNames: continuity.heldBackNames,
+      imposedRoleNote: continuity.imposedRoleNote,
       newVolunteerCount: continuity.newVolunteerCount,
       veteranName: continuity.veteranName,
       deaths: runtime.stats.deaths.slice(-5).map((record) => record.note),
@@ -2173,9 +2213,14 @@ export class DungeonSimulation {
         : 'Le boss est mort. Le donjon passe sous gestion heroique, donc probablement en open space.',
     };
 
-    return {
+    const reportWithChronicle: Omit<WaveReport, 'guildTavernScene'> = {
       ...report,
       chronicle: buildSurvivorChronicle(report),
+    };
+
+    return {
+      ...reportWithChronicle,
+      guildTavernScene: buildGuildTavernScene(reportWithChronicle),
     };
   }
 
@@ -2327,10 +2372,14 @@ export class DungeonSimulation {
       continuity.returningNames.length > 0
         ? `Revenants garantis: ${continuity.returningNames.slice(0, 3).join(', ')}${continuity.returningNames.length > 3 ? '...' : ''}.`
         : 'Aucun temoin fiable: cinq nouveaux volontaires seront requis.',
+      continuity.heldBackNames.length > 0
+        ? `Retenus au rapport: ${continuity.heldBackNames.join(', ')}.`
+        : null,
+      continuity.imposedRoleNote,
       continuity.veteranName ? `Veteran pressenti: ${continuity.veteranName}.` : `Nouveaux volontaires: ${continuity.newVolunteerCount}.`,
       `Composition probable: ${formatRoster(continuity.plannedRoles)}.`,
       ...adaptationNotes,
-    ];
+    ].filter((line): line is string => Boolean(line));
 
     return lines.slice(0, 6);
   }
@@ -2768,7 +2817,12 @@ export class DungeonSimulation {
 
     if (stats.doorNoThiefRetreats > 0) {
       this.state.memory.rolePressure.thief += 3;
+      this.state.memory.doorBlockedWithoutThief = true;
       notes.push('Porte verrouillee sans specialiste: la Guilde inscrit "voleur requis" en haut du prochain contrat.');
+    }
+
+    if (stats.doorsPicked > 0) {
+      this.state.memory.doorBlockedWithoutThief = false;
     }
 
     if (durationMs >= 26000 || stats.combatEngagementMs >= 9000) {
@@ -2881,8 +2935,8 @@ export class DungeonSimulation {
     ];
   }
 
-  private hasActiveDoor(): boolean {
-    return this.state.doors.some((door) => !door.destroyed);
+  private hasActiveLockedDoor(): boolean {
+    return this.state.doors.some((door) => !door.destroyed && !door.openedForExpedition);
   }
 
   private buildDoorSummary(): DoorSummary {

@@ -120,6 +120,8 @@ export interface DungeonSnapshot {
   liveAdventurers: number;
   nextWaveSize: number;
   nextExpeditionReturningNames: string[];
+  nextExpeditionHeldBackNames: string[];
+  nextExpeditionImposedRoleNote: string | null;
   nextExpeditionNewVolunteers: number;
   nextExpeditionVeteranName: string | null;
   canLaunchWave: boolean;

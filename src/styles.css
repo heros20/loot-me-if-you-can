@@ -989,105 +989,433 @@ button {
   scrollbar-color: #6e232c #171318;
 }
 
-.chronicle-card {
+/* ------------------------------------------------------------------ */
+/* Guild Tavern Scene V2 - vraie scene jouee (salle, table, PNJ),      */
+/* remplace l'ancien encart "cartes de rapport" de la V1.              */
+/* ------------------------------------------------------------------ */
+
+@keyframes tavern-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes tavern-bubble-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 4px) scale(0.95);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+}
+
+.tavern-scene {
   display: grid;
   gap: 12px;
   border: 1px solid rgba(225, 179, 90, 0.24);
   border-radius: 8px;
   padding: 16px;
   background:
-    linear-gradient(135deg, rgba(143, 38, 49, 0.18), rgba(20, 17, 21, 0.98) 48%),
+    radial-gradient(120% 90% at 50% -10%, rgba(225, 179, 90, 0.16), transparent 60%),
+    linear-gradient(135deg, rgba(143, 38, 49, 0.16), rgba(20, 17, 21, 0.98) 55%),
     rgba(20, 17, 21, 0.98);
+  animation: tavern-fade-in 0.28s ease-out;
 }
 
-.chronicle-card--no-survivors {
-  border-color: rgba(244, 234, 210, 0.2);
+.tavern-scene--grim,
+.tavern-scene--somber {
+  border-color: rgba(244, 234, 210, 0.18);
   background:
-    linear-gradient(135deg, rgba(38, 61, 55, 0.16), rgba(20, 17, 21, 0.98) 48%),
+    radial-gradient(120% 90% at 50% -10%, rgba(120, 128, 138, 0.14), transparent 60%),
+    linear-gradient(135deg, rgba(38, 61, 55, 0.14), rgba(20, 17, 21, 0.98) 55%),
     rgba(20, 17, 21, 0.98);
 }
 
-.chronicle-card__intro {
-  display: grid;
-  gap: 5px;
+.tavern-scene--triumphant {
+  border-color: rgba(121, 199, 161, 0.3);
 }
 
-.chronicle-card h2 {
+.tavern-scene__header {
+  display: grid;
+  gap: 4px;
+}
+
+.tavern-scene__header h2 {
   margin: 0;
   color: #fff4d8;
   font-family: Georgia, "Times New Roman", serif;
-  font-size: clamp(1.45rem, 3vw, 2rem);
-  line-height: 1.08;
+  font-size: clamp(1.4rem, 3vw, 1.9rem);
+  line-height: 1.1;
 }
 
-.chronicle-card__intro p:last-child {
+/* -- La piece: fond bois, comptoir, table, panneau mural, silhouettes -- */
+
+.tavern-room {
+  position: relative;
+  display: grid;
+  gap: 14px;
+  overflow: hidden;
+  border: 1px solid rgba(225, 179, 90, 0.14);
+  border-radius: 10px;
+  padding: 14px 12px 18px;
+  background:
+    linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, rgba(76, 48, 26, 0.32) 100%),
+    repeating-linear-gradient(90deg, rgba(76, 48, 26, 0.22) 0 2px, rgba(46, 28, 16, 0.22) 2px 40px);
+}
+
+.tavern-room__glow {
+  position: absolute;
+  inset: -20% -20% auto -20%;
+  height: 60%;
+  background: radial-gradient(closest-side, rgba(246, 216, 138, 0.22), transparent 70%);
+  pointer-events: none;
+}
+
+.tavern-room__back-row {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap-reverse;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.tavern-room__silhouettes {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  opacity: 0.78;
+}
+
+.tavern-room__silhouettes .tavern-actor {
+  transform: scale(0.86);
+  opacity: 0.82;
+}
+
+.tavern-board {
+  flex: 0 0 auto;
+  border-left: 3px solid #8f2631;
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: rgba(143, 38, 49, 0.1);
+}
+
+.tavern-board__title {
   margin: 0;
-  color: #cfc0a0;
-  font-size: 0.92rem;
-  line-height: 1.4;
-}
-
-.chronicle-badges {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 7px;
-}
-
-.chronicle-badge {
-  display: grid;
-  min-width: 0;
-  gap: 3px;
-  border: 1px solid rgba(244, 234, 210, 0.13);
-  border-radius: 8px;
-  padding: 7px 8px;
-  background: rgba(244, 234, 210, 0.045);
-}
-
-.chronicle-badge small {
-  color: #9f947e;
-  font-size: 0.62rem;
+  color: #f4ead2;
+  font-size: 0.7rem;
   font-weight: 900;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
-.chronicle-badge strong {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  color: #f4ead2;
-  font-size: 0.82rem;
-  line-height: 1.12;
-}
-
-.chronicle-badge--good {
-  border-color: rgba(121, 199, 161, 0.32);
-  background: rgba(121, 199, 161, 0.08);
-}
-
-.chronicle-badge--bad {
-  border-color: rgba(143, 38, 49, 0.42);
-  background: rgba(143, 38, 49, 0.12);
-}
-
-.chronicle-badge--warning {
-  border-color: rgba(225, 179, 90, 0.36);
-  background: rgba(225, 179, 90, 0.08);
-}
-
-.chronicle-lines {
+.tavern-board__names {
   display: grid;
-  gap: 7px;
-  margin: 0;
+  gap: 2px;
+  margin: 4px 0 0;
   padding: 0;
   list-style: none;
 }
 
-.chronicle-lines li {
-  border-left: 3px solid rgba(225, 179, 90, 0.48);
-  padding-left: 10px;
-  color: #d8ccb0;
-  font-size: 0.92rem;
-  line-height: 1.42;
+.tavern-board__names li {
+  color: #e6c9c2;
+  font-size: 0.82rem;
+}
+
+.tavern-room__counter {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+}
+
+.tavern-counter__bar {
+  height: 8px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, rgba(76, 48, 26, 0.1), rgba(107, 68, 35, 0.55), rgba(76, 48, 26, 0.1));
+}
+
+.tavern-counter__actors {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.tavern-room__table {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  justify-items: center;
+  padding-top: 8px;
+}
+
+.tavern-table__surface {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(92%, 480px);
+  height: 46px;
+  border: 1px solid rgba(76, 48, 26, 0.6);
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(107, 68, 35, 0.5), rgba(58, 36, 18, 0.35));
+  transform: translate(-50%, -50%);
+}
+
+.tavern-table__seats {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+}
+
+/* -- Acteurs (survivants ou PNJ) et chaises vides -- */
+
+.tavern-actor {
+  position: relative;
+  display: grid;
+  min-width: 92px;
+  justify-items: center;
+  gap: 4px;
+  border: 1px solid rgba(244, 234, 210, 0.16);
+  border-radius: 8px;
+  padding: 10px 8px;
+  background: rgba(0, 0, 0, 0.28);
+}
+
+.tavern-actor--standing {
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.tavern-actor--shadow {
+  border-color: rgba(120, 128, 138, 0.24);
+  background: rgba(0, 0, 0, 0.42);
+  opacity: 0.92;
+}
+
+.tavern-actor__avatar {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(225, 179, 90, 0.16);
+  color: #f6d88a;
+  font-size: 0.95rem;
+  font-weight: 900;
+}
+
+.tavern-actor--warrior .tavern-actor__avatar {
+  background: rgba(143, 38, 49, 0.28);
+  color: #f2b6ad;
+}
+
+.tavern-actor--thief .tavern-actor__avatar {
+  background: rgba(120, 128, 138, 0.28);
+  color: #cfd8e0;
+}
+
+.tavern-actor--mage .tavern-actor__avatar {
+  background: rgba(107, 91, 199, 0.28);
+  color: #d6cdfa;
+}
+
+.tavern-actor--healer .tavern-actor__avatar {
+  background: rgba(121, 199, 161, 0.28);
+  color: #bdf0d3;
+}
+
+.tavern-actor--guild .tavern-actor__avatar,
+.tavern-actor--rumor .tavern-actor__avatar {
+  background: rgba(244, 234, 210, 0.1);
+  color: #cfc0a0;
+}
+
+.tavern-actor--veteran {
+  border-color: rgba(225, 179, 90, 0.6);
+  box-shadow: inset 0 0 0 1px rgba(225, 179, 90, 0.2);
+}
+
+.tavern-actor__name {
+  overflow-wrap: anywhere;
+  color: #fff4d8;
+  font-size: 0.86rem;
+  text-align: center;
+}
+
+.tavern-actor__meta {
+  color: #aa9d86;
+  font-size: 0.68rem;
+}
+
+.tavern-actor__tag {
+  color: #f6d88a;
+  font-size: 0.62rem;
+  font-weight: 900;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.tavern-actor--empty {
+  border-style: dashed;
+  opacity: 0.68;
+}
+
+.tavern-actor--empty .tavern-actor__avatar {
+  background: rgba(244, 234, 210, 0.05);
+  color: #7c7264;
+}
+
+.tavern-actor__tag--dead {
+  color: #e6c9c2;
+}
+
+/* -- Bulle de dialogue ancree au-dessus de l'acteur qui parle -- */
+
+.tavern-bubble {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  z-index: 2;
+  width: max-content;
+  max-width: 220px;
+  border: 1px solid rgba(244, 234, 210, 0.24);
+  border-radius: 10px;
+  padding: 6px 10px;
+  background: rgba(20, 17, 21, 0.96);
+  color: #e8dcc4;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  animation: tavern-bubble-in 0.22s ease-out;
+  transform: translate(-50%, 0);
+}
+
+.tavern-bubble::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  width: 10px;
+  height: 10px;
+  background: rgba(20, 17, 21, 0.96);
+  border-right: 1px solid rgba(244, 234, 210, 0.24);
+  border-bottom: 1px solid rgba(244, 234, 210, 0.24);
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+/* -- Journal des repliques deja jouees (sous-titres, pas des cartes) -- */
+
+.tavern-scene__log {
+  display: grid;
+  gap: 6px;
+}
+
+.tavern-log__entry {
+  max-width: 92%;
+  border-left: 2px solid rgba(244, 234, 210, 0.18);
+  padding: 2px 0 2px 10px;
+}
+
+.tavern-log__entry strong {
+  display: block;
+  margin-bottom: 1px;
+  color: #f6d88a;
+  font-size: 0.68rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.tavern-log__entry p {
+  margin: 0;
+  color: #e8dcc4;
+  font-size: 0.86rem;
+  line-height: 1.35;
+}
+
+.tavern-log__entry--rumor {
+  border-left-style: dashed;
+  opacity: 0.9;
+}
+
+.tavern-scene__log-empty {
+  margin: 0;
+  color: #7c7264;
+  font-size: 0.8rem;
+  font-style: italic;
+}
+
+.tavern-scene__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.tavern-fact {
+  display: grid;
+  gap: 2px;
+  border: 1px solid rgba(244, 234, 210, 0.13);
+  border-radius: 8px;
+  padding: 6px 9px;
+  background: rgba(244, 234, 210, 0.045);
+}
+
+.tavern-fact small {
+  color: #9f947e;
+  font-size: 0.6rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tavern-fact strong {
+  color: #f4ead2;
+  font-size: 0.8rem;
+}
+
+.tavern-fact--good {
+  border-color: rgba(121, 199, 161, 0.32);
+  background: rgba(121, 199, 161, 0.08);
+}
+
+.tavern-fact--bad {
+  border-color: rgba(143, 38, 49, 0.42);
+  background: rgba(143, 38, 49, 0.12);
+}
+
+.tavern-fact--warning {
+  border-color: rgba(225, 179, 90, 0.36);
+  background: rgba(225, 179, 90, 0.08);
+}
+
+.debrief-details {
+  border: 1px solid rgba(244, 234, 210, 0.1);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.debrief-details summary {
+  cursor: pointer;
+  color: #cfc0a0;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.debrief-details[open] summary {
+  margin-bottom: 8px;
 }
 
 .debrief__header {
@@ -1247,7 +1575,6 @@ button {
   .debrief__header,
   .debrief__grid,
   .debrief__grid--compact,
-  .chronicle-badges,
   .participant-list {
     grid-template-columns: 1fr;
   }
@@ -1260,5 +1587,14 @@ button {
   .debrief__metrics,
   .debrief__actions {
     justify-content: start;
+  }
+
+  .tavern-actor {
+    min-width: 76px;
+  }
+
+  .tavern-bubble {
+    max-width: 160px;
+    font-size: 0.74rem;
   }
 }

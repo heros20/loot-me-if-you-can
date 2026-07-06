@@ -1,6 +1,6 @@
 import type { ChronicleBadge, SurvivorChronicle, WaveReport } from '../game/types';
 
-type ChronicleSource = Omit<WaveReport, 'chronicle'>;
+type ChronicleSource = Omit<WaveReport, 'chronicle' | 'guildTavernScene'>;
 
 export function buildSurvivorChronicle(report: ChronicleSource): SurvivorChronicle {
   const survivingParticipants = report.participants.filter((participant) =>
@@ -48,6 +48,19 @@ function buildSurvivorLines(report: ChronicleSource, survivorNames: string[]): s
 
   if (report.newVolunteerCount > 0) {
     lines.push(`${report.newVolunteerCount} nouveau${report.newVolunteerCount > 1 ? 'x' : ''} volontaire${report.newVolunteerCount > 1 ? 's' : ''} completeront le contrat.`);
+  }
+
+  if (report.imposedRoleNote) {
+    lines.push(report.imposedRoleNote);
+  }
+
+  if (report.heldBackSurvivorNames.length > 0) {
+    const heldBack = report.heldBackSurvivorNames.join(', ');
+    lines.push(
+      report.heldBackSurvivorNames.length === 1
+        ? `${heldBack} reste au rapport pour laisser place a un role indispensable.`
+        : `${heldBack} restent au rapport pour laisser place a un role indispensable.`,
+    );
   }
 
   if (report.treasureStolen) {

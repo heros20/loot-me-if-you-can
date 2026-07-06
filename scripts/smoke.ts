@@ -37,10 +37,15 @@ import {
   recordProfileDeath,
   recordProfileSurvival,
   recordTreasureTheft,
-  selectProfilesForWave,
 } from '../src/systems/adventurerProfiles';
+import {
+  planExpeditionComposition,
+  selectProfilesForWave,
+  type ExpeditionCompositionContext,
+} from '../src/systems/expeditionComposition';
 import { buildWaveRoster } from '../src/systems/waveDirector';
 import { findPath, hasWalkablePath } from '../src/systems/pathfinding';
+import { buildGuildTavernScene } from '../src/systems/guildTavernSceneSystem';
 import type {
   AdventurerEntity,
   AdventurerRole,
@@ -48,7 +53,9 @@ import type {
   BossEntity,
   DefenseEntity,
   DefenseType,
+  ExpeditionParticipantReport,
   GridCell,
+  WaveReport,
   WaveStats,
 } from '../src/game/types';
 
@@ -94,7 +101,7 @@ function isCell(a: GridCell, b: GridCell): boolean {
   return a.x === b.x && a.y === b.y;
 }
 
-function createSmokeMemory(): AdaptationMemory {
+function createSmokeMemory(overrides: Partial<AdaptationMemory> = {}): AdaptationMemory {
   return {
     trapAvoidance: 0.35,
     trapDangerByCell: {},
@@ -104,6 +111,21 @@ function createSmokeMemory(): AdaptationMemory {
       mage: 0,
       healer: 0,
     },
+    doorBlockedWithoutThief: false,
+    ...overrides,
+  };
+}
+
+function createCompositionContext(
+  memory: AdaptationMemory,
+  wave: number,
+  hasActiveLockedDoor: boolean,
+): ExpeditionCompositionContext {
+  return {
+    wave,
+    hasActiveLockedDoor,
+    doorBlockedWithoutThief: memory.doorBlockedWithoutThief,
+    rolePressure: memory.rolePressure,
   };
 }
 
@@ -628,7 +650,12 @@ function validateSurvivorContinuityRules(): void {
     const world = createInitialWorldMemory();
     const memory = createSmokeMemory();
     const wave1Roster = buildWaveRoster(1, memory, false);
-    const wave1Profiles = selectProfilesForWave(wave1Roster, world, 1);
+    const { profiles: wave1Profiles } = selectProfilesForWave(
+      wave1Roster,
+      world,
+      1,
+      createCompositionContext(memory, 1, false),
+    );
 
     if (wave1Profiles.length !== PARTY_SIZE) {
       console.error('ECHEC: expedition 1 devrait contenir exactement 5 profils.');
@@ -646,9 +673,16 @@ function validateSurvivorContinuityRules(): void {
 
     const returning = getReturningSurvivorCandidates(world);
     const wave2Roster = buildWaveRoster(2, memory, false, returning.map((profile) => profile.role));
-    const wave2Profiles = selectProfilesForWave(wave2Roster, world, 2);
+    const { profiles: wave2Profiles } = selectProfilesForWave(
+      wave2Roster,
+      world,
+      2,
+      createCompositionContext(memory, 2, false),
+    );
     const expectedReturningIds = wave1Profiles.slice(0, survivorCount).map((profile) => profile.id);
-    const actualReturningIds = wave2Profiles.slice(0, survivorCount).map((profile) => profile.id);
+    const actualReturningIds = wave2Profiles
+      .filter((profile) => expectedReturningIds.includes(profile.id))
+      .map((profile) => profile.id);
 
     if (wave2Profiles.length !== PARTY_SIZE) {
       console.error(`ECHEC: expedition 2 devrait rester a 5 profils avec ${survivorCount} survivants.`);
@@ -666,10 +700,9 @@ function validateSurvivorContinuityRules(): void {
     }
 
     if (survivorCount > 0) {
-      const survivor = wave2Profiles[0];
-      const original = wave1Profiles[0];
+      const survivor = wave2Profiles.find((profile) => profile.id === wave1Profiles[0].id);
 
-      if (survivor.id !== original.id || survivor.name !== original.name || survivor.role !== original.role || survivor.survivedExpeditions < 1) {
+      if (!survivor || survivor.name !== wave1Profiles[0].name || survivor.role !== wave1Profiles[0].role || survivor.survivedExpeditions < 1) {
         console.error('ECHEC: un survivant doit conserver son identite, sa classe et son vecu.');
         process.exit(1);
       }
@@ -679,7 +712,12 @@ function validateSurvivorContinuityRules(): void {
   const doorWorld = createInitialWorldMemory();
   const doorMemory = createSmokeMemory();
   const noThiefSurvivorRoles: AdventurerRole[] = ['warrior', 'mage', 'healer', 'warrior', 'mage'];
-  const firstProfiles = selectProfilesForWave(noThiefSurvivorRoles, doorWorld, 1);
+  const { profiles: firstProfiles } = selectProfilesForWave(
+    noThiefSurvivorRoles,
+    doorWorld,
+    1,
+    createCompositionContext(doorMemory, 1, false),
+  );
   firstProfiles.forEach((profile) => activateProfileForExpedition(doorWorld, profile.id, 1));
   firstProfiles.forEach((profile, index) => {
     if (index < 2) {
@@ -690,10 +728,194 @@ function validateSurvivorContinuityRules(): void {
   });
   const doorReturning = getReturningSurvivorCandidates(doorWorld);
   const doorRoster = buildWaveRoster(2, doorMemory, true, doorReturning.map((profile) => profile.role));
-  const doorProfiles = selectProfilesForWave(doorRoster, doorWorld, 2);
+  const { profiles: doorProfiles } = selectProfilesForWave(
+    doorRoster,
+    doorWorld,
+    2,
+    createCompositionContext(doorMemory, 2, true),
+  );
 
   if (doorProfiles.length !== PARTY_SIZE || !doorProfiles.some((profile) => profile.role === 'thief')) {
     console.error('ECHEC: une porte active doit prioriser un voleur dans les nouveaux slots si aucun survivant voleur ne suffit.');
+    process.exit(1);
+  }
+
+  const fiveSurvivorWorld = createInitialWorldMemory();
+  const fiveSurvivorMemory = createSmokeMemory({ doorBlockedWithoutThief: true, rolePressure: { warrior: 0, thief: 3, mage: 0, healer: 0 } });
+  const fiveNoThiefRoles: AdventurerRole[] = ['warrior', 'mage', 'healer', 'warrior', 'mage'];
+  const { profiles: fiveFirstProfiles } = selectProfilesForWave(
+    fiveNoThiefRoles,
+    fiveSurvivorWorld,
+    1,
+    createCompositionContext(fiveSurvivorMemory, 1, false),
+  );
+  fiveFirstProfiles.forEach((profile) => activateProfileForExpedition(fiveSurvivorWorld, profile.id, 1));
+  fiveFirstProfiles.forEach((profile) => recordProfileSurvival(fiveSurvivorWorld, profile.id, 1, `${profile.name} survit au test complet.`));
+
+  const fiveReturning = getReturningSurvivorCandidates(fiveSurvivorWorld);
+  if (fiveReturning.length !== PARTY_SIZE) {
+    console.error(`ECHEC: le scenario 5 survivants sans voleur devrait avoir ${PARTY_SIZE} candidats revenants.`);
+    process.exit(1);
+  }
+
+  const fiveRoster = buildWaveRoster(2, fiveSurvivorMemory, true, fiveReturning.map((profile) => profile.role));
+  const fiveComposition = planExpeditionComposition(
+    fiveRoster,
+    fiveSurvivorWorld,
+    createCompositionContext(fiveSurvivorMemory, 2, true),
+  );
+  const { profiles: fiveNextProfiles } = selectProfilesForWave(
+    fiveRoster,
+    fiveSurvivorWorld,
+    2,
+    createCompositionContext(fiveSurvivorMemory, 2, true),
+  );
+
+  if (fiveNextProfiles.length !== PARTY_SIZE) {
+    console.error('ECHEC: 5 survivants + voleur impose doit rester a exactement 5 aventuriers.');
+    process.exit(1);
+  }
+
+  if (!fiveNextProfiles.some((profile) => profile.role === 'thief')) {
+    console.error('ECHEC: 5 survivants sans voleur devraient ceder un slot a un voleur recrute.');
+    process.exit(1);
+  }
+
+  const returningCount = fiveNextProfiles.filter((profile) => fiveReturning.some((survivor) => survivor.id === profile.id)).length;
+  if (returningCount !== PARTY_SIZE - 1) {
+    console.error(`ECHEC: 5 survivants sans voleur devraient retenir 4 survivants + 1 voleur (obtenu ${returningCount} revenants).`);
+    process.exit(1);
+  }
+
+  if (fiveComposition.benchedProfiles.length !== 1) {
+    console.error(`ECHEC: exactement 1 survivant devrait etre retenu au rapport (obtenu ${fiveComposition.benchedProfiles.length}).`);
+    process.exit(1);
+  }
+
+  const benched = fiveComposition.benchedProfiles[0];
+  if (!benched || benched.lifeStatus === 'dead' || !fiveSurvivorWorld.survivorProfileIds.includes(benched.id)) {
+    console.error('ECHEC: le survivant ecarte doit rester vivant et disponible dans le monde.');
+    process.exit(1);
+  }
+
+  if (!fiveComposition.heldBackReason || !fiveComposition.imposedRoleLabel) {
+    console.error('ECHEC: la composition imposee devrait documenter la raison et le role impose.');
+    process.exit(1);
+  }
+
+  const thiefSurvivorWorld = createInitialWorldMemory();
+  const thiefSurvivorMemory = createSmokeMemory({ doorBlockedWithoutThief: true, rolePressure: { warrior: 0, thief: 3, mage: 0, healer: 0 } });
+  const withThiefRoles: AdventurerRole[] = ['warrior', 'thief', 'mage', 'healer', 'warrior'];
+  const { profiles: thiefFirstProfiles } = selectProfilesForWave(
+    withThiefRoles,
+    thiefSurvivorWorld,
+    1,
+    createCompositionContext(thiefSurvivorMemory, 1, false),
+  );
+  thiefFirstProfiles.forEach((profile) => activateProfileForExpedition(thiefSurvivorWorld, profile.id, 1));
+  thiefFirstProfiles.forEach((profile) => recordProfileSurvival(thiefSurvivorWorld, profile.id, 1, `${profile.name} survit avec le voleur.`));
+
+  const thiefRoster = buildWaveRoster(2, thiefSurvivorMemory, true, getReturningSurvivorCandidates(thiefSurvivorWorld).map((profile) => profile.role));
+  const { profiles: thiefNextProfiles } = selectProfilesForWave(
+    thiefRoster,
+    thiefSurvivorWorld,
+    2,
+    createCompositionContext(thiefSurvivorMemory, 2, true),
+  );
+
+  if (thiefNextProfiles.length !== PARTY_SIZE || thiefNextProfiles.filter((profile) => profile.role === 'thief').length !== 1) {
+    console.error('ECHEC: 5 survivants dont 1 voleur ne devraient pas perdre leur voleur survivant.');
+    process.exit(1);
+  }
+
+  if (thiefNextProfiles.some((profile) => !getReturningSurvivorCandidates(thiefSurvivorWorld).some((survivor) => survivor.id === profile.id))) {
+    console.error('ECHEC: tous les 5 survivants dont un voleur devraient repartir sans remplacement force.');
+    process.exit(1);
+  }
+
+  const threeSurvivorWorld = createInitialWorldMemory();
+  const threeSurvivorMemory = createSmokeMemory();
+  const threeNoThiefRoles: AdventurerRole[] = ['warrior', 'mage', 'healer', 'warrior', 'mage'];
+  const { profiles: threeFirstProfiles } = selectProfilesForWave(
+    threeNoThiefRoles,
+    threeSurvivorWorld,
+    1,
+    createCompositionContext(threeSurvivorMemory, 1, false),
+  );
+  threeFirstProfiles.forEach((profile) => activateProfileForExpedition(threeSurvivorWorld, profile.id, 1));
+  threeFirstProfiles.slice(0, 3).forEach((profile) => recordProfileSurvival(threeSurvivorWorld, profile.id, 1, `${profile.name} survit au test partiel.`));
+  threeFirstProfiles.slice(3).forEach((profile) => recordProfileDeath(threeSurvivorWorld, profile.id, 1, `${profile.name} meurt au test partiel.`));
+
+  const threeReturning = getReturningSurvivorCandidates(threeSurvivorWorld);
+  const threeRoster = buildWaveRoster(2, threeSurvivorMemory, true, threeReturning.map((profile) => profile.role));
+  const { profiles: threeNextProfiles } = selectProfilesForWave(
+    threeRoster,
+    threeSurvivorWorld,
+    2,
+    createCompositionContext(threeSurvivorMemory, 2, true),
+  );
+
+  if (threeNextProfiles.length !== PARTY_SIZE) {
+    console.error('ECHEC: 3 survivants sans voleur + porte active doivent former un groupe de 5.');
+    process.exit(1);
+  }
+
+  const threeReturningCount = threeNextProfiles.filter((profile) => threeReturning.some((survivor) => survivor.id === profile.id)).length;
+  if (threeReturningCount !== 3 || !threeNextProfiles.some((profile) => profile.role === 'thief')) {
+    console.error('ECHEC: 3 survivants sans voleur + porte active devraient donner 3 revenants + 1 voleur + 1 recrue.');
+    process.exit(1);
+  }
+
+  const zeroSurvivorWorld = createInitialWorldMemory();
+  const zeroSurvivorMemory = createSmokeMemory();
+  const zeroRoles: AdventurerRole[] = ['warrior', 'mage', 'healer', 'warrior', 'mage'];
+  const { profiles: zeroFirstProfiles } = selectProfilesForWave(
+    zeroRoles,
+    zeroSurvivorWorld,
+    1,
+    createCompositionContext(zeroSurvivorMemory, 1, false),
+  );
+  zeroFirstProfiles.forEach((profile) => activateProfileForExpedition(zeroSurvivorWorld, profile.id, 1));
+  zeroFirstProfiles.forEach((profile) => recordProfileDeath(zeroSurvivorWorld, profile.id, 1, `${profile.name} meurt au test zero.`));
+
+  const zeroRoster = buildWaveRoster(2, zeroSurvivorMemory, true, []);
+  const { profiles: zeroNextProfiles } = selectProfilesForWave(
+    zeroRoster,
+    zeroSurvivorWorld,
+    2,
+    createCompositionContext(zeroSurvivorMemory, 2, true),
+  );
+
+  if (zeroNextProfiles.length !== PARTY_SIZE || !zeroNextProfiles.some((profile) => profile.role === 'thief')) {
+    console.error('ECHEC: 0 survivant + porte active doit inclure un voleur dans un groupe de 5.');
+    process.exit(1);
+  }
+
+  const noDoorWorld = createInitialWorldMemory();
+  const noDoorMemory = createSmokeMemory();
+  const { profiles: noDoorFirstProfiles } = selectProfilesForWave(
+    fiveNoThiefRoles,
+    noDoorWorld,
+    1,
+    createCompositionContext(noDoorMemory, 1, false),
+  );
+  noDoorFirstProfiles.forEach((profile) => activateProfileForExpedition(noDoorWorld, profile.id, 1));
+  noDoorFirstProfiles.forEach((profile) => recordProfileSurvival(noDoorWorld, profile.id, 1, `${profile.name} survit sans porte.`));
+
+  const noDoorReturning = getReturningSurvivorCandidates(noDoorWorld);
+  const noDoorRoster = buildWaveRoster(2, noDoorMemory, false, noDoorReturning.map((profile) => profile.role));
+  const { profiles: noDoorNextProfiles } = selectProfilesForWave(
+    noDoorRoster,
+    noDoorWorld,
+    2,
+    createCompositionContext(noDoorMemory, 2, false),
+  );
+
+  if (
+    noDoorNextProfiles.length !== PARTY_SIZE ||
+    noDoorNextProfiles.filter((profile) => noDoorReturning.some((survivor) => survivor.id === profile.id)).length !== PARTY_SIZE
+  ) {
+    console.error('ECHEC: sans porte active ni apprentissage, les 5 survivants devraient tous revenir.');
     process.exit(1);
   }
 
@@ -712,15 +934,30 @@ function validateSurvivorContinuityRules(): void {
   const previewSim = new DungeonSimulation();
   previewSim.startNewGame();
   const previewState = (previewSim as unknown as { state: import('../src/game/types').GameState }).state;
-  const previewProfiles = selectProfilesForWave(expectedRoles, previewState.world, 1);
+  const { profiles: previewProfiles } = selectProfilesForWave(
+    expectedRoles,
+    previewState.world,
+    1,
+    createCompositionContext(previewState.memory, 1, false),
+  );
   previewProfiles.forEach((profile) => activateProfileForExpedition(previewState.world, profile.id, 1));
   previewProfiles.slice(0, 2).forEach((profile) => recordProfileSurvival(previewState.world, profile.id, 1, `${profile.name} survit au preview.`));
   previewProfiles.slice(2).forEach((profile) => recordProfileDeath(previewState.world, profile.id, 1, `${profile.name} meurt au preview.`));
   previewState.wave = 2;
 
   const snapshot = previewSim.getSnapshot();
-  const realRoster = buildWaveRoster(2, previewState.memory, previewSim.getRenderState().doors.length > 0, getReturningSurvivorCandidates(previewState.world).map((profile) => profile.role));
-  const realProfiles = selectProfilesForWave(realRoster, previewState.world, 2);
+  const realRoster = buildWaveRoster(
+    2,
+    previewState.memory,
+    previewSim.getRenderState().doors.length > 0,
+    getReturningSurvivorCandidates(previewState.world).map((profile) => profile.role),
+  );
+  const { profiles: realProfiles } = selectProfilesForWave(
+    realRoster,
+    previewState.world,
+    2,
+    createCompositionContext(previewState.memory, 2, previewSim.getRenderState().doors.length > 0),
+  );
 
   if (
     snapshot.nextExpeditionReturningNames.length !== 2 ||
@@ -729,6 +966,10 @@ function validateSurvivorContinuityRules(): void {
     console.error('ECHEC: l apercu de prochaine expedition doit annoncer des revenants qui seront vraiment selectionnes.');
     process.exit(1);
   }
+
+  console.log(
+    `Continuite survivants: arbitrage voleur OK (4+1 sur 5 sans voleur, 5/5 avec voleur, 3+2 avec porte, 0+5 avec porte, 1 retenu au rapport: ${fiveComposition.benchedProfiles[0]?.name ?? 'n/a'}).`,
+  );
 }
 
 function validateDoorLockRules(): void {
@@ -1238,6 +1479,262 @@ function validateGoblinChaseRules(): void {
   }
 }
 
+function validateDefenseAggroRules(): void {
+  const movement = {
+    canMoveBetween: () => true,
+    getNextWaypoint: () => null,
+  };
+  const skeleton = createSmokeDefense('skeleton', 'aggro-skeleton', 8, 8);
+  const passingAdventurer = createSmokeAdventurer('thief', 'passing-thief', 10.9, 8);
+
+  updateMonsterAI([skeleton], [passingAdventurer], 250, movement);
+
+  if (skeleton.aiState !== 'chase' || skeleton.targetAdventurerId !== passingAdventurer.id) {
+    console.error('ECHEC: un squelette devrait aggro et poursuivre un aventurier qui passe a portee.');
+    process.exit(1);
+  }
+
+  const slime = createSmokeDefense('slime', 'angry-slime', 12, 12);
+  const rangedAttacker = createSmokeAdventurer('mage', 'ranged-mage', 14.55, 12);
+
+  slime.targetAdventurerId = rangedAttacker.id;
+  slime.aiState = 'chase';
+  updateMonsterAI([slime], [rangedAttacker], 250, movement);
+
+  if (slime.aiState !== 'chase' || slime.targetAdventurerId !== rangedAttacker.id || slime.x <= 12) {
+    console.error("ECHEC: un sbire attaque devrait garder l'attaquant comme cible d'aggro et avancer vers lui.");
+    process.exit(1);
+  }
+}
+
+function buildFakeParticipant(overrides: Partial<ExpeditionParticipantReport>): ExpeditionParticipantReport {
+  return {
+    name: 'Aventurier',
+    role: 'warrior',
+    level: 1,
+    status: 'survivant',
+    note: 'RAS',
+    ...overrides,
+  };
+}
+
+function buildFakeReport(overrides: Partial<Omit<WaveReport, 'guildTavernScene'>>): Omit<WaveReport, 'guildTavernScene'> {
+  const base: Omit<WaveReport, 'guildTavernScene'> = {
+    wave: 1,
+    cleared: true,
+    partyLabel: 'Expedition test',
+    durationSeconds: 42,
+    adventurersKilled: 0,
+    adventurersEscaped: 0,
+    bossDamageTaken: 0,
+    goldAwarded: 30,
+    trapRefundGold: 0,
+    treasurePenaltyGold: 0,
+    treasureProtectedBonusGold: 0,
+    bossSurvivalBonusGold: 0,
+    preparationBudget: 30,
+    abilityUses: 0,
+    bossAbilityUses: 0,
+    doorsPicked: 0,
+    doorNoThiefRetreats: 0,
+    fleeingTrapAvoidances: 0,
+    groupRetreats: 0,
+    coverRetreats: 0,
+    panicRetreats: 0,
+    disobeys: 0,
+    treasureStolen: false,
+    dungeonReputation: 0,
+    reputationDelta: 0,
+    trapHighlights: [],
+    minionHighlights: [],
+    storyLines: [],
+    learnedLines: [],
+    sharedLines: [],
+    gainsLosses: [],
+    guildChanges: [],
+    economyLines: [],
+    participants: [],
+    chronicle: {
+      title: 'Test',
+      subtitle: 'Test',
+      hasSurvivors: true,
+      lines: ['ligne 1', 'ligne 2', 'ligne 3'],
+      badges: [
+        { label: 'Survivants', value: '0', tone: 'neutral' },
+        { label: 'Morts', value: '0', tone: 'neutral' },
+        { label: 'Tresor', value: 'Protege', tone: 'good' },
+        { label: 'Boss', value: 'Debout', tone: 'good' },
+        { label: 'Portes', value: 'RAS', tone: 'neutral' },
+        { label: 'Pieges', value: 'RAS', tone: 'neutral' },
+      ],
+      tacticalSummary: 'Resume test',
+    },
+    notableAdventurers: [],
+    returningSurvivorNames: [],
+    heldBackSurvivorNames: [],
+    imposedRoleNote: null,
+    newVolunteerCount: PARTY_SIZE,
+    veteranName: null,
+    deaths: [],
+    survivors: [],
+    adaptationNotes: [],
+    verdict: 'Verdict test',
+  };
+
+  return { ...base, ...overrides };
+}
+
+function validateGuildTavernSceneRules(): void {
+  const survivorReport = buildFakeReport({
+    adventurersKilled: 2,
+    adventurersEscaped: 3,
+    treasureStolen: true,
+    doorsPicked: 1,
+    veteranName: 'Annie',
+    returningSurvivorNames: ['Annie', 'Kylian'],
+    newVolunteerCount: PARTY_SIZE - 2,
+    participants: [
+      buildFakeParticipant({ name: 'Annie', role: 'thief', status: 'survivant' }),
+      buildFakeParticipant({ name: 'Kylian', role: 'warrior', status: 'blesse' }),
+      buildFakeParticipant({ name: 'Marta', role: 'healer', status: 'fuite' }),
+      buildFakeParticipant({ name: 'Joel', role: 'mage', status: 'mort', note: 'tombe au combat' }),
+      buildFakeParticipant({ name: 'Florian', role: 'warrior', status: 'mort', note: 'tombe au combat' }),
+    ],
+  });
+
+  const survivorScene = buildGuildTavernScene(survivorReport);
+  const survivorTableActors = survivorScene.layout.tableSlots.map((slot) => slot.actor).filter((actor) => actor !== null);
+  const emptySlots = survivorScene.layout.tableSlots.filter((slot) => slot.actor === null);
+
+  if (!survivorScene.hasSurvivors || survivorTableActors.length !== 3) {
+    console.error(`ECHEC: la scene taverne devrait afficher 3 survivants a table (obtenu ${survivorTableActors.length}).`);
+    process.exit(1);
+  }
+
+  if (survivorScene.layout.tableSlots.length !== PARTY_SIZE) {
+    console.error(`ECHEC: la table de la taverne doit toujours compter ${PARTY_SIZE} places (obtenu ${survivorScene.layout.tableSlots.length}).`);
+    process.exit(1);
+  }
+
+  if (emptySlots.length !== 2 || !emptySlots.every((slot) => slot.deadName === 'Joel' || slot.deadName === 'Florian')) {
+    console.error('ECHEC: les chaises vides doivent porter les noms de Joel et Florian.');
+    process.exit(1);
+  }
+
+  if (survivorScene.dead.length !== 2 || !survivorScene.dead.includes('Joel') || !survivorScene.dead.includes('Florian')) {
+    console.error(`ECHEC: la scene taverne devrait lister Joel et Florian comme absents (obtenu ${survivorScene.dead.join(', ')}).`);
+    process.exit(1);
+  }
+
+  if (survivorScene.dead.some((name) => survivorScene.returning.includes(name))) {
+    console.error('ECHEC: un mort ne doit jamais apparaitre dans la liste des revenants.');
+    process.exit(1);
+  }
+
+  if (survivorScene.returning.join(',') !== 'Annie,Kylian' || survivorScene.veteran !== 'Annie') {
+    console.error('ECHEC: les revenants/veteran de la scene taverne doivent correspondre au rapport source.');
+    process.exit(1);
+  }
+
+  if (survivorScene.newVolunteersCount !== PARTY_SIZE - 2) {
+    console.error(`ECHEC: nouveaux volontaires attendus=${PARTY_SIZE - 2}, obtenu=${survivorScene.newVolunteersCount}.`);
+    process.exit(1);
+  }
+
+  if (survivorScene.beats.length < 3 || survivorScene.beats.length > 6) {
+    console.error(`ECHEC: la scene taverne avec survivants devrait generer 3 a 6 beats (obtenu ${survivorScene.beats.length}).`);
+    process.exit(1);
+  }
+
+  const knownActorIds = new Set([
+    ...survivorTableActors.map((actor) => actor!.id),
+    ...survivorScene.layout.counterActors.map((actor) => actor.id),
+    ...survivorScene.layout.backgroundActors.map((actor) => actor.id),
+  ]);
+
+  if (!survivorScene.beats.every((entryBeat) => knownActorIds.has(entryBeat.actorId))) {
+    console.error('ECHEC: chaque beat doit etre porte par un acteur reellement present dans la scene.');
+    process.exit(1);
+  }
+
+  const survivorNames = new Set(survivorTableActors.map((actor) => actor!.name));
+  const npcOnlyBeats = survivorScene.beats.filter((entryBeat) => !survivorNames.has(entryBeat.speakerName));
+
+  if (npcOnlyBeats.some((entryBeat) => entryBeat.role !== 'guild' && entryBeat.role !== 'rumor')) {
+    console.error("ECHEC: seuls des survivants ou des PNJ generiques doivent parler quand il y a des survivants.");
+    process.exit(1);
+  }
+
+  const veteranActor = survivorTableActors.find((actor) => actor!.name === 'Annie');
+
+  if (!veteranActor?.isVeteran || !veteranActor.isReturning) {
+    console.error('ECHEC: Annie devrait etre marquee veteran et revenante dans la scene taverne.');
+    process.exit(1);
+  }
+
+  const noSurvivorReport = buildFakeReport({
+    adventurersKilled: 5,
+    adventurersEscaped: 0,
+    treasureStolen: false,
+    veteranName: null,
+    returningSurvivorNames: [],
+    newVolunteerCount: PARTY_SIZE,
+    participants: Array.from({ length: PARTY_SIZE }, (_unused, index) =>
+      buildFakeParticipant({ name: `Disparu${index + 1}`, status: 'mort', note: 'tombe au combat' }),
+    ),
+  });
+
+  const noSurvivorScene = buildGuildTavernScene(noSurvivorReport);
+  const noSurvivorTableActors = noSurvivorScene.layout.tableSlots.map((slot) => slot.actor).filter((actor) => actor !== null);
+
+  if (noSurvivorScene.hasSurvivors || noSurvivorTableActors.length !== 0) {
+    console.error('ECHEC: la scene sans survivants ne devrait afficher aucun survivant vivant a table.');
+    process.exit(1);
+  }
+
+  if (noSurvivorScene.layout.tableSlots.some((slot) => !slot.deadName)) {
+    console.error('ECHEC: sans survivants, chaque chaise doit porter le nom du disparu correspondant.');
+    process.exit(1);
+  }
+
+  if (noSurvivorScene.dead.length !== PARTY_SIZE) {
+    console.error(`ECHEC: la scene sans survivants devrait lister ${PARTY_SIZE} absents (obtenu ${noSurvivorScene.dead.length}).`);
+    process.exit(1);
+  }
+
+  if (noSurvivorScene.newVolunteersCount !== PARTY_SIZE) {
+    console.error(`ECHEC: sans survivants, ${PARTY_SIZE} nouveaux volontaires sont attendus (obtenu ${noSurvivorScene.newVolunteersCount}).`);
+    process.exit(1);
+  }
+
+  if (noSurvivorScene.beats.length < 3 || noSurvivorScene.beats.length > 6) {
+    console.error(`ECHEC: la scene sans survivants devrait generer 3 a 6 beats (obtenu ${noSurvivorScene.beats.length}).`);
+    process.exit(1);
+  }
+
+  if (noSurvivorScene.beats.some((entryBeat) => entryBeat.role !== 'guild' && entryBeat.role !== 'rumor')) {
+    console.error("ECHEC: sans survivants, aucun aventurier ne doit parler comme s'il etait un temoin direct.");
+    process.exit(1);
+  }
+
+  const noSurvivorActorIds = new Set([
+    ...noSurvivorScene.layout.counterActors.map((actor) => actor.id),
+    ...noSurvivorScene.layout.backgroundActors.map((actor) => actor.id),
+    'rumor',
+  ]);
+
+  if (!noSurvivorScene.beats.every((entryBeat) => noSurvivorActorIds.has(entryBeat.actorId))) {
+    console.error('ECHEC: sans survivants, chaque beat doit etre porte par un PNJ reellement present (ou la rumeur ambiante).');
+    process.exit(1);
+  }
+
+  console.log(
+    `Scene taverne: survivants=${survivorTableActors.length} absents=${survivorScene.dead.length} ` +
+      `beats=${survivorScene.beats.length} / sans-survivant absents=${noSurvivorScene.dead.length} ` +
+      `beats=${noSurvivorScene.beats.length}.`,
+  );
+}
+
 validateDiggingRules();
 validateInitialDungeonLayoutRules();
 validateSpecialRoomBuildRules();
@@ -1251,6 +1748,8 @@ validateDefensiveUnitsRespectClosedDoors();
 validateTreasureGroupDecisionRules();
 validateCombatAbilityRules();
 validateGoblinChaseRules();
+validateDefenseAggroRules();
+validateGuildTavernSceneRules();
 
 const sim = new DungeonSimulation();
 sim.startNewGame();
@@ -1335,6 +1834,40 @@ for (let wave = 1; wave <= 6; wave += 1) {
     process.exit(1);
   }
 
+  const scene = report.guildTavernScene;
+
+  if (scene.hasSurvivors !== (report.adventurersEscaped > 0)) {
+    console.error(`ECHEC: scene taverne vague ${wave} incoherente avec les survivants (${report.adventurersEscaped}).`);
+    process.exit(1);
+  }
+
+  if (scene.dead.some((name) => scene.returning.includes(name))) {
+    console.error(`ECHEC: scene taverne vague ${wave} annonce un mort comme revenant.`);
+    process.exit(1);
+  }
+
+  const sceneTableActors = scene.layout.tableSlots.map((slot) => slot.actor).filter((actor) => actor !== null);
+
+  if (sceneTableActors.length !== report.participants.filter((participant) => participant.status !== 'mort' && participant.status !== 'disparu').length) {
+    console.error(`ECHEC: scene taverne vague ${wave} n'affiche pas le bon nombre de survivants a table.`);
+    process.exit(1);
+  }
+
+  if (scene.layout.tableSlots.length !== PARTY_SIZE) {
+    console.error(`ECHEC: scene taverne vague ${wave} n'a pas ${PARTY_SIZE} places de table.`);
+    process.exit(1);
+  }
+
+  if (!scene.hasSurvivors && scene.beats.some((entryBeat) => entryBeat.role !== 'guild' && entryBeat.role !== 'rumor')) {
+    console.error(`ECHEC: scene taverne vague ${wave} fait parler un aventurier alors qu'il n'y a aucun survivant.`);
+    process.exit(1);
+  }
+
+  if (scene.beats.length < 1 || scene.beats.length > 6) {
+    console.error(`ECHEC: scene taverne vague ${wave} devrait produire entre 1 et 6 beats (obtenu ${scene.beats.length}).`);
+    process.exit(1);
+  }
+
   abilityFired += report.bossAbilityUses;
   doorEverPicked ||= report.doorsPicked > 0;
   doorEverRetreatedNoThief ||= report.doorNoThiefRetreats > 0;
@@ -1363,6 +1896,19 @@ for (let wave = 1; wave <= 6; wave += 1) {
   }
 
   sim.continueBuild();
+
+  const nextBuildSnapshot = sim.getSnapshot();
+
+  if (
+    nextBuildSnapshot.phase === 'build' &&
+    nextBuildSnapshot.nextExpeditionReturningNames.join(',') !== scene.returning.join(',')
+  ) {
+    console.error(
+      `ECHEC: vague ${wave} annonce des revenants (${scene.returning.join(', ')}) qui ne correspondent pas ` +
+        `a la prochaine expedition (${nextBuildSnapshot.nextExpeditionReturningNames.join(', ')}).`,
+    );
+    process.exit(1);
+  }
 
   const resetDoor = sim.getRenderState().doors.find((door) => door.cell.x === 12 && door.cell.y === 11);
 

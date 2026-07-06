@@ -382,6 +382,8 @@ export interface AdaptationMemory {
   trapAvoidance: number;
   trapDangerByCell: Record<string, number>;
   rolePressure: Record<AdventurerRole, number>;
+  /** Derniere expedition bloquee par une porte faute de voleur vivant. */
+  doorBlockedWithoutThief: boolean;
 }
 
 export interface EffectStats {
@@ -504,6 +506,76 @@ export interface SurvivorChronicle {
   tacticalSummary: string;
 }
 
+export type GuildSceneMood = 'triumphant' | 'grim' | 'somber' | 'tense' | 'neutral';
+
+export type GuildTavernSpeakerRole = AdventurerRole | 'guild' | 'rumor';
+
+/**
+ * Guild Tavern Scene V2: la scene n'affiche plus des "cartes" de rapport mais
+ * des acteurs places dans un vrai espace (table, comptoir, fond de salle).
+ */
+export type TavernActorKind = 'survivor' | 'npc';
+
+export type TavernActorPose = 'seated' | 'standing' | 'shadow';
+
+export interface TavernActor {
+  id: string;
+  name: string;
+  kind: TavernActorKind;
+  role: GuildTavernSpeakerRole;
+  level: number | null;
+  isVeteran: boolean;
+  isReturning: boolean;
+  statusLabel: string;
+  pose: TavernActorPose;
+}
+
+/** Une place a la table de la guilde: soit un survivant assis, soit une chaise vide nommee. */
+export interface TavernTableSlot {
+  actor: TavernActor | null;
+  deadName: string | null;
+}
+
+/**
+ * Repartition physique des acteurs dans la piece. Produite par
+ * guildTavernSceneSystem.ts, consommee telle quelle par le rendu (aucune
+ * logique de jeu dans la couche d'affichage).
+ */
+export interface TavernSceneLayout {
+  tableSlots: TavernTableSlot[];
+  counterActors: TavernActor[];
+  backgroundActors: TavernActor[];
+}
+
+/** Un beat de la sequence de dialogue jouee dans la scene. */
+export interface TavernBeat {
+  id: string;
+  actorId: string;
+  speakerName: string;
+  role: GuildTavernSpeakerRole;
+  text: string;
+}
+
+export interface GuildTavernSummaryFact {
+  label: string;
+  value: string;
+  tone: 'neutral' | 'good' | 'bad' | 'warning';
+}
+
+export interface GuildTavernScene {
+  title: string;
+  subtitle: string;
+  sceneMood: GuildSceneMood;
+  hasSurvivors: boolean;
+  layout: TavernSceneLayout;
+  dead: string[];
+  returning: string[];
+  newVolunteersCount: number;
+  veteran: string | null;
+  beats: TavernBeat[];
+  summaryFacts: GuildTavernSummaryFact[];
+}
+
 export interface WaveReport {
   wave: number;
   cleared: boolean;
@@ -540,8 +612,11 @@ export interface WaveReport {
   economyLines: string[];
   participants: ExpeditionParticipantReport[];
   chronicle: SurvivorChronicle;
+  guildTavernScene: GuildTavernScene;
   notableAdventurers: string[];
   returningSurvivorNames: string[];
+  heldBackSurvivorNames: string[];
+  imposedRoleNote: string | null;
   newVolunteerCount: number;
   veteranName: string | null;
   deaths: string[];

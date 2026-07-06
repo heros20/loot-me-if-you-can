@@ -11,6 +11,7 @@ interface MonsterMovementOptions {
 
 interface ChaseConfig {
   acquireRange: number;
+  forcedTargetRange: number;
   maxHomeDistance: number;
   chaseMs: number;
   speed: number;
@@ -20,25 +21,28 @@ interface ChaseConfig {
 
 const CHASE_CONFIG: Record<'goblin' | 'skeleton' | 'slime', ChaseConfig> = {
   goblin: {
-    acquireRange: 3.05,
-    maxHomeDistance: 4.2,
-    chaseMs: 5200,
+    acquireRange: 4.2,
+    forcedTargetRange: 5.2,
+    maxHomeDistance: 5.0,
+    chaseMs: 6800,
     speed: 0.00205,
     returnSpeed: 0.00155,
     patrolRadius: 0.32,
   },
   skeleton: {
-    acquireRange: 2.1,
-    maxHomeDistance: 2.25,
-    chaseMs: 3300,
+    acquireRange: 3.15,
+    forcedTargetRange: 4.2,
+    maxHomeDistance: 3.75,
+    chaseMs: 5200,
     speed: 0.0009,
     returnSpeed: 0.00098,
     patrolRadius: 0.08,
   },
   slime: {
-    acquireRange: 1.55,
-    maxHomeDistance: 1.45,
-    chaseMs: 2100,
+    acquireRange: 2.25,
+    forcedTargetRange: 3.0,
+    maxHomeDistance: 2.45,
+    chaseMs: 3600,
     speed: 0.00062,
     returnSpeed: 0.0005,
     patrolRadius: 0.14,
@@ -101,7 +105,7 @@ function updateSlime(
   slowedAdventurerIds: string[],
   movement: MonsterMovementOptions,
 ): void {
-  const target = findNearestAdventurer(minion, adventurers, 1.35);
+  const target = findNearestAdventurer(minion, adventurers, CHASE_CONFIG.slime.acquireRange);
   if (target || minion.targetAdventurerId) {
     updateChaser(minion, adventurers, deltaMs, movement, CHASE_CONFIG.slime);
   } else {
@@ -124,10 +128,10 @@ function updateChaser(
 ): void {
   const homeDistance = distance(minion.x, minion.y, minion.homeCell.x, minion.homeCell.y);
   const returningToPost = minion.aiState === 'return' && homeDistance > 0.26;
-  const previousTarget = !returningToPost && minion.targetAdventurerId
-    ? adventurers.find((adventurer) => adventurer.id === minion.targetAdventurerId && adventurer.alive && !adventurer.escaped) ?? null
+  const forcedTarget = !returningToPost && minion.targetAdventurerId
+    ? findCurrentTarget(minion, adventurers, config.forcedTargetRange)
     : null;
-  const target = returningToPost ? null : previousTarget ?? findNearestAdventurer(minion, adventurers, config.acquireRange);
+  const target = returningToPost ? null : forcedTarget ?? findNearestAdventurer(minion, adventurers, config.acquireRange);
 
   if (
     target &&
@@ -187,6 +191,23 @@ function findNearestAdventurer(
     }))
     .filter((entry) => entry.distance <= range)
     .sort((a, b) => a.distance - b.distance)[0]?.adventurer ?? null;
+}
+
+function findCurrentTarget(
+  minion: DefenseEntity,
+  adventurers: AdventurerEntity[],
+  rangeFromHome: number,
+): AdventurerEntity | null {
+  const target = adventurers.find(
+    (adventurer) => adventurer.id === minion.targetAdventurerId && adventurer.alive && !adventurer.escaped,
+  ) ?? null;
+
+  if (!target) {
+    return null;
+  }
+
+  const distanceFromHome = distance(minion.homeCell.x, minion.homeCell.y, target.x, target.y);
+  return distanceFromHome <= rangeFromHome ? target : null;
 }
 
 function moveToward(

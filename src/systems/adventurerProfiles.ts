@@ -71,44 +71,7 @@ export function advanceWorldDay(world: RunWorldMemory, days: number): number {
   return world.currentDay;
 }
 
-export function selectProfilesForWave(
-  roles: AdventurerRole[],
-  world: RunWorldMemory,
-  wave: number,
-): AdventurerProfile[] {
-  recoverAvailableProfiles(world);
-  const selected: AdventurerProfile[] = [];
-  const returningSurvivors = getReturningSurvivorCandidates(world, PARTY_SIZE);
-
-  returningSurvivors.forEach((survivor) => {
-    selected.push(survivor);
-  });
-
-  const remainingRoles = consumeFixedRoleSlots(roles, selected.map((profile) => profile.role));
-
-  while (selected.length < PARTY_SIZE) {
-    const role = remainingRoles.shift() ?? 'warrior';
-    const index = selected.length;
-
-    if (index % 4 === 1) {
-      const fallen = pickFallenForHeir(world, role, wave);
-
-      if (fallen) {
-        const heir = createHeirProfile(world, fallen, wave);
-        selected.push(heir);
-        continue;
-      }
-    }
-
-    const profile = createAdventurerProfile(role, world, wave, index);
-    world.profiles[profile.id] = profile;
-    selected.push(profile);
-  }
-
-  return selected.slice(0, PARTY_SIZE);
-}
-
-function recoverAvailableProfiles(world: RunWorldMemory): void {
+export function recoverAvailableProfiles(world: RunWorldMemory): void {
   Object.values(world.profiles).forEach((profile) => {
     if (
       profile.availability === 'recovering' &&
@@ -306,7 +269,7 @@ export function createInjury(profileName: string, causedBy: string, hpRatio: num
   };
 }
 
-function createAdventurerProfile(
+export function createAdventurerProfile(
   role: AdventurerRole,
   world: RunWorldMemory,
   wave: number,
@@ -650,22 +613,6 @@ function completeProfileExpedition(
   profile.expeditionHistory.push(record);
   world.expeditionHistory.push(record);
   return record;
-}
-
-function consumeFixedRoleSlots(roles: AdventurerRole[], fixedRoles: AdventurerRole[]): AdventurerRole[] {
-  const remaining = [...roles];
-
-  fixedRoles.forEach((role) => {
-    const index = remaining.indexOf(role);
-
-    if (index >= 0) {
-      remaining.splice(index, 1);
-    } else if (remaining.length > 0) {
-      remaining.shift();
-    }
-  });
-
-  return remaining;
 }
 
 function reputationTitle(value: number): string {
