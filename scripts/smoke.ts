@@ -18,9 +18,20 @@ import {
 import { computeDoorRemovalRefund } from '../src/systems/economyBalance';
 import { updateMonsterAI } from '../src/systems/monsterAISystem';
 import { choosePostTreasureGoal, chooseTreasureGroupObjective, createPartyPlan } from '../src/systems/partyAISystem';
+import {
+  activateProfileForExpedition,
+  createInitialWorldMemory,
+  getReturningSurvivorCandidates,
+  recordProfileDeath,
+  recordProfileSurvival,
+  recordTreasureTheft,
+  selectProfilesForWave,
+} from '../src/systems/adventurerProfiles';
+import { buildWaveRoster } from '../src/systems/waveDirector';
 import type {
   AdventurerEntity,
   AdventurerRole,
+  AdaptationMemory,
   BossEntity,
   DefenseEntity,
   DefenseType,
@@ -68,6 +79,19 @@ function createSmokeStats(): WaveStats {
 
 function isCell(a: GridCell, b: GridCell): boolean {
   return a.x === b.x && a.y === b.y;
+}
+
+function createSmokeMemory(): AdaptationMemory {
+  return {
+    trapAvoidance: 0.35,
+    trapDangerByCell: {},
+    rolePressure: {
+      warrior: 0,
+      thief: 0,
+      mage: 0,
+      healer: 0,
+    },
+  };
 }
 
 function createSmokeAdventurer(role: AdventurerRole, id: string, x: number, y: number): AdventurerEntity {
@@ -476,6 +500,116 @@ function validateDungeonAnchorRules(): void {
 
   if (!report || report.treasurePenaltyGold !== 0 || !report.gainsLosses.some((line) => line.includes('aucune penalite'))) {
     console.error("ECHEC: un tresor d'or vole ne devrait pas creer de double perte en rapport.");
+    process.exit(1);
+  }
+}
+
+function validateSurvivorContinuityRules(): void {
+  const expectedRoles: AdventurerRole[] = ['warrior', 'thief', 'mage', 'healer', 'warrior'];
+
+  [0, 1, 2, 5].forEach((survivorCount) => {
+    const world = createInitialWorldMemory();
+    const memory = createSmokeMemory();
+    const wave1Roster = buildWaveRoster(1, memory, false);
+    const wave1Profiles = selectProfilesForWave(wave1Roster, world, 1);
+
+    if (wave1Profiles.length !== PARTY_SIZE) {
+      console.error('ECHEC: expedition 1 devrait contenir exactement 5 profils.');
+      process.exit(1);
+    }
+
+    wave1Profiles.forEach((profile) => activateProfileForExpedition(world, profile.id, 1));
+    wave1Profiles.forEach((profile, index) => {
+      if (index < survivorCount) {
+        recordProfileSurvival(world, profile.id, 1, `${profile.name} survit au test.`);
+      } else {
+        recordProfileDeath(world, profile.id, 1, `${profile.name} meurt dans le test.`);
+      }
+    });
+
+    const returning = getReturningSurvivorCandidates(world);
+    const wave2Roster = buildWaveRoster(2, memory, false, returning.map((profile) => profile.role));
+    const wave2Profiles = selectProfilesForWave(wave2Roster, world, 2);
+    const expectedReturningIds = wave1Profiles.slice(0, survivorCount).map((profile) => profile.id);
+    const actualReturningIds = wave2Profiles.slice(0, survivorCount).map((profile) => profile.id);
+
+    if (wave2Profiles.length !== PARTY_SIZE) {
+      console.error(`ECHEC: expedition 2 devrait rester a 5 profils avec ${survivorCount} survivants.`);
+      process.exit(1);
+    }
+
+    if (actualReturningIds.join('|') !== expectedReturningIds.join('|')) {
+      console.error(`ECHEC: ${survivorCount} survivant(s) devraient revenir en priorite dans l expedition suivante.`);
+      process.exit(1);
+    }
+
+    if (survivorCount === 0 && wave2Profiles.some((profile) => wave1Profiles.some((old) => old.id === profile.id))) {
+      console.error('ECHEC: sans survivant, la vague suivante devrait etre composee de nouveaux profils.');
+      process.exit(1);
+    }
+
+    if (survivorCount > 0) {
+      const survivor = wave2Profiles[0];
+      const original = wave1Profiles[0];
+
+      if (survivor.id !== original.id || survivor.name !== original.name || survivor.role !== original.role || survivor.survivedExpeditions < 1) {
+        console.error('ECHEC: un survivant doit conserver son identite, sa classe et son vecu.');
+        process.exit(1);
+      }
+    }
+  });
+
+  const doorWorld = createInitialWorldMemory();
+  const doorMemory = createSmokeMemory();
+  const noThiefSurvivorRoles: AdventurerRole[] = ['warrior', 'mage', 'healer', 'warrior', 'mage'];
+  const firstProfiles = selectProfilesForWave(noThiefSurvivorRoles, doorWorld, 1);
+  firstProfiles.forEach((profile) => activateProfileForExpedition(doorWorld, profile.id, 1));
+  firstProfiles.forEach((profile, index) => {
+    if (index < 2) {
+      recordProfileSurvival(doorWorld, profile.id, 1, `${profile.name} survit au test de porte.`);
+    } else {
+      recordProfileDeath(doorWorld, profile.id, 1, `${profile.name} meurt au test de porte.`);
+    }
+  });
+  const doorReturning = getReturningSurvivorCandidates(doorWorld);
+  const doorRoster = buildWaveRoster(2, doorMemory, true, doorReturning.map((profile) => profile.role));
+  const doorProfiles = selectProfilesForWave(doorRoster, doorWorld, 2);
+
+  if (doorProfiles.length !== PARTY_SIZE || !doorProfiles.some((profile) => profile.role === 'thief')) {
+    console.error('ECHEC: une porte active doit prioriser un voleur dans les nouveaux slots si aucun survivant voleur ne suffit.');
+    process.exit(1);
+  }
+
+  const lootProfile = doorProfiles.find((profile) => profile.role === 'thief') ?? doorProfiles[0];
+  recordTreasureTheft(doorWorld, lootProfile.id, GOLD_TREASURE_DEFAULT_VALUE);
+
+  if (
+    lootProfile.lastLootedGold !== GOLD_TREASURE_DEFAULT_VALUE ||
+    lootProfile.totalLootedGold < GOLD_TREASURE_DEFAULT_VALUE ||
+    lootProfile.notableLootEscapeCount < 1
+  ) {
+    console.error("ECHEC: un survivant voleur d'or doit garder la trace de l'or rapporte.");
+    process.exit(1);
+  }
+
+  const previewSim = new DungeonSimulation();
+  previewSim.startNewGame();
+  const previewState = (previewSim as unknown as { state: import('../src/game/types').GameState }).state;
+  const previewProfiles = selectProfilesForWave(expectedRoles, previewState.world, 1);
+  previewProfiles.forEach((profile) => activateProfileForExpedition(previewState.world, profile.id, 1));
+  previewProfiles.slice(0, 2).forEach((profile) => recordProfileSurvival(previewState.world, profile.id, 1, `${profile.name} survit au preview.`));
+  previewProfiles.slice(2).forEach((profile) => recordProfileDeath(previewState.world, profile.id, 1, `${profile.name} meurt au preview.`));
+  previewState.wave = 2;
+
+  const snapshot = previewSim.getSnapshot();
+  const realRoster = buildWaveRoster(2, previewState.memory, previewSim.getRenderState().doors.length > 0, getReturningSurvivorCandidates(previewState.world).map((profile) => profile.role));
+  const realProfiles = selectProfilesForWave(realRoster, previewState.world, 2);
+
+  if (
+    snapshot.nextExpeditionReturningNames.length !== 2 ||
+    !snapshot.nextExpeditionReturningNames.every((name) => realProfiles.some((profile) => profile.name === name))
+  ) {
+    console.error('ECHEC: l apercu de prochaine expedition doit annoncer des revenants qui seront vraiment selectionnes.');
     process.exit(1);
   }
 }
@@ -991,6 +1125,7 @@ validateDiggingRules();
 validateSpecialRoomBuildRules();
 validateDoorRules();
 validateDungeonAnchorRules();
+validateSurvivorContinuityRules();
 validateDoorLockRules();
 validateDoorRemovalRules();
 validateDoorNoThiefRetreat();

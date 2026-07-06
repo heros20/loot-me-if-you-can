@@ -11,8 +11,13 @@ const BASE_ROLE_SCORE: Record<AdventurerRole, number> = {
   healer: 0.88,
 };
 
-export function buildWaveRoster(wave: number, memory: AdaptationMemory, hasActiveLockedDoor = false): AdventurerRole[] {
-  const roles: AdventurerRole[] = [];
+export function buildWaveRoster(
+  wave: number,
+  memory: AdaptationMemory,
+  hasActiveLockedDoor = false,
+  fixedRoles: AdventurerRole[] = [],
+): AdventurerRole[] {
+  const roles: AdventurerRole[] = fixedRoles.slice(0, PARTY_SIZE);
 
   while (roles.length < PARTY_SIZE) {
     const nextRole = ADAPTIVE_ROLE_ORDER

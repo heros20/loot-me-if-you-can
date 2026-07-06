@@ -9,6 +9,7 @@ import type {
   DefenseType,
 } from '../game/types';
 import { ADVENTURER_DEFINITIONS } from '../entities/definitions';
+import { PARTY_SIZE } from '../game/constants';
 
 const GUILD_ID = 'guild-ashen-contract';
 const REALM_ID = 'realm-candlemark';
@@ -76,31 +77,35 @@ export function selectProfilesForWave(
   wave: number,
 ): AdventurerProfile[] {
   recoverAvailableProfiles(world);
-  const selectedIds = new Set<string>();
+  const selected: AdventurerProfile[] = [];
+  const returningSurvivors = getReturningSurvivorCandidates(world, PARTY_SIZE);
 
-  return roles.map((role, index) => {
-    const survivor = pickReturningSurvivor(role, world, selectedIds, wave, index);
+  returningSurvivors.forEach((survivor) => {
+    selected.push(survivor);
+  });
 
-    if (survivor) {
-      selectedIds.add(survivor.id);
-      return survivor;
-    }
+  const remainingRoles = consumeFixedRoleSlots(roles, selected.map((profile) => profile.role));
+
+  while (selected.length < PARTY_SIZE) {
+    const role = remainingRoles.shift() ?? 'warrior';
+    const index = selected.length;
 
     if (index % 4 === 1) {
       const fallen = pickFallenForHeir(world, role, wave);
 
       if (fallen) {
         const heir = createHeirProfile(world, fallen, wave);
-        selectedIds.add(heir.id);
-        return heir;
+        selected.push(heir);
+        continue;
       }
     }
 
     const profile = createAdventurerProfile(role, world, wave, index);
-    selectedIds.add(profile.id);
     world.profiles[profile.id] = profile;
-    return profile;
-  });
+    selected.push(profile);
+  }
+
+  return selected.slice(0, PARTY_SIZE);
 }
 
 function recoverAvailableProfiles(world: RunWorldMemory): void {
@@ -112,6 +117,7 @@ function recoverAvailableProfiles(world: RunWorldMemory): void {
     ) {
       profile.availability = 'available';
       profile.lifeStatus = 'alive';
+      profile.availableNextExpedition = true;
     }
   });
 }
@@ -124,6 +130,7 @@ export function releaseUndeployedExpedition(world: RunWorldMemory, profileId: st
   }
 
   profile.availability = 'available';
+  profile.availableNextExpedition = true;
   profile.expeditionCount = Math.max(0, profile.expeditionCount - 1);
 }
 
@@ -138,7 +145,7 @@ export function activateProfileForExpedition(
     return null;
   }
 
-  if (profile.availability === 'recovering' && profile.returnAvailableDay > world.currentDay) {
+  if (!profile.availableNextExpedition || (profile.availability === 'recovering' && profile.returnAvailableDay > world.currentDay)) {
     return null;
   }
 
@@ -151,6 +158,7 @@ export function activateProfileForExpedition(
   }
 
   profile.availability = 'onExpedition';
+  profile.availableNextExpedition = false;
   profile.expeditionCount += 1;
   return profile;
 }
@@ -199,8 +207,8 @@ export function recordProfileSurvival(
   if (injury) {
     profile.injuries.push(injury);
     profile.lifeStatus = 'injured';
-    profile.availability = 'recovering';
-    profile.returnAvailableDay = world.currentDay + injury.recoveryDays;
+    profile.availability = 'available';
+    profile.returnAvailableDay = world.currentDay;
   }
 
   return completeProfileExpedition(world, profile, wave, 'survived', note);
@@ -323,6 +331,7 @@ function createAdventurerProfile(
     dominantPersonality,
     lifeStatus: 'alive',
     availability: 'available',
+    availableNextExpedition: true,
     traits,
     guildId: GUILD_ID,
     realmId: REALM_ID,
@@ -334,6 +343,9 @@ function createAdventurerProfile(
     defeats: 0,
     monstersKilled: 0,
     trapsTriggered: 0,
+    doorsEncountered: 0,
+    doorsPicked: 0,
+    bossEncounters: 0,
     trauma: 0,
     returnAvailableDay: world.currentDay,
     injuries: [],
@@ -345,6 +357,9 @@ function createAdventurerProfile(
     heirOfProfileId: null,
     heirSpawned: false,
     treasureStolenCount: 0,
+    lastLootedGold: 0,
+    totalLootedGold: 0,
+    notableLootEscapeCount: 0,
   };
 }
 
@@ -392,6 +407,7 @@ export function createHeirProfile(
     dominantPersonality: 'vengeful',
     lifeStatus: 'alive',
     availability: 'available',
+    availableNextExpedition: true,
     traits,
     guildId: fallen.guildId,
     realmId: fallen.realmId,
@@ -403,6 +419,9 @@ export function createHeirProfile(
     defeats: 0,
     monstersKilled: 0,
     trapsTriggered: 0,
+    doorsEncountered: 0,
+    doorsPicked: 0,
+    bossEncounters: 0,
     trauma: 0,
     returnAvailableDay: world.currentDay,
     injuries: [],
@@ -420,6 +439,9 @@ export function createHeirProfile(
     heirOfProfileId: fallen.id,
     heirSpawned: false,
     treasureStolenCount: 0,
+    lastLootedGold: 0,
+    totalLootedGold: 0,
+    notableLootEscapeCount: 0,
   };
 
   fallen.heirSpawned = true;
@@ -462,7 +484,7 @@ export function pickFallenForHeir(
   );
 }
 
-export function recordTreasureTheft(world: RunWorldMemory, profileId: string): void {
+export function recordTreasureTheft(world: RunWorldMemory, profileId: string, lootedGold = 0): void {
   const profile = world.profiles[profileId];
   world.treasuresStolen += 1;
 
@@ -473,27 +495,71 @@ export function recordTreasureTheft(world: RunWorldMemory, profileId: string): v
   profile.treasureStolenCount += 1;
   profile.reputation += 4;
   profile.experience += 6;
-  updateLevel(profile);
-  addChronicle(world, `${profile.name} s'enfuit avec le tresor du donjon. Humiliation comptable.`);
-}
 
-function pickReturningSurvivor(
-  role: AdventurerRole,
-  world: RunWorldMemory,
-  selectedIds: Set<string>,
-  wave: number,
-  index: number,
-): AdventurerProfile | null {
-  if (wave < 2 || index % 3 !== 0) {
-    return null;
+  if (lootedGold > 0) {
+    profile.lastLootedGold = lootedGold;
+    profile.totalLootedGold += lootedGold;
+    profile.notableLootEscapeCount += 1;
   }
 
+  updateLevel(profile);
+  addChronicle(
+    world,
+    lootedGold > 0
+      ? `${profile.name} s'enfuit avec ${lootedGold} or du donjon. La Guilde appelle ca une preuve de competence.`
+      : `${profile.name} s'enfuit avec le tresor du donjon. Humiliation comptable.`,
+  );
+}
+
+export function recordProfileDoorEncounter(world: RunWorldMemory, profileId: string): void {
+  const profile = world.profiles[profileId];
+
+  if (profile) {
+    profile.doorsEncountered += 1;
+  }
+}
+
+export function recordProfileDoorPicked(world: RunWorldMemory, profileId: string): void {
+  const profile = world.profiles[profileId];
+
+  if (!profile) {
+    return;
+  }
+
+  profile.doorsPicked += 1;
+  profile.experience += 1;
+  updateLevel(profile);
+}
+
+export function recordProfileBossEncounter(world: RunWorldMemory, profileId: string): void {
+  const profile = world.profiles[profileId];
+
+  if (profile) {
+    profile.bossEncounters += 1;
+  }
+}
+
+export function getReturningSurvivorCandidates(
+  world: RunWorldMemory,
+  limit = PARTY_SIZE,
+): AdventurerProfile[] {
   return (
     world.survivorProfileIds
       .map((id) => world.profiles[id])
       .filter((profile): profile is AdventurerProfile => Boolean(profile))
-      .filter((profile) => profile.role === role && profile.availability === 'available' && !selectedIds.has(profile.id))
-      .sort((a, b) => b.survivedExpeditions - a.survivedExpeditions || b.reputation - a.reputation)[0] ?? null
+      .filter((profile) =>
+        profile.availableNextExpedition &&
+        profile.availability === 'available' &&
+        profile.lifeStatus !== 'dead' &&
+        profile.lifeStatus !== 'retired',
+      )
+      .sort(
+        (a, b) =>
+          b.survivedExpeditions - a.survivedExpeditions ||
+          b.expeditionCount - a.expeditionCount ||
+          b.reputation - a.reputation,
+      )
+      .slice(0, limit)
   );
 }
 
@@ -552,6 +618,7 @@ function completeProfileExpedition(
   if (outcome === 'died') {
     profile.lifeStatus = 'dead';
     profile.availability = 'available';
+    profile.availableNextExpedition = false;
     profile.defeats += 1;
   } else {
     if (profile.lifeStatus !== 'injured') {
@@ -559,6 +626,7 @@ function completeProfileExpedition(
       profile.availability = 'available';
     }
 
+    profile.availableNextExpedition = true;
     profile.survivedExpeditions += 1;
     profile.victories += outcome === 'bossDefeated' ? 1 : 0;
     profile.experience += outcome === 'bossDefeated' ? 5 : 2;
@@ -582,6 +650,22 @@ function completeProfileExpedition(
   profile.expeditionHistory.push(record);
   world.expeditionHistory.push(record);
   return record;
+}
+
+function consumeFixedRoleSlots(roles: AdventurerRole[], fixedRoles: AdventurerRole[]): AdventurerRole[] {
+  const remaining = [...roles];
+
+  fixedRoles.forEach((role) => {
+    const index = remaining.indexOf(role);
+
+    if (index >= 0) {
+      remaining.splice(index, 1);
+    } else if (remaining.length > 0) {
+      remaining.shift();
+    }
+  });
+
+  return remaining;
 }
 
 function reputationTitle(value: number): string {

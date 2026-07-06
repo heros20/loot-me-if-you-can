@@ -70,6 +70,10 @@ export interface InspectedAdventurer {
   survivedExpeditions: number;
   monstersKilled: number;
   trapsTriggered: number;
+  doorsEncountered: number;
+  doorsPicked: number;
+  bossEncounters: number;
+  totalLootedGold: number;
   injuries: string[];
   isHeir: boolean;
   heirNote: string | null;
@@ -115,6 +119,9 @@ export interface DungeonSnapshot {
   recentChronicles: string[];
   liveAdventurers: number;
   nextWaveSize: number;
+  nextExpeditionReturningNames: string[];
+  nextExpeditionNewVolunteers: number;
+  nextExpeditionVeteranName: string | null;
   canLaunchWave: boolean;
   report: WaveReport | null;
   survivedWaves: number;

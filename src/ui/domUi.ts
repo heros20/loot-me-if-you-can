@@ -222,6 +222,7 @@ export class GameDomUi {
         Prochaine expedition : ${escapeHtml(snapshot.expeditionLabel)} vers ${escapeHtml(snapshot.expeditionPrimaryGoal)}
         &middot; ${snapshot.nextWaveSize} intrus
       </p>
+      ${this.renderContinuityPreview(snapshot)}
 
       <div class="primary-actions">
         ${constructionTools.map((item) => this.renderToolCard(item, snapshot)).join('')}
@@ -373,6 +374,25 @@ export class GameDomUi {
         <p class="detail-card__effect">${escapeHtml(item.description)}</p>
         <p class="detail-card__hint">Placement : sol creuse, hors entree, tresor et trone.</p>
       </div>
+    `;
+  }
+
+  private renderContinuityPreview(snapshot: DungeonSnapshot): string {
+    const returning = snapshot.nextExpeditionReturningNames;
+
+    if (returning.length === 0) {
+      return `<p class="side-panel__meta side-panel__meta--continuity">Revenants : aucun &middot; Nouveaux volontaires : ${snapshot.nextExpeditionNewVolunteers}</p>`;
+    }
+
+    const names = returning.slice(0, 3).join(', ');
+    const suffix = returning.length > 3 ? ` +${returning.length - 3}` : '';
+    const veteran = snapshot.nextExpeditionVeteranName ? ` &middot; Veteran : ${escapeHtml(snapshot.nextExpeditionVeteranName)}` : '';
+
+    return `
+      <p class="side-panel__meta side-panel__meta--continuity">
+        Revenants : ${escapeHtml(names)}${suffix}
+        &middot; Nouveaux volontaires : ${snapshot.nextExpeditionNewVolunteers}${veteran}
+      </p>
     `;
   }
 
@@ -535,6 +555,8 @@ export class GameDomUi {
           <li>Personnalite : ${escapeHtml(target.personality)} (traits : ${escapeHtml(traits)})</li>
           <li>Expeditions : ${target.expeditionCount} (survies : ${target.survivedExpeditions})</li>
           <li>Monstres tues : ${target.monstersKilled}, pieges declenches : ${target.trapsTriggered}</li>
+          <li>Portes : ${target.doorsEncountered} rencontree${target.doorsEncountered > 1 ? 's' : ''}, ${target.doorsPicked} ouverte${target.doorsPicked > 1 ? 's' : ''}</li>
+          <li>Boss affrontes : ${target.bossEncounters}, or rapporte : ${target.totalLootedGold}</li>
           <li>Blessures : ${escapeHtml(injuries)}</li>
           ${target.isHeir && target.heirNote ? `<li class="inspection__heir">${escapeHtml(target.heirNote)}</li>` : ''}
           ${target.carryingTreasure ? '<li class="inspection__heir">Porte le tresor du donjon.</li>' : ''}

@@ -20,6 +20,7 @@ export type BarkKind =
   | 'retreatPanic'
   | 'retreatDisobey'
   | 'treasureTaken'
+  | 'returningSurvivor'
   | 'bossAbility'
   | 'warriorTaunt'
   | 'healerHeal'
@@ -46,6 +47,7 @@ const BARKS: Record<BarkKind, string[]> = {
   retreatPanic: ['Repli ! Maintenant !', 'Je file !'],
   retreatDisobey: ['Hors de question, on est si proches !', 'Je garde le passage.'],
   treasureTaken: ['On a le butin, partez !', 'Pas question, on finit le boss !'],
+  returningSurvivor: ['Je connais ce couloir.', 'Restez pres de moi.', "J'ai deja survecu a ce trou."],
   bossAbility: ['Il prepare quelque chose !', 'Le maitre du donjon bouge enfin.'],
   warriorTaunt: ['Derriere moi !', 'Je les retiens !', 'Touchez-moi plutot !'],
   healerHeal: ['Tiens bon !', 'Je vous soigne !'],
@@ -61,6 +63,7 @@ const BARK_PRIORITY: Partial<Record<BarkKind, number>> = {
   treasureTaken: 3,
   treasureEscape: 3,
   treasureChallenge: 3,
+  returningSurvivor: 2,
   protectCarrier: 3,
   retreat: 3,
   retreatFollow: 2,

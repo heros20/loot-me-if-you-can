@@ -29,6 +29,18 @@ Chaque décision structurante obtient une entrée, numérotée dans l'ordre chro
 
 ---
 
+## D-015 - Survivant prioritaire dans l'expedition suivante
+
+**Date** : 2026-07-06
+**Statut** : Actif
+**Contexte** : passe Survivor Continuity V1. Les survivants existaient deja comme profils persistants, mais leur retour etait opportuniste au lieu d'etre une promesse de design.
+**Decision** : tout aventurier survivant et disponible revient automatiquement dans l'expedition suivante. Les survivants occupent les slots en priorite, puis le systeme adaptatif complete les places restantes. La taille de groupe reste strictement 5.
+**Alternatives envisagees** : continuer a repiocher les survivants seulement si leur role correspond (rejete : casse la continuite narrative) ; creer un systeme d'hopital/repos complet maintenant (rejete : hors perimetre V1) ; augmenter la taille du groupe pour accueillir tous les survivants (rejete : contredit D-001).
+**Consequences** : la composition adaptative doit raisonner apres les revenants, pas avant. Les futures indisponibilites devront etre explicites et documentees.
+**Remplace / Remplace par** :
+
+---
+
 ## D-001 — Équipe fixe de 5 aventuriers par vague
 
 **Date** : 2025 (rétroactif, formalisé le 2026-07-02)

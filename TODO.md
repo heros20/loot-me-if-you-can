@@ -10,6 +10,8 @@
   - V2.1 zones/antichambres sur une meme carte, V3.0 plusieurs niveaux + sous-boss.
 - Future treasure types: weapon, armor, and technique treasures are not started; decide later whether they are loot, equipment hooks, or named legendary objects.
 - Future survivor continuity: connect survivor chronicle consequences into the next expedition only after the current profile/chronicle loop is playtested.
+- Future survivor availability: explicit rest/refusal/hospital rules only after Survivor Continuity V1 has enough playtest data.
+- Future veteran leadership: turn the current narrative veteran into a mechanical leader only if repeated returnees need gameplay weight.
 - Future guild tavern scene: expand rumors into a true tavern screen only when expedition prep needs it.
 - Expand Kenney-based asset coverage for ability-specific particles/icons if V1 readability needs more than tint/pulse feedback.
 - Add sound effects and a mute toggle.
@@ -87,3 +89,4 @@
 - Full-viewport layout pass: the app shell now fills the real browser window (docked play area + docked sidebar via `--sidebar-width`/`--hud-height` CSS custom properties) instead of a small fixed-size box centered on the page, and the existing Phaser `Scale.FIT` config scales the unchanged 960x640 game resolution to fill the larger canvas area. `src/styles.css` only; no grid, coordinate, or gameplay constant was touched.
 - Sidebar audit & cleanup pass: primary build tools (dig/door/remove-door) are now always visible instead of hidden in an accordion, the header/next-expedition summaries were compressed from stat-card grids and 5-pill rows down to single compact lines, territory/door counters moved into a secondary "Salles & terrain" accordion, and every accordion defaults to closed unless its tool/defense is already selected. The remaining disabled "Bientot" placeholder is Mur; Deplacer boss is live in Objectifs. The survivor chronicle/debrief overlay was left untouched. See `docs/DUNGEON_STRUCTURE_V2.md` for the design spec this prepares the UI for.
 - Dungeon Anchors V1: added entry safe zone, movable boss, movable main treasure, gold treasure deposit/removal, multi-treasure targeting, route validation over active anchors, rendered treasure markers, and smoke coverage. Deplacer boss is no longer a placeholder; Mur remains future.
+- Survivor Continuity V1: survivors return automatically next expedition, keep profile memory, fill party slots before new adaptive recruits, preview as revenants in the sidebar, and appear in the survivor chronicle. Group size remains exactly 5.

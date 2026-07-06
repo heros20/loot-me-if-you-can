@@ -33,6 +33,23 @@ function buildSurvivorLines(report: ChronicleSource, survivorNames: string[]): s
     lines.push('Ils reviennent tous vivants, ce qui rend leur confiance encore plus dangereuse.');
   }
 
+  if (report.returningSurvivorNames.length > 0) {
+    const returning = report.returningSurvivorNames.slice(0, 3).join(', ');
+    lines.push(
+      report.returningSurvivorNames.length === 1
+        ? `${returning} reviendra dans la prochaine expedition.`
+        : `${returning}${report.returningSurvivorNames.length > 3 ? ' et les autres' : ''} guideront la prochaine expedition.`,
+    );
+  }
+
+  if (report.veteranName) {
+    lines.push(`${report.veteranName} est deja traite comme veteran du groupe.`);
+  }
+
+  if (report.newVolunteerCount > 0) {
+    lines.push(`${report.newVolunteerCount} nouveau${report.newVolunteerCount > 1 ? 'x' : ''} volontaire${report.newVolunteerCount > 1 ? 's' : ''} completeront le contrat.`);
+  }
+
   if (report.treasureStolen) {
     lines.push('Le porteur du tresor refuse de lacher le coffre, meme loin du donjon.');
   } else if (report.storyLines.some((line) => line.includes('groupe couvre une retraite'))) {
@@ -65,6 +82,7 @@ function buildSurvivorLines(report: ChronicleSource, survivorNames: string[]): s
 
 function buildNoSurvivorLines(report: ChronicleSource): string[] {
   const lines = ["Personne n'est revenu."];
+  lines.push(`La Guilde devra envoyer ${report.newVolunteerCount} nouveaux volontaires.`);
 
   if (report.deaths.length > 0) {
     lines.push('A la taverne, on repete les derniers noms inscrits au registre sans savoir ou les corps sont tombes.');

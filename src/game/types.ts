@@ -195,6 +195,7 @@ export interface AdventurerProfile {
   dominantPersonality: AdventurerPersonality;
   lifeStatus: AdventurerLifeStatus;
   availability: AdventurerAvailability;
+  availableNextExpedition: boolean;
   traits: AdventurerTrait[];
   guildId: string;
   realmId: string;
@@ -206,6 +207,9 @@ export interface AdventurerProfile {
   defeats: number;
   monstersKilled: number;
   trapsTriggered: number;
+  doorsEncountered: number;
+  doorsPicked: number;
+  bossEncounters: number;
   trauma: number;
   returnAvailableDay: number;
   injuries: AdventurerInjury[];
@@ -217,6 +221,9 @@ export interface AdventurerProfile {
   heirOfProfileId: string | null;
   heirSpawned: boolean;
   treasureStolenCount: number;
+  lastLootedGold: number;
+  totalLootedGold: number;
+  notableLootEscapeCount: number;
 }
 
 export interface GuildProfile {
@@ -534,6 +541,9 @@ export interface WaveReport {
   participants: ExpeditionParticipantReport[];
   chronicle: SurvivorChronicle;
   notableAdventurers: string[];
+  returningSurvivorNames: string[];
+  newVolunteerCount: number;
+  veteranName: string | null;
   deaths: string[];
   survivors: string[];
   adaptationNotes: string[];

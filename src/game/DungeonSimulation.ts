@@ -69,7 +69,11 @@ import {
   advanceWorldDay,
   createInjury,
   createInitialWorldMemory,
+  getReturningSurvivorCandidates,
   recordBossDefeatSurvivors,
+  recordProfileBossEncounter,
+  recordProfileDoorEncounter,
+  recordProfileDoorPicked,
   recordProfileMonsterKill,
   recordProfileNemesis,
   recordProfileDeath,
@@ -737,7 +741,7 @@ export class DungeonSimulation {
     }
 
     advanceWorldDay(this.state.world, 3 + this.state.wave);
-    const roster = buildWaveRoster(this.state.wave, this.state.memory, this.hasActiveDoor());
+    const roster = this.buildPlannedRoster(this.state.wave);
     const profiles = selectProfilesForWave(roster, this.state.world, this.state.wave);
     const lastRumor = this.state.world.rumors[this.state.world.rumors.length - 1] ?? null;
 
@@ -823,9 +827,10 @@ export class DungeonSimulation {
   }
 
   getSnapshot(): DungeonSnapshot {
+    const continuityPreview = this.buildContinuityPreview(this.state.wave);
     const previewRoster = this.state.phase === 'wave' && this.state.runtime
       ? this.state.runtime.spawnQueue.map((profile) => profile.role)
-      : buildWaveRoster(this.state.wave, this.state.memory, this.hasActiveDoor());
+      : continuityPreview.plannedRoles;
     const allRoles = [
       ...this.state.adventurers.map((adventurer) => adventurer.role),
       ...previewRoster,
@@ -873,6 +878,9 @@ export class DungeonSimulation {
       defensesByKind: this.countDefensesByKind(),
       liveAdventurers: this.state.adventurers.length,
       nextWaveSize: previewRoster.length,
+      nextExpeditionReturningNames: continuityPreview.returningNames,
+      nextExpeditionNewVolunteers: continuityPreview.newVolunteerCount,
+      nextExpeditionVeteranName: continuityPreview.veteranName,
       canLaunchWave: this.state.phase === 'build' && dungeonValidation.valid,
       report: this.state.report,
       survivedWaves: Math.max(0, this.state.wave - 1),
@@ -919,6 +927,29 @@ export class DungeonSimulation {
 
     const lastRumor = this.state.world.rumors[this.state.world.rumors.length - 1] ?? null;
     return createPartyPlan(this.state.wave, this.state.world.dungeonReputation.value, lastRumor?.effect ?? null);
+  }
+
+  private buildPlannedRoster(wave: number): AdventurerRole[] {
+    const returning = getReturningSurvivorCandidates(this.state.world, PARTY_SIZE);
+    return buildWaveRoster(wave, this.state.memory, this.hasActiveDoor(), returning.map((profile) => profile.role));
+  }
+
+  private buildContinuityPreview(wave: number): {
+    returningNames: string[];
+    newVolunteerCount: number;
+    veteranName: string | null;
+    plannedRoles: AdventurerRole[];
+  } {
+    const returning = getReturningSurvivorCandidates(this.state.world, PARTY_SIZE);
+    const plannedRoles = buildWaveRoster(wave, this.state.memory, this.hasActiveDoor(), returning.map((profile) => profile.role));
+    const veteran = returning[0] ?? null;
+
+    return {
+      returningNames: returning.map((profile) => profile.name),
+      newVolunteerCount: Math.max(0, PARTY_SIZE - returning.length),
+      veteranName: veteran ? veteran.name : null,
+      plannedRoles,
+    };
   }
 
   private validateDungeonLayout(
@@ -1009,6 +1040,10 @@ export class DungeonSimulation {
       survivedExpeditions: profile.survivedExpeditions,
       monstersKilled: profile.monstersKilled,
       trapsTriggered: profile.trapsTriggered,
+      doorsEncountered: profile.doorsEncountered,
+      doorsPicked: profile.doorsPicked,
+      bossEncounters: profile.bossEncounters,
+      totalLootedGold: profile.totalLootedGold,
       injuries: profile.injuries.map((injury) => injury.name),
       isHeir: adventurer.isHeir,
       heirNote: ancestor ? `Venge ${ancestor.name} (vague ${ancestor.deathWave ?? '?'})` : null,
@@ -1295,6 +1330,11 @@ export class DungeonSimulation {
       this.nextAdventurerId += 1;
       runtime.spawned += 1;
       this.state.adventurers.push(adventurer);
+
+      if (activeProfile.survivedExpeditions > 0) {
+        tryBark(adventurer, 'returningSurvivor', this.visibleBarkCount());
+      }
+
       runtime.spawnTimerMs += 850;
     }
   }
@@ -1552,6 +1592,7 @@ export class DungeonSimulation {
     if (!this.state.runtime.doorsEngagedIds.has(door.id)) {
       this.state.runtime.doorsEngagedIds.add(door.id);
       stats.doorEncounters += 1;
+      recordProfileDoorEncounter(this.state.world, adventurer.profileId);
       this.state.message = `${adventurer.name} trouve une porte verrouillee. La force brute signe sa demission.`;
     }
 
@@ -1581,6 +1622,7 @@ export class DungeonSimulation {
       door.beingPickedById = null;
       door.pickProgressMs = door.pickRequiredMs;
       stats.doorsPicked += 1;
+      recordProfileDoorPicked(this.state.world, adventurer.profileId);
       stats.storyEvents.push(`${adventurer.name} crochete une porte verrouillee et ouvre le passage.`);
       tryBark(adventurer, 'doorOpened', this.visibleBarkCount());
       this.state.message = `${adventurer.name} ouvre la porte. Le groupe peut passer.`;
@@ -1887,10 +1929,15 @@ export class DungeonSimulation {
     }
 
     const actualDamage = Math.min(this.state.boss.hp, damage);
+    const previousProfileDamage = this.state.runtime.stats.bossDamageByProfile[attacker.profileId] ?? 0;
     this.state.boss.hp -= actualDamage;
     this.state.runtime.stats.bossDamageTaken += actualDamage;
     this.state.runtime.stats.bossDamageByProfile[attacker.profileId] =
-      (this.state.runtime.stats.bossDamageByProfile[attacker.profileId] ?? 0) + actualDamage;
+      previousProfileDamage + actualDamage;
+
+    if (previousProfileDamage === 0 && actualDamage > 0) {
+      recordProfileBossEncounter(this.state.world, attacker.profileId);
+    }
 
     if (this.state.boss.hp <= 0) {
       this.state.message = 'Le boss final tombe. Les heros appellent ca une fin heureuse. Degoutant.';
@@ -2061,6 +2108,7 @@ export class DungeonSimulation {
     const trapHighlights = statsToReportEntries(runtime.stats.trapStats, 'trap');
     const minionHighlights = statsToReportEntries(runtime.stats.minionStats, 'minion');
     const participants = this.buildParticipantReports(runtime, cleared);
+    const continuity = this.buildContinuityPreview(wave + 1);
     const storyLines = buildWaveStoryLines({
       cleared,
       wave,
@@ -2114,6 +2162,9 @@ export class DungeonSimulation {
       ),
       participants,
       notableAdventurers: buildNotableAdventurers(runtime.stats),
+      returningSurvivorNames: continuity.returningNames,
+      newVolunteerCount: continuity.newVolunteerCount,
+      veteranName: continuity.veteranName,
       deaths: runtime.stats.deaths.slice(-5).map((record) => record.note),
       survivors: runtime.stats.survivors.slice(-5).map((record) => record.note),
       adaptationNotes,
@@ -2271,11 +2322,17 @@ export class DungeonSimulation {
   }
 
   private buildGuildChanges(wave: number, adaptationNotes: string[]): string[] {
-    const nextRoster = buildWaveRoster(wave + 1, this.state.memory, this.hasActiveDoor());
-    return [
-      `Composition probable: ${formatRoster(nextRoster)}.`,
+    const continuity = this.buildContinuityPreview(wave + 1);
+    const lines = [
+      continuity.returningNames.length > 0
+        ? `Revenants garantis: ${continuity.returningNames.slice(0, 3).join(', ')}${continuity.returningNames.length > 3 ? '...' : ''}.`
+        : 'Aucun temoin fiable: cinq nouveaux volontaires seront requis.',
+      continuity.veteranName ? `Veteran pressenti: ${continuity.veteranName}.` : `Nouveaux volontaires: ${continuity.newVolunteerCount}.`,
+      `Composition probable: ${formatRoster(continuity.plannedRoles)}.`,
       ...adaptationNotes,
-    ].slice(0, 6);
+    ];
+
+    return lines.slice(0, 6);
   }
 
   private buildEconomyLines(
@@ -2375,7 +2432,7 @@ export class DungeonSimulation {
         this.state.treasure = { status: 'stolen', holderAdventurerId: null, droppedCell: null };
       }
 
-      recordTreasureTheft(this.state.world, adventurer.profileId);
+      recordTreasureTheft(this.state.world, adventurer.profileId, treasure?.kind === 'gold' ? treasure.value : 0);
       this.state.runtime.stats.storyEvents.push(
         treasure?.kind === 'gold'
           ? `${adventurer.name} s'echappe avec ${treasure.value} or deja deposes.`

@@ -342,6 +342,11 @@ button {
   white-space: nowrap;
 }
 
+.side-panel__meta--continuity {
+  color: #d8c292;
+  white-space: normal;
+}
+
 .control-header {
   position: sticky;
   top: -16px;
