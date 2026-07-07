@@ -31,6 +31,17 @@ export type AdventurerRole = 'warrior' | 'thief' | 'mage' | 'healer';
 
 export type AdventurerTargetStage = 'treasure' | 'boss' | 'exit';
 export type AdventurerRetreatIntent = 'none' | 'followRetreat' | 'coverRetreat' | 'panicRetreat' | 'disobey';
+export type AdventurerBehaviorState =
+  | 'advancing'
+  | 'regrouping'
+  | 'evaluatingRoom'
+  | 'waitingForTank'
+  | 'securingArea'
+  | 'opportunisticLoot'
+  | 'bossPreparation'
+  | 'backlineHold'
+  | 'flankAfterEngage'
+  | 'retreating';
 
 export type CombatAbilityId =
   | 'warriorTaunt'
@@ -346,8 +357,11 @@ export interface AdventurerEntity {
   speedMultiplier: number;
   slowedTimerMs: number;
   targetStage: AdventurerTargetStage;
+  targetTreasureId: string | null;
+  behaviorState: AdventurerBehaviorState;
   path: GridCell[];
   lastCellKey: string;
+  lastEvaluatedRoomKey: string | null;
   alive: boolean;
   escaped: boolean;
   hasEnteredDungeon: boolean;
@@ -364,6 +378,8 @@ export interface AdventurerEntity {
   barkCooldownMs: number;
   lastBarkKey: string | null;
   lastAvoidedTrapKey: string | null;
+  lootFeedbackText: string | null;
+  lootFeedbackTimerMs: number;
   isHeir: boolean;
   specialTreasureBonuses: SpecialTreasureBonus[];
 }
@@ -462,6 +478,10 @@ export interface WaveStats {
   goldTreasureValueStolen: number;
   specialTreasureLoots: string[];
   combatFeedbackEvents: number;
+  bossEngagementLocks: number;
+  opportunisticLoots: number;
+  roomEvaluations: number;
+  backlineHolds: number;
 }
 
 export type CombatFeedbackKind = 'damage' | 'heal';
@@ -482,7 +502,17 @@ export interface CombatFeedbackEvent {
   targetId: string;
   targetName: string;
   style: CombatFeedbackStyle;
+  boostedBySpecial: boolean;
   ageMs: number;
+}
+
+export interface BossEngagementState {
+  frontlineAdventurerId: string | null;
+  firstBossAttackerId: string | null;
+  firstBossAttackerRole: AdventurerRole | null;
+  lockedForFrontline: boolean;
+  preparationAnnounced: boolean;
+  fallbackReason: string | null;
 }
 
 export interface WaveRuntime {
@@ -496,6 +526,7 @@ export interface WaveRuntime {
   doorsEngagedIds: Set<string>;
   bossAutopilotTimerMs: number;
   targetTreasureId: string | null;
+  bossEngagement: BossEngagementState;
   combatFeedbackEvents: CombatFeedbackEvent[];
 }
 

@@ -606,8 +606,8 @@ export class GameDomUi {
 
     const traits = target.traits.join(', ') || 'aucun';
     const injuries = target.injuries.length > 0 ? target.injuries.join(', ') : 'aucune';
-    const specialTreasures = target.specialTreasureBonuses.length > 0
-      ? target.specialTreasureBonuses.map((bonus) => bonus.label).join(', ')
+    const specialTreasures = target.specialTreasureEffects.length > 0
+      ? target.specialTreasureEffects.join(', ')
       : 'aucun';
 
     return `

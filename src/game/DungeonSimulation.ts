@@ -27,6 +27,7 @@ import type {
   AdventurerProfile,
   AdventurerRole,
   BossAbilityType,
+  BossEngagementState,
   BossEntity,
   CombatFeedbackEvent,
   CombatFeedbackStyle,
@@ -147,12 +148,14 @@ import {
 } from '../systems/doorSystem';
 import {
   SPECIAL_TREASURE_BALANCE,
-  computeSpecialTreasureModifiers,
+  computeSpecialTreasureModifiersFromBonuses,
   describeSpecialTreasureBonus,
+  formatSpecialTreasureBonuses,
   grantSpecialTreasureBonus,
   isSpecialTreasureKind,
   specialKindFromTreasureKind,
   specialTreasureLabel,
+  specialTreasurePickupText,
   specialTreasureValue,
 } from '../systems/specialTreasuresSystem';
 import {
@@ -312,6 +315,7 @@ export class DungeonSimulation {
     this.tickTimers(deltaMs);
     this.spawnAdventurers(deltaMs);
     this.updatePartyDecisions();
+    this.updateBossEngagementLock();
     this.updateBossAutopilot(deltaMs);
     this.updateMonsterMovement(deltaMs);
     this.updateDefenders(deltaMs);
@@ -864,6 +868,7 @@ export class DungeonSimulation {
       doorsEngagedIds: new Set<string>(),
       bossAutopilotTimerMs: 0,
       targetTreasureId: targetTreasure?.id ?? null,
+      bossEngagement: createBossEngagementState(),
       combatFeedbackEvents: [],
     };
     this.state.report = null;
@@ -1179,6 +1184,7 @@ export class DungeonSimulation {
       heirNote: ancestor ? `Venge ${ancestor.name} (vague ${ancestor.deathWave ?? '?'})` : null,
       carryingTreasure: adventurer.carryingTreasure,
       specialTreasureBonuses: profile.specialTreasureBonuses,
+      specialTreasureEffects: formatSpecialTreasureBonuses(adventurer.specialTreasureBonuses, adventurer.role),
       lastFeat: lastRecord?.note ?? null,
     };
   }
@@ -1308,14 +1314,16 @@ export class DungeonSimulation {
 
   private getRuntimeTreasureTarget(adventurer: AdventurerEntity | null = null): DungeonTreasure | null {
     const runtime = this.state.runtime;
-    const roleTarget = adventurer ? this.chooseWaveTreasureTarget(adventurer) : null;
+    const personalTarget = adventurer?.targetTreasureId
+      ? this.state.treasures.find((treasure) => treasure.id === adventurer.targetTreasureId && treasure.status !== 'stolen') ?? null
+      : null;
 
-    if (roleTarget && (roleTarget.status === 'secure' || roleTarget.status === 'dropped')) {
+    if (personalTarget && (personalTarget.status === 'secure' || personalTarget.status === 'dropped')) {
       if (runtime) {
-        runtime.targetTreasureId = roleTarget.id;
+        runtime.targetTreasureId = personalTarget.id;
       }
 
-      return roleTarget;
+      return personalTarget;
     }
 
     const preferred = runtime?.targetTreasureId
@@ -1323,13 +1331,35 @@ export class DungeonSimulation {
       : null;
 
     if (preferred && (preferred.status === 'secure' || preferred.status === 'dropped')) {
+      if (adventurer) {
+        adventurer.targetTreasureId = preferred.id;
+      }
+
       return preferred;
+    }
+
+    const roleTarget = adventurer ? this.chooseWaveTreasureTarget(adventurer) : null;
+
+    if (roleTarget && (roleTarget.status === 'secure' || roleTarget.status === 'dropped')) {
+      if (runtime) {
+        runtime.targetTreasureId = roleTarget.id;
+      }
+
+      if (adventurer) {
+        adventurer.targetTreasureId = roleTarget.id;
+      }
+
+      return roleTarget;
     }
 
     const fallback = this.chooseWaveTreasureTarget();
 
     if (runtime) {
       runtime.targetTreasureId = fallback?.id ?? null;
+    }
+
+    if (adventurer) {
+      adventurer.targetTreasureId = fallback?.id ?? null;
     }
 
     return fallback;
@@ -1455,6 +1485,7 @@ export class DungeonSimulation {
       adventurer.attackTimerMs = Math.max(0, adventurer.attackTimerMs - deltaMs);
       adventurer.healTimerMs = Math.max(0, adventurer.healTimerMs - deltaMs);
       adventurer.abilityFxTimerMs = Math.max(0, adventurer.abilityFxTimerMs - deltaMs);
+      adventurer.lootFeedbackTimerMs = Math.max(0, adventurer.lootFeedbackTimerMs - deltaMs);
       adventurer.damageReductionTimerMs = Math.max(0, adventurer.damageReductionTimerMs - deltaMs);
       adventurer.stunnedTimerMs = Math.max(0, adventurer.stunnedTimerMs - deltaMs);
       adventurer.hesitationTimerMs = Math.max(0, adventurer.hesitationTimerMs - deltaMs);
@@ -1470,6 +1501,10 @@ export class DungeonSimulation {
           adventurer.fearPreviousStage = null;
           adventurer.path = [];
         }
+      }
+
+      if (adventurer.lootFeedbackTimerMs === 0) {
+        adventurer.lootFeedbackText = null;
       }
     });
   }
@@ -1553,7 +1588,7 @@ export class DungeonSimulation {
       runtime.stats.combatEngagementMs += deltaMs;
     });
 
-    const bossTarget = chooseBossTarget(this.state.boss, this.state.adventurers);
+    const bossTarget = this.chooseBossTargetWithEngagementLock();
     updateBossMovement(this.state.boss, bossTarget, deltaMs, this.entityMovementGuard());
 
     if (
@@ -1580,6 +1615,7 @@ export class DungeonSimulation {
       }
 
       this.applyLocalDecision(adventurer);
+      this.applyBossEngagementBehavior(adventurer);
 
       if (adventurer.hesitationTimerMs > 0) {
         continue;
@@ -1597,8 +1633,12 @@ export class DungeonSimulation {
       this.resolveTreasureStage(adventurer);
       const targetMinion = this.findTargetMinion(adventurer);
       const canAttackBoss =
-        adventurer.targetStage === 'boss' &&
+        this.canAdventurerAttackBoss(adventurer) &&
         distance(adventurer.x, adventurer.y, this.state.boss.x, this.state.boss.y) <= adventurer.attackRange + 0.3;
+
+      if (!targetMinion && !canAttackBoss && this.tryStartOpportunisticLoot(adventurer)) {
+        continue;
+      }
 
       if ((targetMinion || canAttackBoss) && adventurer.attackTimerMs <= 0) {
         if (targetMinion) {
@@ -1877,6 +1917,8 @@ export class DungeonSimulation {
       treasure.droppedCell = null;
       this.state.treasure = this.toLegacyTreasureState(treasure);
       adventurer.carryingTreasure = true;
+      adventurer.targetTreasureId = null;
+      this.applySpecialTreasurePickupFeedback(adventurer, treasure);
 
       if (this.state.runtime) {
         const runtime = this.state.runtime;
@@ -1935,6 +1977,46 @@ export class DungeonSimulation {
     }
   }
 
+  private applySpecialTreasurePickupFeedback(adventurer: AdventurerEntity, treasure: DungeonTreasure): void {
+    if (!this.state.runtime || !isSpecialTreasureKind(treasure.kind)) {
+      return;
+    }
+
+    const specialKind = specialKindFromTreasureKind(treasure.kind);
+
+    if (!specialKind) {
+      return;
+    }
+
+    const alreadyHadBonus = adventurer.specialTreasureBonuses.some((bonus) => bonus.kind === specialKind);
+    const feedbackText = specialTreasurePickupText(specialKind);
+    adventurer.lootFeedbackText = feedbackText;
+    adventurer.lootFeedbackTimerMs = 1900;
+    adventurer.behaviorState = 'opportunisticLoot';
+    tryBark(adventurer, 'treasureTaken', this.visibleBarkCount());
+
+    if (!alreadyHadBonus) {
+      const bonus = {
+        kind: specialKind,
+        label: specialTreasureLabel(specialKind),
+        sourceTreasureId: treasure.id,
+        acquiredWave: this.state.wave,
+      };
+      const previousMaxHp = adventurer.maxHp;
+      adventurer.specialTreasureBonuses.push(bonus);
+      const modifiers = computeSpecialTreasureModifiersFromBonuses(adventurer.role, [bonus]);
+      adventurer.damage += modifiers.damageBonus;
+      adventurer.maxHp += modifiers.maxHpBonus;
+      adventurer.hp += adventurer.maxHp - previousMaxHp;
+    }
+
+    const effect = formatSpecialTreasureBonuses(adventurer.specialTreasureBonuses.filter((bonus) => bonus.kind === specialKind), adventurer.role)[0]
+      ?? specialTreasureLabel(specialKind);
+    const line = `${adventurer.name}: ${feedbackText} (${effect}).`;
+    this.state.runtime.stats.storyEvents.push(line);
+    this.state.message = line;
+  }
+
   private resolveTreasureStage(adventurer: AdventurerEntity): void {
     if (adventurer.targetStage !== 'treasure') {
       return;
@@ -1950,6 +2032,159 @@ export class DungeonSimulation {
       ? choosePostTreasureGoal(this.state.runtime.partyPlan, adventurer)
       : 'boss';
     adventurer.path = [];
+    adventurer.targetTreasureId = null;
+  }
+
+  private tryStartOpportunisticLoot(adventurer: AdventurerEntity): boolean {
+    if (!this.state.runtime || adventurer.carryingTreasure || adventurer.targetStage === 'exit') {
+      return false;
+    }
+
+    const treasure = this.findOpportunisticTreasure(adventurer);
+
+    if (!treasure) {
+      return false;
+    }
+
+    const currentCell = { x: Math.round(adventurer.x), y: Math.round(adventurer.y) };
+    const treasureCell = getTreasureCurrentCell(treasure);
+
+    if (adventurer.targetStage === 'treasure' && adventurer.targetTreasureId === treasure.id) {
+      if (treasureCell && isSameCell(currentCell, treasureCell)) {
+        this.handleObjectiveReached(adventurer);
+        return true;
+      }
+
+      return false;
+    }
+
+    const previousTarget = adventurer.targetTreasureId;
+    adventurer.targetStage = 'treasure';
+    adventurer.targetTreasureId = treasure.id;
+    adventurer.behaviorState = 'opportunisticLoot';
+    adventurer.path = [];
+    this.state.runtime.targetTreasureId = treasure.id;
+
+    if (previousTarget !== treasure.id) {
+      this.state.runtime.stats.opportunisticLoots += 1;
+      this.state.runtime.stats.storyEvents.push(`${adventurer.name} devia pour saisir un butin evident.`);
+      this.state.message = `${adventurer.name} voit un butin sur le chemin et le prend en compte.`;
+      tryBark(adventurer, 'opportunisticLoot', this.visibleBarkCount());
+    }
+
+    if (treasureCell && isSameCell(currentCell, treasureCell)) {
+      this.handleObjectiveReached(adventurer);
+    }
+
+    return true;
+  }
+
+  private findOpportunisticTreasure(adventurer: AdventurerEntity): DungeonTreasure | null {
+    const currentCell = { x: Math.round(adventurer.x), y: Math.round(adventurer.y) };
+    const targetCell = this.getTargetCell(adventurer);
+    const plannedPath = adventurer.path.length > 0
+      ? adventurer.path
+      : findPath(currentCell, targetCell, {
+        role: adventurer.role,
+        trapAvoidance: this.state.memory.trapAvoidance * personalityTrapAvoidance(adventurer),
+        trapDangerByCell: this.state.memory.trapDangerByCell,
+        knownTrapCells: this.getKnownTrapCells(),
+        blockedCellKeys: getBlockedCellKeys(this.state.tiles),
+      });
+    const nextPathKeys = new Set(plannedPath.slice(0, 5).map((cell) => cellKey(cell)));
+    const immediateDanger = this.hasImmediateDangerNear(adventurer);
+
+    return this.state.treasures
+      .filter((treasure) => treasure.status === 'secure' || treasure.status === 'dropped')
+      .map((treasure) => {
+        const treasureCell = getTreasureCurrentCell(treasure);
+        const pathToTreasure = treasureCell
+          ? findPath(currentCell, treasureCell, {
+            role: adventurer.role,
+            trapAvoidance: this.state.memory.trapAvoidance * personalityTrapAvoidance(adventurer),
+            trapDangerByCell: this.state.memory.trapDangerByCell,
+            knownTrapCells: this.getKnownTrapCells(),
+            blockedCellKeys: getBlockedCellKeys(this.state.tiles),
+          })
+          : [];
+        const directDistance = treasureCell ? distance(currentCell.x, currentCell.y, treasureCell.x, treasureCell.y) : Number.POSITIVE_INFINITY;
+        const onPath = treasureCell ? nextPathKeys.has(cellKey(treasureCell)) : false;
+        const adjacent = directDistance <= 1.45;
+        const shortDetour = pathToTreasure.length > 0 && pathToTreasure.length <= (isSpecialTreasureKind(treasure.kind) ? 3 : 2);
+        const special = isSpecialTreasureKind(treasure.kind);
+
+        return {
+          treasure,
+          directDistance,
+          pathLength: pathToTreasure.length,
+          onPath,
+          adjacent,
+          shortDetour,
+          special,
+          score:
+            (adjacent ? 80 : 0) +
+            (onPath ? 58 : 0) +
+            (shortDetour ? 34 : 0) +
+            (special ? 26 : 0) +
+            treasureAttraction(treasure, adventurer, this.state.world.profiles[adventurer.profileId] ?? null) -
+            Math.max(0, pathToTreasure.length - 1) * 9,
+        };
+      })
+      .filter((entry) => entry.adjacent || entry.onPath || entry.shortDetour)
+      .filter((entry) => this.isOpportunisticTreasureSafe(adventurer, entry.treasure, entry.directDistance, immediateDanger))
+      .sort((a, b) => b.score - a.score || specialTreasurePriority(b.treasure.kind) - specialTreasurePriority(a.treasure.kind))[0]?.treasure ?? null;
+  }
+
+  private isOpportunisticTreasureSafe(
+    adventurer: AdventurerEntity,
+    treasure: DungeonTreasure,
+    directDistance: number,
+    immediateDanger: boolean,
+  ): boolean {
+    const treasureCell = getTreasureCurrentCell(treasure);
+
+    if (!treasureCell) {
+      return false;
+    }
+
+    const minionOnTreasure = this.state.defenses.some(
+      (defense) => defense.alive && defense.kind === 'minion' && distance(defense.x, defense.y, treasureCell.x, treasureCell.y) <= 1.35,
+    );
+    const bossTooClose = distance(this.state.boss.x, this.state.boss.y, treasureCell.x, treasureCell.y) <= this.state.boss.attackRange + 0.8;
+
+    if (minionOnTreasure || bossTooClose) {
+      return false;
+    }
+
+    if (!immediateDanger) {
+      return true;
+    }
+
+    if (directDistance <= 0.45) {
+      return true;
+    }
+
+    if (adventurer.role === 'healer' || adventurer.role === 'mage') {
+      return false;
+    }
+
+    if (adventurer.role === 'thief' && directDistance <= 1.45) {
+      const frontline = this.selectBossEngager();
+      return !frontline || frontline.role === 'warrior';
+    }
+
+    return adventurer.role === 'warrior' && directDistance <= 1.45;
+  }
+
+  private hasImmediateDangerNear(adventurer: AdventurerEntity): boolean {
+    const minionNear = this.state.defenses.some(
+      (defense) => defense.alive && defense.kind === 'minion' && distance(defense.x, defense.y, adventurer.x, adventurer.y) <= 2.25,
+    );
+    const bossNear =
+      adventurer.targetStage === 'boss' &&
+      distance(this.state.boss.x, this.state.boss.y, adventurer.x, adventurer.y) <= this.state.boss.detectionRange;
+
+    return minionNear || bossNear;
   }
 
   private dropTreasure(adventurer: AdventurerEntity): void {
@@ -1994,6 +2229,8 @@ export class DungeonSimulation {
       adventurer.hasEnteredDungeon = true;
     }
 
+    this.maybeEvaluateRoom(adventurer, cell);
+
     const trap = this.state.defenses.find(
       (defense) => defense.alive && defense.kind === 'trap' && defense.cooldownRemainingMs <= 0 && isSameCell(defense.cell, cell),
     );
@@ -2010,6 +2247,37 @@ export class DungeonSimulation {
     trap.cooldownRemainingMs = definition.trapCooldownMs ?? 1500;
   }
 
+  private maybeEvaluateRoom(adventurer: AdventurerEntity, cell: GridCell): void {
+    if (!this.state.runtime || adventurer.targetStage === 'exit') {
+      return;
+    }
+
+    const tile = getTileAt(this.state.tiles, cell);
+    const roomKey = tile?.roomType ? `${tile.roomType}:${cell.x >> 1},${cell.y >> 1}` : null;
+
+    if (!tile || (tile.type !== 'room' && tile.type !== 'treasure' && tile.type !== 'throne') || !roomKey || adventurer.lastEvaluatedRoomKey === roomKey) {
+      return;
+    }
+
+    const hasSomethingToRead =
+      this.state.defenses.some((defense) => defense.alive && distance(defense.x, defense.y, cell.x, cell.y) <= 3) ||
+      this.state.treasures.some((treasure) => {
+        const treasureCell = getTreasureCurrentCell(treasure);
+        return treasure.status !== 'stolen' && treasureCell && distance(treasureCell.x, treasureCell.y, cell.x, cell.y) <= 3;
+      }) ||
+      distance(this.state.boss.x, this.state.boss.y, cell.x, cell.y) <= this.state.boss.detectionRange + 0.8;
+
+    if (!hasSomethingToRead) {
+      return;
+    }
+
+    adventurer.lastEvaluatedRoomKey = roomKey;
+    adventurer.behaviorState = 'evaluatingRoom';
+    adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, adventurer.role === 'warrior' ? 120 : 220);
+    this.state.runtime.stats.roomEvaluations += 1;
+    tryBark(adventurer, adventurer.role === 'warrior' ? 'secureArea' : 'stayTogether', this.visibleBarkCount());
+  }
+
   private damageAdventurer(
     adventurer: AdventurerEntity,
     damage: number,
@@ -2022,8 +2290,10 @@ export class DungeonSimulation {
       return 0;
     }
 
-    const profile = this.state.world.profiles[adventurer.profileId] ?? null;
-    const armorReduction = profile ? computeSpecialTreasureModifiers(profile).incomingDamageReduction : 0;
+    const armorReduction = computeSpecialTreasureModifiersFromBonuses(
+      adventurer.role,
+      adventurer.specialTreasureBonuses,
+    ).incomingDamageReduction;
     const reduction = adventurer.damageReductionTimerMs > 0
       ? Math.max(0, Math.round(damage * COMBAT_ABILITY_BALANCE.warriorDamageReduction))
       : 0;
@@ -2119,6 +2389,7 @@ export class DungeonSimulation {
       sourceRole: attacker.role,
       sourceType: null,
       style: combatFeedbackStyleForRole(attacker.role),
+      boostedBySpecial: hasSpecialDamageBonus(attacker),
     });
 
     if (minion.hp > 0) {
@@ -2149,7 +2420,16 @@ export class DungeonSimulation {
 
     const actualDamage = Math.min(this.state.boss.hp, damage);
     const previousProfileDamage = this.state.runtime.stats.bossDamageByProfile[attacker.profileId] ?? 0;
+    const engagement = this.state.runtime.bossEngagement;
     this.state.boss.hp -= actualDamage;
+
+    if (!engagement.firstBossAttackerId && actualDamage > 0) {
+      engagement.firstBossAttackerId = attacker.id;
+      engagement.firstBossAttackerRole = attacker.role;
+      engagement.lockedForFrontline = false;
+      this.state.runtime.stats.storyEvents.push(`${attacker.name} ouvre le combat contre le boss.`);
+    }
+
     addThreat(this.state.boss.threatByAdventurerId, attacker, actualDamage * 2.2 + (attacker.role === 'warrior' ? 18 : attacker.role === 'thief' ? 1 : 0));
     this.state.runtime.stats.bossDamageTaken += actualDamage;
     this.queueCombatFeedback({
@@ -2165,6 +2445,7 @@ export class DungeonSimulation {
       sourceRole: attacker.role,
       sourceType: null,
       style: combatFeedbackStyleForRole(attacker.role),
+      boostedBySpecial: hasSpecialDamageBonus(attacker),
     });
     this.state.runtime.stats.bossDamageByProfile[attacker.profileId] =
       previousProfileDamage + actualDamage;
@@ -2652,7 +2933,52 @@ export class DungeonSimulation {
       return ENTRY_CELL;
     }
 
+    const engagement = this.state.runtime?.bossEngagement;
+
+    if (
+      engagement?.lockedForFrontline &&
+      !engagement.firstBossAttackerId &&
+      adventurer.id !== engagement.frontlineAdventurerId
+    ) {
+      return this.getBossStagingCell(adventurer);
+    }
+
     return { x: Math.round(this.state.boss.x), y: Math.round(this.state.boss.y) };
+  }
+
+  private getBossStagingCell(adventurer: AdventurerEntity): GridCell {
+    const bossCell = { x: Math.round(this.state.boss.x), y: Math.round(this.state.boss.y) };
+    const towardEntryX = Math.sign(ENTRY_CELL.x - bossCell.x) || -1;
+    const sideY = Math.sign(ENTRY_CELL.y - bossCell.y) || 1;
+    const offsets = bossStagingOffsets(adventurer.role);
+    const currentCell = { x: Math.round(adventurer.x), y: Math.round(adventurer.y) };
+    const blockedCellKeys = getBlockedCellKeys(this.state.tiles);
+
+    return offsets
+      .map((offset) => ({
+        cell: {
+          x: bossCell.x + offset.back * towardEntryX,
+          y: bossCell.y + offset.side * sideY,
+        },
+        offset,
+      }))
+      .filter((entry) => isInsideGrid(entry.cell))
+      .filter((entry) => !blockedCellKeys.has(cellKey(entry.cell)))
+      .filter((entry) => !this.state.doors.some((door) => !door.destroyed && !door.openedForExpedition && isSameCell(door.cell, entry.cell)))
+      .map((entry) => ({
+        cell: entry.cell,
+        pathLength: isSameCell(currentCell, entry.cell)
+          ? 0
+          : findPath(currentCell, entry.cell, {
+            role: adventurer.role,
+            trapAvoidance: this.state.memory.trapAvoidance * personalityTrapAvoidance(adventurer),
+            trapDangerByCell: this.state.memory.trapDangerByCell,
+            knownTrapCells: this.getKnownTrapCells(),
+            blockedCellKeys,
+          }).length,
+      }))
+      .filter((entry) => entry.pathLength > 0 || isSameCell(currentCell, entry.cell))
+      .sort((a, b) => a.pathLength - b.pathLength)[0]?.cell ?? bossCell;
   }
 
   private recordEscape(adventurer: AdventurerEntity): void {
@@ -2681,7 +3007,7 @@ export class DungeonSimulation {
           const bonus = profile ? grantSpecialTreasureBonus(profile, treasure, this.state.wave) : null;
 
           if (bonus && profile) {
-            const line = describeSpecialTreasureBonus(profile.name, bonus);
+            const line = describeSpecialTreasureBonus(profile.name, bonus, profile.role);
             this.state.runtime.stats.specialTreasureLoots.push(line);
             this.state.runtime.stats.storyEvents.push(line);
             addChronicle(this.state.world, line);
@@ -2751,6 +3077,150 @@ export class DungeonSimulation {
     }
 
     applyPartyDecisions(this.state.runtime.partyPlan, this.state.adventurers);
+  }
+
+  private updateBossEngagementLock(): void {
+    const runtime = this.state.runtime;
+
+    if (!runtime) {
+      return;
+    }
+
+    const engagement = runtime.bossEngagement;
+    const bossDetected = this.isBossDetectedByParty();
+
+    if (!bossDetected || runtime.partyPlan.retreating || runtime.partyPlan.groupObjective === 'escapeWithTreasure') {
+      engagement.frontlineAdventurerId = null;
+      engagement.lockedForFrontline = false;
+      engagement.preparationAnnounced = false;
+      engagement.fallbackReason = null;
+      return;
+    }
+
+    const engager = this.selectBossEngager();
+
+    if (!engager) {
+      engagement.frontlineAdventurerId = null;
+      engagement.lockedForFrontline = false;
+      engagement.fallbackReason = 'Aucun engageur vivant ou atteignable.';
+      return;
+    }
+
+    const changedEngager = engagement.frontlineAdventurerId !== engager.id;
+    engagement.frontlineAdventurerId = engager.id;
+    engagement.lockedForFrontline = engagement.firstBossAttackerId === null;
+    engagement.fallbackReason = engager.role === 'warrior' ? null : `${engager.name} devient engageur de repli.`;
+
+    if (engagement.lockedForFrontline && changedEngager) {
+      runtime.stats.bossEngagementLocks += 1;
+    }
+
+    if (engagement.lockedForFrontline && !engagement.preparationAnnounced) {
+      engagement.preparationAnnounced = true;
+      runtime.stats.storyEvents.push(`${engager.name} prend la ligne avant l'engagement du boss.`);
+      this.state.message = `${engager.name} prend la ligne. Le reste attend l'ouverture.`;
+      tryBark(engager, 'bossPrepare', this.visibleBarkCount());
+    }
+  }
+
+  private isBossDetectedByParty(): boolean {
+    return this.state.adventurers.some(
+      (adventurer) =>
+        adventurer.alive &&
+        !adventurer.escaped &&
+        (adventurer.targetStage === 'boss' ||
+          distance(adventurer.x, adventurer.y, this.state.boss.x, this.state.boss.y) <= this.state.boss.detectionRange + 1.2),
+    );
+  }
+
+  private selectBossEngager(): AdventurerEntity | null {
+    return this.state.adventurers
+      .filter((adventurer) => adventurer.alive && !adventurer.escaped && adventurer.targetStage !== 'exit')
+      .filter((adventurer) => this.canReachBossForEngagement(adventurer))
+      .map((adventurer) => ({
+        adventurer,
+        priority: bossEngagePriority(adventurer.role),
+        distance: distance(adventurer.x, adventurer.y, this.state.boss.x, this.state.boss.y),
+      }))
+      .sort((a, b) => a.priority - b.priority || a.distance - b.distance)[0]?.adventurer ?? null;
+  }
+
+  private canReachBossForEngagement(adventurer: AdventurerEntity): boolean {
+    if (distance(adventurer.x, adventurer.y, this.state.boss.x, this.state.boss.y) <= adventurer.attackRange + 0.45) {
+      return true;
+    }
+
+    const currentCell = { x: Math.round(adventurer.x), y: Math.round(adventurer.y) };
+    return findPath(currentCell, this.getBossCell(), {
+      role: adventurer.role,
+      trapAvoidance: 0,
+      trapDangerByCell: {},
+      knownTrapCells: new Set(),
+      blockedCellKeys: getBlockedCellKeys(this.state.tiles),
+    }).length > 0;
+  }
+
+  private chooseBossTargetWithEngagementLock(): AdventurerEntity | null {
+    const engagement = this.state.runtime?.bossEngagement;
+    const frontline = engagement?.frontlineAdventurerId
+      ? this.state.adventurers.find((adventurer) => adventurer.id === engagement.frontlineAdventurerId && adventurer.alive && !adventurer.escaped) ?? null
+      : null;
+
+    if (
+      engagement?.lockedForFrontline &&
+      frontline &&
+      distance(this.state.boss.x, this.state.boss.y, frontline.x, frontline.y) <= this.state.boss.detectionRange + 1.6
+    ) {
+      return frontline;
+    }
+
+    return chooseBossTarget(this.state.boss, this.state.adventurers);
+  }
+
+  private canAdventurerAttackBoss(adventurer: AdventurerEntity): boolean {
+    if (adventurer.targetStage !== 'boss') {
+      return false;
+    }
+
+    const engagement = this.state.runtime?.bossEngagement;
+
+    if (!engagement?.lockedForFrontline || engagement.firstBossAttackerId) {
+      return true;
+    }
+
+    return adventurer.id === engagement.frontlineAdventurerId;
+  }
+
+  private applyBossEngagementBehavior(adventurer: AdventurerEntity): void {
+    const runtime = this.state.runtime;
+    const engagement = runtime?.bossEngagement;
+
+    if (
+      !runtime ||
+      !engagement?.lockedForFrontline ||
+      engagement.firstBossAttackerId ||
+      adventurer.targetStage !== 'boss' ||
+      adventurer.id === engagement.frontlineAdventurerId
+    ) {
+      return;
+    }
+
+    if (adventurer.role === 'mage' || adventurer.role === 'healer') {
+      adventurer.behaviorState = 'backlineHold';
+      runtime.stats.backlineHolds += 1;
+      tryBark(adventurer, 'backlineHold', this.visibleBarkCount());
+    } else if (adventurer.role === 'thief') {
+      adventurer.behaviorState = 'waitingForTank';
+      tryBark(adventurer, 'waitTank', this.visibleBarkCount());
+    } else {
+      adventurer.behaviorState = 'bossPreparation';
+    }
+
+    const stagingCell = this.getBossStagingCell(adventurer);
+
+    if (distance(adventurer.x, adventurer.y, stagingCell.x, stagingCell.y) <= 0.35) {
+      adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, adventurer.role === 'thief' ? 220 : 280);
+    }
   }
 
   private updateMonsterMovement(deltaMs: number): void {
@@ -2970,12 +3440,15 @@ export class DungeonSimulation {
     return healed;
   }
 
-  private queueCombatFeedback(event: Omit<CombatFeedbackEvent, 'id' | 'ageMs'>): void {
+  private queueCombatFeedback(
+    event: Omit<CombatFeedbackEvent, 'id' | 'ageMs' | 'boostedBySpecial'> & { boostedBySpecial?: boolean },
+  ): void {
     if (!this.state.runtime || event.amount <= 0) {
       return;
     }
 
     this.state.runtime.combatFeedbackEvents.push({
+      boostedBySpecial: false,
       ...event,
       id: `combat-feedback-${this.nextCombatFeedbackId}`,
       ageMs: 0,
@@ -3002,6 +3475,7 @@ export class DungeonSimulation {
     });
 
     adventurer.decisionSpeedMultiplier = decision.speedMultiplier;
+    adventurer.behaviorState = decision.behaviorState;
     const canReactNow = adventurer.barkCooldownMs <= 0;
 
     if (decision.bark) {
@@ -3262,6 +3736,21 @@ function createEmptyWaveStats(): WaveStats {
     goldTreasureValueStolen: 0,
     specialTreasureLoots: [],
     combatFeedbackEvents: 0,
+    bossEngagementLocks: 0,
+    opportunisticLoots: 0,
+    roomEvaluations: 0,
+    backlineHolds: 0,
+  };
+}
+
+function createBossEngagementState(): BossEngagementState {
+  return {
+    frontlineAdventurerId: null,
+    firstBossAttackerId: null,
+    firstBossAttackerRole: null,
+    lockedForFrontline: false,
+    preparationAnnounced: false,
+    fallbackReason: null,
   };
 }
 
@@ -3353,6 +3842,61 @@ function specialTreasurePriority(kind: DungeonTreasureKind): number {
 function specialTreasureNameForKind(kind: DungeonTreasureKind): string {
   const specialKind = specialKindFromTreasureKind(kind);
   return specialKind ? specialTreasureLabel(specialKind) : 'un tresor special';
+}
+
+function bossEngagePriority(role: AdventurerRole): number {
+  switch (role) {
+    case 'warrior':
+      return 0;
+    case 'thief':
+      return 2;
+    case 'mage':
+      return 3;
+    case 'healer':
+      return 4;
+    default:
+      return 9;
+  }
+}
+
+function bossStagingOffsets(role: AdventurerRole): Array<{ back: number; side: number }> {
+  switch (role) {
+    case 'thief':
+      return [
+        { back: 1, side: -1 },
+        { back: 1, side: 1 },
+        { back: 2, side: -1 },
+        { back: 2, side: 1 },
+      ];
+    case 'mage':
+      return [
+        { back: 2, side: -1 },
+        { back: 3, side: -1 },
+        { back: 2, side: 1 },
+        { back: 3, side: 1 },
+      ];
+    case 'healer':
+      return [
+        { back: 3, side: 0 },
+        { back: 3, side: 1 },
+        { back: 4, side: 0 },
+        { back: 2, side: 1 },
+      ];
+    default:
+      return [
+        { back: 1, side: 0 },
+        { back: 1, side: -1 },
+        { back: 1, side: 1 },
+      ];
+  }
+}
+
+function getTreasureCurrentCell(treasure: DungeonTreasure): GridCell | null {
+  return treasure.status === 'dropped' && treasure.droppedCell ? treasure.droppedCell : treasure.cell;
+}
+
+function hasSpecialDamageBonus(adventurer: AdventurerEntity): boolean {
+  return computeSpecialTreasureModifiersFromBonuses(adventurer.role, adventurer.specialTreasureBonuses).damageBonus > 0;
 }
 
 function combatFeedbackStyleForRole(role: AdventurerRole): CombatFeedbackStyle {

@@ -1,6 +1,7 @@
 import { cellKey } from '../game/constants';
 import type {
   AdventurerEntity,
+  AdventurerBehaviorState,
   DefenseEntity,
   DungeonDoor,
   GridCell,
@@ -26,10 +27,14 @@ export interface LocalDecisionResult {
     | 'trapThief'
     | 'wounded'
     | 'retreat'
+    | 'stayTogether'
+    | 'backlineHold'
+    | 'secureArea'
     | null;
   forceExit: boolean;
   clearPath: boolean;
   reason: string | null;
+  behaviorState: AdventurerBehaviorState;
 }
 
 export function evaluateLocalAdventurerDecision(
@@ -57,6 +62,7 @@ export function evaluateLocalAdventurerDecision(
   const fanatical = context.partyPlan.type === 'fanatic' || adventurer.personality === 'courageous';
   const cautious = context.partyPlan.type === 'cautious' || adventurer.personality === 'cautious' || adventurer.personality === 'traumatized';
   const formationSpeed = computeFormationSpeed(adventurer, context.adventurers);
+  const leadResponse = computeLeadResponse(adventurer, context.adventurers, context.targetCell, visibleTrap !== null || nearbyDoor !== null);
 
   if (nearbyDoor && !anyLivingThief && adventurer.targetStage !== 'exit') {
     return {
@@ -66,6 +72,7 @@ export function evaluateLocalAdventurerDecision(
       forceExit: true,
       clearPath: true,
       reason: null,
+      behaviorState: 'regrouping',
     };
   }
 
@@ -77,6 +84,7 @@ export function evaluateLocalAdventurerDecision(
       forceExit: cautious,
       clearPath: cautious,
       reason: cautious ? `${adventurer.name} propose une retraite avant de devenir une statistique.` : null,
+      behaviorState: cautious ? 'retreating' : 'securingArea',
     };
   }
 
@@ -88,6 +96,19 @@ export function evaluateLocalAdventurerDecision(
       forceExit: false,
       clearPath: false,
       reason: null,
+      behaviorState: 'securingArea',
+    };
+  }
+
+  if (leadResponse) {
+    return {
+      hesitateMs: leadResponse.hesitateMs,
+      speedMultiplier: Math.min(formationSpeed, leadResponse.speedMultiplier),
+      bark: leadResponse.bark,
+      forceExit: false,
+      clearPath: false,
+      reason: null,
+      behaviorState: leadResponse.behaviorState,
     };
   }
 
@@ -99,6 +120,7 @@ export function evaluateLocalAdventurerDecision(
       forceExit: false,
       clearPath: false,
       reason: null,
+      behaviorState: 'regrouping',
     };
   }
 
@@ -110,6 +132,7 @@ export function evaluateLocalAdventurerDecision(
       forceExit: false,
       clearPath: false,
       reason: null,
+      behaviorState: dangerousMinionNear && livingWarrior ? 'securingArea' : 'advancing',
     };
   }
 
@@ -126,6 +149,7 @@ export function evaluateLocalAdventurerDecision(
       forceExit: false,
       clearPath: false,
       reason: null,
+      behaviorState: 'backlineHold',
     };
   }
 
@@ -137,6 +161,7 @@ export function evaluateLocalAdventurerDecision(
       forceExit: false,
       clearPath: false,
       reason: null,
+      behaviorState: 'evaluatingRoom',
     };
   }
 
@@ -147,6 +172,7 @@ export function evaluateLocalAdventurerDecision(
     forceExit: false,
     clearPath: false,
     reason: null,
+    behaviorState: formationSpeed < 0.9 ? 'regrouping' : 'advancing',
   };
 }
 
@@ -200,6 +226,65 @@ function computeFormationSpeed(adventurer: AdventurerEntity, adventurers: Advent
   }
 
   return 1;
+}
+
+function computeLeadResponse(
+  adventurer: AdventurerEntity,
+  adventurers: AdventurerEntity[],
+  targetCell: GridCell,
+  hasUtilityReason: boolean,
+): {
+  speedMultiplier: number;
+  hesitateMs: number;
+  bark: 'stayTogether' | 'backlineHold' | 'secureArea' | null;
+  behaviorState: AdventurerBehaviorState;
+} | null {
+  if (adventurer.targetStage === 'exit') {
+    return null;
+  }
+
+  const active = adventurers.filter((ally) => ally.alive && !ally.escaped && ally.targetStage === adventurer.targetStage);
+
+  if (active.length <= 1) {
+    return null;
+  }
+
+  const ownDistanceToGoal = distance(adventurer.x, adventurer.y, targetCell.x, targetCell.y);
+  const averageDistanceToGoal = active.reduce(
+    (total, ally) => total + distance(ally.x, ally.y, targetCell.x, targetCell.y),
+    0,
+  ) / active.length;
+  const leadDistance = averageDistanceToGoal - ownDistanceToGoal;
+  const warrior = active.find((ally) => ally.role === 'warrior') ?? null;
+  const warriorBehind =
+    warrior &&
+    adventurer.id !== warrior.id &&
+    distance(warrior.x, warrior.y, targetCell.x, targetCell.y) > ownDistanceToGoal + 1.35;
+  const roleLeadLimit = adventurer.role === 'warrior' ? 4.2 : adventurer.role === 'thief' && hasUtilityReason ? 3.4 : adventurer.role === 'thief' ? 2.25 : 2.55;
+
+  if ((adventurer.role === 'mage' || adventurer.role === 'healer') && warriorBehind) {
+    return {
+      speedMultiplier: adventurer.role === 'healer' ? 0.46 : 0.58,
+      hesitateMs: adventurer.role === 'healer' ? 260 : 180,
+      bark: 'backlineHold',
+      behaviorState: 'backlineHold',
+    };
+  }
+
+  if (leadDistance <= roleLeadLimit) {
+    return null;
+  }
+
+  if (adventurer.role === 'thief' && hasUtilityReason && leadDistance <= roleLeadLimit + 0.8) {
+    return null;
+  }
+
+  return {
+    speedMultiplier: adventurer.role === 'warrior' ? 0.72 : adventurer.role === 'thief' ? 0.58 : 0.5,
+    hesitateMs: adventurer.role === 'warrior' ? 120 : 240,
+    bark: adventurer.role === 'thief' ? 'stayTogether' : adventurer.role === 'warrior' ? 'secureArea' : 'backlineHold',
+    behaviorState: adventurer.role === 'warrior' ? 'securingArea' : adventurer.role === 'thief' ? 'regrouping' : 'backlineHold',
+  };
 }
 
 function distance(ax: number, ay: number, bx: number, by: number): number {

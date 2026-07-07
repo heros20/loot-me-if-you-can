@@ -20,6 +20,11 @@ export type BarkKind =
   | 'retreatPanic'
   | 'retreatDisobey'
   | 'treasureTaken'
+  | 'opportunisticLoot'
+  | 'waitTank'
+  | 'bossPrepare'
+  | 'backlineHold'
+  | 'secureArea'
   | 'returningSurvivor'
   | 'bossAbility'
   | 'warriorTaunt'
@@ -47,6 +52,11 @@ const BARKS: Record<BarkKind, string[]> = {
   retreatPanic: ['Repli ! Maintenant !', 'Je file !'],
   retreatDisobey: ['Hors de question, on est si proches !', 'Je garde le passage.'],
   treasureTaken: ['On a le butin, partez !', 'Pas question, on finit le boss !'],
+  opportunisticLoot: ['Je prends ca.', 'Je vois quelque chose.', 'Ca, on ne le laisse pas.'],
+  waitTank: ['Pas sans le guerrier.', 'Attendez le tank !', 'On ouvre derriere lui.'],
+  bossPrepare: ['Le boss... preparez-vous.', 'Derriere moi.', 'On se place.'],
+  backlineHold: ['Je reste derriere.', 'Restez devant moi.', 'Je garde la distance.'],
+  secureArea: ["On securise d'abord.", 'Pas de loot avant la ligne.', 'Nettoyez la salle.'],
   returningSurvivor: ['Je connais ce couloir.', 'Restez pres de moi.', "J'ai deja survecu a ce trou."],
   bossAbility: ['Il prepare quelque chose !', 'Le maitre du donjon bouge enfin.'],
   warriorTaunt: ['Derriere moi !', 'Je les retiens !', 'Touchez-moi plutot !'],
@@ -61,6 +71,11 @@ const BARK_PRIORITY: Partial<Record<BarkKind, number>> = {
   doorNoThief: 3,
   doorOpened: 3,
   treasureTaken: 3,
+  opportunisticLoot: 2,
+  waitTank: 3,
+  bossPrepare: 3,
+  backlineHold: 2,
+  secureArea: 2,
   treasureEscape: 3,
   treasureChallenge: 3,
   returningSurvivor: 2,

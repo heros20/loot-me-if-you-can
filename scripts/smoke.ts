@@ -29,6 +29,7 @@ import {
 } from '../src/systems/combatAbilitySystem';
 import { computeDoorRemovalRefund } from '../src/systems/economyBalance';
 import { updateMonsterAI } from '../src/systems/monsterAISystem';
+import { evaluateLocalAdventurerDecision } from '../src/systems/adventurerDecisionSystem';
 import { choosePostTreasureGoal, chooseTreasureGroupObjective, createPartyPlan } from '../src/systems/partyAISystem';
 import { addThreat, chooseThreatTarget } from '../src/systems/combatThreatSystem';
 import {
@@ -56,6 +57,7 @@ import type {
   AdventurerEntity,
   AdventurerRole,
   AdaptationMemory,
+  BossEngagementState,
   BossEntity,
   DefenseEntity,
   DefenseType,
@@ -104,6 +106,21 @@ function createSmokeStats(): WaveStats {
     goldTreasureValueStolen: 0,
     specialTreasureLoots: [],
     combatFeedbackEvents: 0,
+    bossEngagementLocks: 0,
+    opportunisticLoots: 0,
+    roomEvaluations: 0,
+    backlineHolds: 0,
+  };
+}
+
+function createSmokeBossEngagement(): BossEngagementState {
+  return {
+    frontlineAdventurerId: null,
+    firstBossAttackerId: null,
+    firstBossAttackerRole: null,
+    lockedForFrontline: false,
+    preparationAnnounced: false,
+    fallbackReason: null,
   };
 }
 
@@ -168,8 +185,11 @@ function createSmokeAdventurer(role: AdventurerRole, id: string, x: number, y: n
     speedMultiplier: 1,
     slowedTimerMs: 0,
     targetStage: 'treasure',
+    targetTreasureId: null,
+    behaviorState: 'advancing',
     path: [],
     lastCellKey: '0,0',
+    lastEvaluatedRoomKey: null,
     alive: true,
     escaped: false,
     hasEnteredDungeon: true,
@@ -186,6 +206,8 @@ function createSmokeAdventurer(role: AdventurerRole, id: string, x: number, y: n
     barkCooldownMs: 0,
     lastBarkKey: null,
     lastAvoidedTrapKey: null,
+    lootFeedbackText: null,
+    lootFeedbackTimerMs: 0,
     isHeir: false,
     specialTreasureBonuses: [],
   };
@@ -644,6 +666,7 @@ function validateDungeonAnchorRules(): void {
     doorsEngagedIds: new Set<string>(),
     bossAutopilotTimerMs: 0,
     targetTreasureId: 'gold-test',
+    bossEngagement: createSmokeBossEngagement(),
     combatFeedbackEvents: [],
   };
 
@@ -1329,6 +1352,7 @@ function validateCombatFeedbackRules(): void {
     doorsEngagedIds: new Set<string>(),
     bossAutopilotTimerMs: 0,
     targetTreasureId: null,
+    bossEngagement: createSmokeBossEngagement(),
     combatFeedbackEvents: [],
   };
 
@@ -1773,6 +1797,224 @@ function validateDefenseAggroRules(): void {
   }
 }
 
+function validateHumanAdventurerBehaviorRules(): void {
+  const bossLockSim = new DungeonSimulation();
+  bossLockSim.startNewGame();
+  const bossLockState = (bossLockSim as unknown as { state: GameState }).state;
+  const tank = createSmokeAdventurer('warrior', 'boss-tank', 21, 12);
+  const rogue = createSmokeAdventurer('thief', 'boss-rogue', 22, 12);
+  const healer = createSmokeAdventurer('healer', 'boss-healer', 21, 13);
+  [tank, rogue, healer].forEach((adventurer) => {
+    adventurer.targetStage = 'boss';
+    adventurer.hasEnteredDungeon = true;
+  });
+  bossLockState.phase = 'wave';
+  bossLockState.adventurers = [rogue, healer, tank];
+  bossLockState.runtime = {
+    elapsedMs: 0,
+    spawnTimerMs: 0,
+    spawnQueue: [],
+    partyProfiles: [],
+    spawned: 0,
+    partyPlan: {
+      ...createPartyPlan(1, bossLockState.world.dungeonReputation.value, null),
+      type: 'heroic',
+      primaryGoal: 'boss',
+      groupObjective: 'challengeBoss',
+    },
+    stats: createSmokeStats(),
+    doorsEngagedIds: new Set<string>(),
+    bossAutopilotTimerMs: 0,
+    targetTreasureId: null,
+    bossEngagement: createSmokeBossEngagement(),
+    combatFeedbackEvents: [],
+  };
+
+  (bossLockSim as unknown as { updateBossEngagementLock(): void }).updateBossEngagementLock();
+
+  if (
+    bossLockState.runtime.bossEngagement.frontlineAdventurerId !== tank.id ||
+    (bossLockSim as unknown as { canAdventurerAttackBoss(adventurer: AdventurerEntity): boolean }).canAdventurerAttackBoss(rogue)
+  ) {
+    console.error('ECHEC: le verrou boss devrait reserver la premiere attaque au guerrier vivant.');
+    process.exit(1);
+  }
+
+  const healerBossTarget = (bossLockSim as unknown as { getTargetCell(adventurer: AdventurerEntity): GridCell }).getTargetCell(healer);
+
+  if (isCell(healerBossTarget, { x: Math.round(bossLockState.boss.x), y: Math.round(bossLockState.boss.y) })) {
+    console.error('ECHEC: le soigneur ne devrait pas cibler la case boss pendant la preparation tank.');
+    process.exit(1);
+  }
+
+  (bossLockSim as unknown as { damageBoss(damage: number, attacker: AdventurerEntity): void }).damageBoss(tank.damage, tank);
+
+  if (
+    bossLockState.runtime.bossEngagement.firstBossAttackerRole !== 'warrior' ||
+    !(bossLockSim as unknown as { canAdventurerAttackBoss(adventurer: AdventurerEntity): boolean }).canAdventurerAttackBoss(rogue)
+  ) {
+    console.error('ECHEC: apres ouverture du tank, le groupe devrait pouvoir attaquer le boss.');
+    process.exit(1);
+  }
+
+  const fallbackSim = new DungeonSimulation();
+  fallbackSim.startNewGame();
+  const fallbackState = (fallbackSim as unknown as { state: GameState }).state;
+  const fallbackRogue = createSmokeAdventurer('thief', 'fallback-rogue', 21, 12);
+  const fallbackMage = createSmokeAdventurer('mage', 'fallback-mage', 20, 12);
+  [fallbackRogue, fallbackMage].forEach((adventurer) => {
+    adventurer.targetStage = 'boss';
+    adventurer.hasEnteredDungeon = true;
+  });
+  fallbackState.phase = 'wave';
+  fallbackState.adventurers = [fallbackMage, fallbackRogue];
+  fallbackState.runtime = {
+    elapsedMs: 0,
+    spawnTimerMs: 0,
+    spawnQueue: [],
+    partyProfiles: [],
+    spawned: 0,
+    partyPlan: {
+      ...createPartyPlan(1, fallbackState.world.dungeonReputation.value, null),
+      type: 'heroic',
+      primaryGoal: 'boss',
+      groupObjective: 'challengeBoss',
+    },
+    stats: createSmokeStats(),
+    doorsEngagedIds: new Set<string>(),
+    bossAutopilotTimerMs: 0,
+    targetTreasureId: null,
+    bossEngagement: createSmokeBossEngagement(),
+    combatFeedbackEvents: [],
+  };
+
+  (fallbackSim as unknown as { updateBossEngagementLock(): void }).updateBossEngagementLock();
+
+  if (
+    fallbackState.runtime.bossEngagement.frontlineAdventurerId !== fallbackRogue.id ||
+    !(fallbackSim as unknown as { canAdventurerAttackBoss(adventurer: AdventurerEntity): boolean }).canAdventurerAttackBoss(fallbackRogue) ||
+    (fallbackSim as unknown as { canAdventurerAttackBoss(adventurer: AdventurerEntity): boolean }).canAdventurerAttackBoss(fallbackMage)
+  ) {
+    console.error('ECHEC: sans tank, le voleur doit etre fallback avant les casters, mais rester ouvreur unique.');
+    process.exit(1);
+  }
+
+  const lootSim = new DungeonSimulation();
+  lootSim.startNewGame();
+  const lootState = (lootSim as unknown as { state: GameState }).state;
+  const looter = createSmokeAdventurer('thief', 'opportunist-rogue', 20, 5);
+  looter.targetStage = 'boss';
+  lootState.phase = 'wave';
+  lootState.adventurers = [looter];
+  lootState.treasures = [
+    {
+      id: 'opportunistic-weapon',
+      kind: 'specialWeapon',
+      cell: { x: 20, y: 5 },
+      value: 18,
+      status: 'secure',
+      holderAdventurerId: null,
+      droppedCell: null,
+    },
+  ];
+  lootState.runtime = {
+    elapsedMs: 0,
+    spawnTimerMs: 0,
+    spawnQueue: [],
+    partyProfiles: [],
+    spawned: 0,
+    partyPlan: createPartyPlan(1, lootState.world.dungeonReputation.value, null),
+    stats: createSmokeStats(),
+    doorsEngagedIds: new Set<string>(),
+    bossAutopilotTimerMs: 0,
+    targetTreasureId: null,
+    bossEngagement: createSmokeBossEngagement(),
+    combatFeedbackEvents: [],
+  };
+  const previousDamage = looter.damage;
+
+  if (!(lootSim as unknown as { tryStartOpportunisticLoot(adventurer: AdventurerEntity): boolean }).tryStartOpportunisticLoot(looter)) {
+    console.error('ECHEC: un tresor special sur la case devrait declencher un pickup opportuniste.');
+    process.exit(1);
+  }
+
+  if (!looter.carryingTreasure || looter.damage <= previousDamage || looter.lootFeedbackText !== 'Arme equipee') {
+    console.error('ECHEC: le pickup special devrait etre visible et appliquer le bonus temporaire.');
+    process.exit(1);
+  }
+
+  const dangerSim = new DungeonSimulation();
+  dangerSim.startNewGame();
+  const dangerState = (dangerSim as unknown as { state: GameState }).state;
+  const dangerHealer = createSmokeAdventurer('healer', 'danger-healer', 10, 10);
+  dangerHealer.targetStage = 'boss';
+  dangerState.phase = 'wave';
+  dangerState.adventurers = [dangerHealer];
+  dangerState.defenses = [createSmokeDefense('skeleton', 'loot-guard', 11, 10)];
+  dangerState.treasures = [
+    {
+      id: 'danger-gold',
+      kind: 'gold',
+      cell: { x: 12, y: 10 },
+      value: GOLD_TREASURE_DEFAULT_VALUE,
+      status: 'secure',
+      holderAdventurerId: null,
+      droppedCell: null,
+    },
+  ];
+  dangerState.runtime = {
+    elapsedMs: 0,
+    spawnTimerMs: 0,
+    spawnQueue: [],
+    partyProfiles: [],
+    spawned: 0,
+    partyPlan: createPartyPlan(1, dangerState.world.dungeonReputation.value, null),
+    stats: createSmokeStats(),
+    doorsEngagedIds: new Set<string>(),
+    bossAutopilotTimerMs: 0,
+    targetTreasureId: null,
+    bossEngagement: createSmokeBossEngagement(),
+    combatFeedbackEvents: [],
+  };
+
+  if ((dangerSim as unknown as { tryStartOpportunisticLoot(adventurer: AdventurerEntity): boolean }).tryStartOpportunisticLoot(dangerHealer)) {
+    console.error('ECHEC: le soigneur ne devrait pas traverser seul un danger immediat pour un loot.');
+    process.exit(1);
+  }
+
+  const leader = createSmokeAdventurer('thief', 'lead-rogue', 18, 6);
+  const groupTank = createSmokeAdventurer('warrior', 'slow-tank', 10, 10);
+  leader.targetStage = 'boss';
+  groupTank.targetStage = 'boss';
+  const cohesion = evaluateLocalAdventurerDecision(leader, {
+    partyPlan: createPartyPlan(1, 0, null),
+    adventurers: [leader, groupTank],
+    defenses: [],
+    doors: [],
+    targetCell: { x: 22, y: 12 },
+  });
+
+  if (cohesion.behaviorState !== 'regrouping' || cohesion.speedMultiplier >= 0.8) {
+    console.error('ECHEC: un rogue trop avance devrait ralentir pour regrouper.');
+    process.exit(1);
+  }
+
+  const backline = createSmokeAdventurer('healer', 'lead-healer', 18, 6);
+  backline.targetStage = 'boss';
+  const backlineDecision = evaluateLocalAdventurerDecision(backline, {
+    partyPlan: createPartyPlan(1, 0, null),
+    adventurers: [backline, groupTank],
+    defenses: [],
+    doors: [],
+    targetCell: { x: 22, y: 12 },
+  });
+
+  if (backlineDecision.behaviorState !== 'backlineHold' || backlineDecision.speedMultiplier >= 0.7) {
+    console.error('ECHEC: healer/caster devant le tank devrait repasser en backlineHold.');
+    process.exit(1);
+  }
+}
+
 function buildFakeParticipant(overrides: Partial<ExpeditionParticipantReport>): ExpeditionParticipantReport {
   return {
     name: 'Aventurier',
@@ -2030,6 +2272,7 @@ validateCombatFeedbackRules();
 validateCombatAbilityRules();
 validateGoblinChaseRules();
 validateDefenseAggroRules();
+validateHumanAdventurerBehaviorRules();
 validateGuildTavernSceneRules();
 
 const sim = new DungeonSimulation();

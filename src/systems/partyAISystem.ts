@@ -110,13 +110,21 @@ export function applyPartyDecisions(plan: PartyPlan, adventurers: AdventurerEnti
       return;
     }
 
+    if (
+      plan.groupObjective === 'challengeBoss' &&
+      adventurer.targetStage === 'treasure' &&
+      adventurer.targetTreasureId
+    ) {
+      return;
+    }
+
     if (plan.groupObjective === 'challengeBoss' && adventurer.targetStage !== 'boss') {
       adventurer.targetStage = 'boss';
       adventurer.path = [];
       return;
     }
 
-    if (plan.primaryGoal === 'boss' && adventurer.targetStage === 'treasure') {
+    if (plan.primaryGoal === 'boss' && adventurer.targetStage === 'treasure' && !adventurer.targetTreasureId) {
       adventurer.targetStage = 'boss';
       adventurer.path = [];
     }

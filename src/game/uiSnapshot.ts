@@ -81,6 +81,7 @@ export interface InspectedAdventurer {
   heirNote: string | null;
   carryingTreasure: boolean;
   specialTreasureBonuses: SpecialTreasureBonus[];
+  specialTreasureEffects: string[];
   lastFeat: string | null;
 }
 

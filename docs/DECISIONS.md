@@ -4,7 +4,7 @@
 |---|---|
 | **Statut** | Vivant — journal append-only, on n'édite jamais une décision passée |
 | **Propriétaire** | Game Design |
-| **Dernière mise à jour** | 2026-07-07 (D-021) |
+| **Dernière mise à jour** | 2026-07-07 (D-022) |
 | **Documents liés** | [DESIGN_PRINCIPLES.md](./DESIGN_PRINCIPLES.md) · [GAME_DESIGN_DOCUMENT.md](./GAME_DESIGN_DOCUMENT.md) |
 
 ---
@@ -26,6 +26,18 @@ Chaque décision structurante obtient une entrée, numérotée dans l'ordre chro
 **Conséquences** : impact sur le design, le code ou la production
 **Remplace / Remplacé par** : lien vers une autre entrée le cas échéant
 ```
+
+---
+
+## D-022 - Human Adventurer Behavior V0 reste une couche lisible, pas une IA complete
+
+**Date** : 2026-07-07
+**Statut** : Actif
+**Contexte** : correction apres test manuel du commit 3b38a2a. Le rogue pouvait encore ouvrir le boss avant le guerrier, des tresors evidents etaient ignores, et les gains speciaux etaient trop peu perceptibles.
+**Decision** : ajouter une couche comportementale explicite mais limitee. Le boss utilise un verrou d'engagement : tant qu'un frontliner vivant et atteignable existe, lui seul peut ouvrir les degats boss, puis le groupe attaque. Le loot opportuniste interrompt un rush si un tresor est adjacent, sur le chemin, ou accessible sans detour dangereux ; les healers/casters ne traversent pas seuls une zone menacee. Les tresors speciaux affichent leur effet au pickup, appliquent un bonus temporaire au porteur, puis persistent seulement si le porteur s'echappe. Les etats humains restent courts (`regrouping`, `evaluatingRoom`, `waitingForTank`, `opportunisticLoot`, `bossPreparation`, `backlineHold`) et servent surtout la lisibilite.
+**Alternatives envisagees** : refondre le pathfinding/formation en IA de squad (rejete : trop large et risque de blocage) ; creer un inventaire/equipement complet (rejete : hors perimetre Special Treasures V1) ; ajouter cartographe/hopital/Kingdom Remembers pour justifier les decisions (rejete : non-objectifs explicites) ; rendre les pauses longues et scriptes (rejete : le rythme doit rester bon).
+**Consequences** : les corrections comportementales doivent rester testables par smoke et validables en manuel. Les limites connues sont assumees : pas de vraie reservation de cases, pas de roles supplementaires, pas d'inventaire detaille, et pas de planification globale multi-salles.
+**Remplace / Remplace par** : precise D-021.
 
 ---
 

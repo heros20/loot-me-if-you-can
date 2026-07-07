@@ -437,7 +437,10 @@ export class DungeonScene extends Phaser.Scene {
     view.badge?.setText(roleBadgeText(adventurer)).setBackgroundColor(roleBadgeColor(adventurer));
     view.sprite.setDisplaySize(adventurer.carryingTreasure ? 31 : 28, adventurer.carryingTreasure ? 31 : 28);
 
-    if (adventurer.abilityFxTimerMs > 0) {
+    if (adventurer.lootFeedbackText && adventurer.lootFeedbackTimerMs > 0) {
+      view.sprite.setTint(0xf6d88a);
+      view.fxLabel?.setText(adventurer.lootFeedbackText).setVisible(true).setAlpha(Math.min(1, adventurer.lootFeedbackTimerMs / 420));
+    } else if (adventurer.abilityFxTimerMs > 0) {
       view.sprite.setTint(0xf6d88a);
       view.fxLabel?.setText(adventurerFxText(adventurer)).setVisible(true).setAlpha(Math.min(1, adventurer.abilityFxTimerMs / 220));
     } else if (adventurer.damageReductionTimerMs > 0) {
@@ -584,7 +587,7 @@ export class DungeonScene extends Phaser.Scene {
       const sign = event.kind === 'heal' ? '+' : '-';
       const label = event.kind === 'heal'
         ? `${sign}${event.amount}`
-        : `${style.prefix} ${sign}${event.amount}`;
+        : `${style.prefix} ${sign}${event.amount}${event.boostedBySpecial ? '*' : ''}`;
       this.spawnFloatingText(
         world.x + (stack % 2 === 0 ? -5 : 5),
         world.y - 30 - stack * 9,
