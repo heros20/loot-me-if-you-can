@@ -323,6 +323,7 @@ export function createAdventurerProfile(
     lastLootedGold: 0,
     totalLootedGold: 0,
     notableLootEscapeCount: 0,
+    specialTreasureBonuses: [],
   };
 }
 
@@ -405,6 +406,7 @@ export function createHeirProfile(
     lastLootedGold: 0,
     totalLootedGold: 0,
     notableLootEscapeCount: 0,
+    specialTreasureBonuses: [],
   };
 
   fallen.heirSpawned = true;

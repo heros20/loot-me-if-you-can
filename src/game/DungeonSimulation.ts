@@ -33,6 +33,7 @@ import type {
   DefenseType,
   DungeonDoor,
   DungeonTreasure,
+  DungeonTreasureKind,
   DungeonValidation,
   EffectStats,
   ExpeditionParticipantReport,
@@ -141,6 +142,21 @@ import {
   repairDoors,
   removeDoorAt,
 } from '../systems/doorSystem';
+import {
+  SPECIAL_TREASURE_BALANCE,
+  computeSpecialTreasureModifiers,
+  describeSpecialTreasureBonus,
+  grantSpecialTreasureBonus,
+  isSpecialTreasureKind,
+  specialKindFromTreasureKind,
+  specialTreasureLabel,
+  specialTreasureValue,
+} from '../systems/specialTreasuresSystem';
+import {
+  addThreat,
+  chooseThreatTarget,
+  decayThreat,
+} from '../systems/combatThreatSystem';
 
 const BOSS_TEMPLATE: Omit<BossEntity, 'hp' | 'attackTimerMs' | 'abilities'> = {
   homeCell: BOSS_CELL,
@@ -156,6 +172,7 @@ const BOSS_TEMPLATE: Omit<BossEntity, 'hp' | 'attackTimerMs' | 'abilities'> = {
   targetAdventurerId: null,
   tauntedByAdventurerId: null,
   tauntTimerMs: 0,
+  threatByAdventurerId: {},
 };
 
 const ROOM_TOOL_LABELS: Record<'guardRoom' | 'crypt', string> = {
@@ -214,9 +231,30 @@ const CONSTRUCTION_TOOLS: Array<{
     cost: GOLD_TREASURE_DEFAULT_VALUE,
   },
   {
+    type: 'addWeaponTreasure',
+    name: "Tresor d'arme",
+    description: `Attire les cupides. Si un survivant le vole, il garde +${SPECIAL_TREASURE_BALANCE.weaponDamageBonus} degats.`,
+    category: 'objectives',
+    cost: SPECIAL_TREASURE_BALANCE.weaponCost,
+  },
+  {
+    type: 'addArmorTreasure',
+    name: "Tresor d'armure",
+    description: `Si un survivant le vole, il garde +${SPECIAL_TREASURE_BALANCE.armorMaxHpBonus} PV et encaisse un peu mieux.`,
+    category: 'objectives',
+    cost: SPECIAL_TREASURE_BALANCE.armorCost,
+  },
+  {
+    type: 'addTechniqueTreasure',
+    name: 'Tresor de technique',
+    description: 'Si un survivant le vole, il garde un passif simple adapte a son role.',
+    category: 'objectives',
+    cost: SPECIAL_TREASURE_BALANCE.techniqueCost,
+  },
+  {
     type: 'removeTreasure',
     name: 'Retirer tresor',
-    description: "Retire un tresor d'or non vole et rembourse sa valeur.",
+    description: "Retire un tresor secondaire non vole et rembourse sa valeur.",
     category: 'objectives',
     cost: null,
   },
@@ -504,6 +542,21 @@ export class DungeonSimulation {
       return;
     }
 
+    if (tool === 'addWeaponTreasure') {
+      this.addSpecialTreasure(cell, 'specialWeapon');
+      return;
+    }
+
+    if (tool === 'addArmorTreasure') {
+      this.addSpecialTreasure(cell, 'specialArmor');
+      return;
+    }
+
+    if (tool === 'addTechniqueTreasure') {
+      this.addSpecialTreasure(cell, 'specialTechnique');
+      return;
+    }
+
     if (tool === 'removeTreasure') {
       this.removeGoldTreasure(cell);
     }
@@ -650,19 +703,54 @@ export class DungeonSimulation {
     this.state.message = `Tresor d'or depose: -${GOLD_TREASURE_DEFAULT_VALUE} or maintenant, pas de double punition s'il est vole.`;
   }
 
+  private addSpecialTreasure(cell: GridCell, kind: Extract<DungeonTreasureKind, 'specialWeapon' | 'specialArmor' | 'specialTechnique'>): void {
+    const specialKind = specialKindFromTreasureKind(kind);
+    const cost = specialKind ? specialTreasureValue(specialKind) : 0;
+
+    if (this.state.treasures.length >= MAX_TREASURES_V1) {
+      this.state.message = `Maximum atteint: ${MAX_TREASURES_V1} tresors suffisent a armer les mauvaises personnes.`;
+      return;
+    }
+
+    if (this.state.gold < cost) {
+      this.state.message = `Pas assez d'or: ce tresor special coute ${cost} or.`;
+      return;
+    }
+
+    const rejection = this.describeObjectiveAnchorRejection(cell, 'treasure');
+
+    if (rejection) {
+      this.state.message = rejection;
+      return;
+    }
+
+    const treasure = this.createSpecialTreasure(cell, kind);
+    const nextTreasures = [...this.state.treasures, treasure];
+    const validation = this.validateDungeonLayout(nextTreasures, this.getBossCell());
+
+    if (!validation.valid) {
+      this.state.message = validation.reason ?? 'Tresor special refuse: il doit rester accessible.';
+      return;
+    }
+
+    this.state.gold -= cost;
+    this.state.treasures = nextTreasures;
+    this.state.message = `${specialKind ? specialTreasureLabel(specialKind) : 'Tresor special'} depose: les heros risquent de repartir plus dangereux.`;
+  }
+
   private removeGoldTreasure(cell: GridCell): void {
     const treasure = this.state.treasures.find(
-      (candidate) => candidate.kind === 'gold' && candidate.status !== 'stolen' && isSameCell(candidate.cell, cell),
+      (candidate) => candidate.kind !== 'main' && candidate.status !== 'stolen' && isSameCell(candidate.cell, cell),
     );
 
     if (!treasure) {
-      this.state.message = "Aucun tresor d'or non vole a retirer ici.";
+      this.state.message = 'Aucun tresor secondaire non vole a retirer ici.';
       return;
     }
 
     this.state.treasures = this.state.treasures.filter((candidate) => candidate.id !== treasure.id);
     this.state.gold += treasure.value;
-    this.state.message = `Tresor d'or retire: ${treasure.value} or recuperes.`;
+    this.state.message = `Tresor secondaire retire: ${treasure.value} or recuperes.`;
   }
 
   private createDefenseEntity(type: DefenseType, cell: GridCell, summoned: boolean): DefenseEntity {
@@ -696,6 +784,7 @@ export class DungeonSimulation {
       kills: 0,
       wavesSurvived: 0,
       summoned,
+      threatByAdventurerId: {},
     };
     this.nextDefenseId += 1;
     return entity;
@@ -779,6 +868,7 @@ export class DungeonSimulation {
     this.state.bossLastAbilityName = null;
     this.state.boss.tauntedByAdventurerId = null;
     this.state.boss.tauntTimerMs = 0;
+    this.state.boss.threatByAdventurerId = {};
     resetBossAbilitiesForWave(this.state.boss);
     this.state.defenses.forEach((defense) => {
       defense.cooldownRemainingMs = 0;
@@ -787,6 +877,7 @@ export class DungeonSimulation {
       defense.slowedTimerMs = 0;
       defense.tauntedByAdventurerId = null;
       defense.tauntTimerMs = 0;
+      defense.threatByAdventurerId = {};
     });
     this.state.message = `${this.state.runtime.partyPlan.label}: ${PARTY_SIZE} heros arrivent avec une strategie, ce qui est nouveau et inquietant.`;
   }
@@ -820,6 +911,7 @@ export class DungeonSimulation {
       defense.slowedTimerMs = 0;
       defense.tauntedByAdventurerId = null;
       defense.tauntTimerMs = 0;
+      defense.threatByAdventurerId = {};
     });
     this.state.doors = repairDoors(this.state.doors);
     this.state.message = hadSurvivors
@@ -857,7 +949,7 @@ export class DungeonSimulation {
         disabled:
           this.state.phase !== 'build' ||
           tool.disabled === true ||
-          (tool.type === 'addGoldTreasure' && this.state.treasures.length >= MAX_TREASURES_V1) ||
+          (isAddTreasureTool(tool.type) && this.state.treasures.length >= MAX_TREASURES_V1) ||
           (tool.cost !== null && this.state.gold < tool.cost),
       })),
       availableDefenses: DEFENSE_ORDER.map((type) => {
@@ -1066,6 +1158,7 @@ export class DungeonSimulation {
       traits: profile.traits,
       hp: Math.ceil(adventurer.hp),
       maxHp: adventurer.maxHp,
+      damage: adventurer.damage,
       expeditionCount: profile.expeditionCount,
       survivedExpeditions: profile.survivedExpeditions,
       monstersKilled: profile.monstersKilled,
@@ -1078,6 +1171,7 @@ export class DungeonSimulation {
       isHeir: adventurer.isHeir,
       heirNote: ancestor ? `Venge ${ancestor.name} (vague ${ancestor.deathWave ?? '?'})` : null,
       carryingTreasure: adventurer.carryingTreasure,
+      specialTreasureBonuses: profile.specialTreasureBonuses,
       lastFeat: lastRecord?.note ?? null,
     };
   }
@@ -1198,9 +1292,10 @@ export class DungeonSimulation {
         treasure,
         accessible: hasWalkablePath(ENTRY_CELL, treasure.cell, blockedCellKeys),
         distance: Math.abs(ENTRY_CELL.x - treasure.cell.x) + Math.abs(ENTRY_CELL.y - treasure.cell.y),
+        attraction: treasureAttraction(treasure.kind),
       }))
       .filter((entry) => entry.accessible)
-      .sort((a, b) => a.distance - b.distance || (a.treasure.kind === 'main' ? -1 : 1))[0]?.treasure ?? null;
+      .sort((a, b) => (a.distance - a.attraction) - (b.distance - b.attraction) || (a.treasure.kind === 'main' ? -1 : 1))[0]?.treasure ?? null;
   }
 
   private getRuntimeTreasureTarget(): DungeonTreasure | null {
@@ -1228,6 +1323,24 @@ export class DungeonSimulation {
       kind: 'gold',
       cell: { ...cell },
       value: GOLD_TREASURE_DEFAULT_VALUE,
+      status: 'secure',
+      holderAdventurerId: null,
+      droppedCell: null,
+    };
+    this.nextTreasureId += 1;
+    return treasure;
+  }
+
+  private createSpecialTreasure(
+    cell: GridCell,
+    kind: Extract<DungeonTreasureKind, 'specialWeapon' | 'specialArmor' | 'specialTechnique'>,
+  ): DungeonTreasure {
+    const specialKind = specialKindFromTreasureKind(kind);
+    const treasure: DungeonTreasure = {
+      id: `special-${this.nextTreasureId}`,
+      kind,
+      cell: { ...cell },
+      value: specialKind ? specialTreasureValue(specialKind) : 0,
       status: 'secure',
       holderAdventurerId: null,
       droppedCell: null,
@@ -1298,6 +1411,7 @@ export class DungeonSimulation {
       defense.abilityFxTimerMs = Math.max(0, defense.abilityFxTimerMs - deltaMs);
       defense.slowedTimerMs = Math.max(0, defense.slowedTimerMs - deltaMs);
       defense.tauntTimerMs = Math.max(0, defense.tauntTimerMs - deltaMs);
+      decayThreat(defense.threatByAdventurerId, this.state.adventurers, deltaMs);
       tickCombatAbilityCooldowns(defense.abilityCooldowns, deltaMs);
 
       if (defense.tauntTimerMs === 0) {
@@ -1310,6 +1424,7 @@ export class DungeonSimulation {
     if (this.state.boss.tauntTimerMs === 0) {
       this.state.boss.tauntedByAdventurerId = null;
     }
+    decayThreat(this.state.boss.threatByAdventurerId, this.state.adventurers, deltaMs);
     tickBossAbilities(this.state.boss, deltaMs);
 
     this.state.adventurers.forEach((adventurer) => {
@@ -1396,7 +1511,13 @@ export class DungeonSimulation {
       }
 
       const definition = getDefenseDefinition(defense.type);
-      const target = this.findNearestAdventurer(defense.x, defense.y, definition.attackRange ?? 1, defense.tauntedByAdventurerId);
+      const target = this.findNearestAdventurer(
+        defense.x,
+        defense.y,
+        definition.attackRange ?? 1,
+        defense.tauntedByAdventurerId,
+        defense.threatByAdventurerId,
+      );
 
       if (!target) {
         return;
@@ -1873,12 +1994,15 @@ export class DungeonSimulation {
       return 0;
     }
 
+    const profile = this.state.world.profiles[adventurer.profileId] ?? null;
+    const armorReduction = profile ? computeSpecialTreasureModifiers(profile).incomingDamageReduction : 0;
     const reduction = adventurer.damageReductionTimerMs > 0
       ? Math.max(0, Math.round(damage * COMBAT_ABILITY_BALANCE.warriorDamageReduction))
       : 0;
-    const mitigatedDamage = Math.max(0, damage - reduction);
+    const mitigatedDamage = Math.max(0, damage - reduction - armorReduction);
     const actualDamage = Math.min(adventurer.hp, mitigatedDamage);
     adventurer.hp -= actualDamage;
+    this.state.runtime.stats.combatFeedbackEvents += actualDamage > 0 ? 1 : 0;
 
     if (reduction > 0) {
       this.state.runtime.stats.abilityStats.warriorProtectedDamage += Math.min(damage, reduction);
@@ -1938,7 +2062,10 @@ export class DungeonSimulation {
   }
 
   private damageMinion(minion: DefenseEntity, damage: number, attacker: AdventurerEntity): void {
-    minion.hp -= damage;
+    const actualDamage = Math.min(minion.hp, damage);
+    minion.hp -= actualDamage;
+    addThreat(minion.threatByAdventurerId, attacker, actualDamage * 2 + (attacker.role === 'warrior' ? 5 : 0));
+    this.state.runtime!.stats.combatFeedbackEvents += actualDamage > 0 ? 1 : 0;
 
     if (minion.hp > 0) {
       minion.targetAdventurerId = attacker.id;
@@ -1969,7 +2096,9 @@ export class DungeonSimulation {
     const actualDamage = Math.min(this.state.boss.hp, damage);
     const previousProfileDamage = this.state.runtime.stats.bossDamageByProfile[attacker.profileId] ?? 0;
     this.state.boss.hp -= actualDamage;
+    addThreat(this.state.boss.threatByAdventurerId, attacker, actualDamage * 2.2 + (attacker.role === 'warrior' ? 6 : 0));
     this.state.runtime.stats.bossDamageTaken += actualDamage;
+    this.state.runtime.stats.combatFeedbackEvents += actualDamage > 0 ? 1 : 0;
     this.state.runtime.stats.bossDamageByProfile[attacker.profileId] =
       previousProfileDamage + actualDamage;
 
@@ -2181,6 +2310,7 @@ export class DungeonSimulation {
       panicRetreats: runtime.stats.panicRetreats,
       disobeys: runtime.stats.disobeys,
       treasureStolen: runtime.stats.treasureStolen,
+      specialTreasureLoots: runtime.stats.specialTreasureLoots.slice(0, 4),
       dungeonReputation: this.state.world.dungeonReputation.value,
       reputationDelta,
       trapHighlights,
@@ -2336,6 +2466,10 @@ export class DungeonSimulation {
       lines.push(`Rumeur diffusee: ${rumor.text}`);
     }
 
+    if (runtime.stats.specialTreasureLoots.length > 0) {
+      lines.push(runtime.stats.specialTreasureLoots[0]);
+    }
+
     lines.push(storyLines[0] ?? 'Le royaume classe cette expedition comme instructive et tres mal payee.');
     return lines;
   }
@@ -2362,6 +2496,8 @@ export class DungeonSimulation {
     if (runtime.stats.treasureValueStolen > 0 && runtime.stats.treasureCarrierName) {
       lines.push(`Butin sorti par ${runtime.stats.treasureCarrierName}: ${runtime.stats.treasureValueStolen} valeur d'objectif.`);
     }
+
+    runtime.stats.specialTreasureLoots.slice(0, 2).forEach((line) => lines.push(line));
 
     return lines;
   }
@@ -2473,6 +2609,16 @@ export class DungeonSimulation {
 
         if (treasure.kind === 'gold') {
           this.state.runtime.stats.goldTreasureValueStolen += treasure.value;
+        } else if (isSpecialTreasureKind(treasure.kind)) {
+          const profile = this.state.world.profiles[adventurer.profileId] ?? null;
+          const bonus = profile ? grantSpecialTreasureBonus(profile, treasure, this.state.wave) : null;
+
+          if (bonus && profile) {
+            const line = describeSpecialTreasureBonus(profile.name, bonus);
+            this.state.runtime.stats.specialTreasureLoots.push(line);
+            this.state.runtime.stats.storyEvents.push(line);
+            addChronicle(this.state.world, line);
+          }
         } else {
           this.state.runtime.stats.treasureStolen = true;
         }
@@ -2482,14 +2628,21 @@ export class DungeonSimulation {
       }
 
       recordTreasureTheft(this.state.world, adventurer.profileId, treasure?.kind === 'gold' ? treasure.value : 0);
+      const escapedSpecialKind = treasure && isSpecialTreasureKind(treasure.kind)
+        ? specialKindFromTreasureKind(treasure.kind)
+        : null;
       this.state.runtime.stats.storyEvents.push(
         treasure?.kind === 'gold'
           ? `${adventurer.name} s'echappe avec ${treasure.value} or deja deposes.`
-          : `${adventurer.name} s'echappe avec le tresor du donjon.`,
+          : escapedSpecialKind
+            ? `${adventurer.name} s'echappe avec ${specialTreasureLabel(escapedSpecialKind)}.`
+            : `${adventurer.name} s'echappe avec le tresor du donjon.`,
       );
       this.state.message = treasure?.kind === 'gold'
         ? `${adventurer.name} sort avec un tresor d'or. L'or etait deja depose: pas de double facture.`
-        : `${adventurer.name} sort avec TON tresor. La comptabilite exige des represailles.`;
+        : treasure && isSpecialTreasureKind(treasure.kind)
+          ? `${adventurer.name} sort avec un tresor special. Tu viens peut-etre d'armer un survivant.`
+          : `${adventurer.name} sort avec TON tresor. La comptabilite exige des represailles.`;
     }
 
     const injury = createInjury(
@@ -2689,7 +2842,7 @@ export class DungeonSimulation {
       elapsedMs: runtime.elapsedMs,
       damageMinion: (target, damage, attacker) => this.damageMinion(target, damage, attacker),
       damageBoss: (damage, attacker) => this.damageBoss(damage, attacker),
-      healAdventurer: (target, amount) => this.healAdventurer(target, amount),
+      healAdventurer: (target, amount, healer) => this.healAdventurer(target, amount, healer),
       suppressTrap: (trap, durationMs) => {
         trap.cooldownRemainingMs = Math.max(trap.cooldownRemainingMs, durationMs);
         trap.abilityFxTimerMs = COMBAT_ABILITY_BALANCE.abilityFxMs;
@@ -2709,7 +2862,7 @@ export class DungeonSimulation {
     });
   }
 
-  private healAdventurer(target: AdventurerEntity, amount: number): number {
+  private healAdventurer(target: AdventurerEntity, amount: number, healer: AdventurerEntity | null = null): number {
     if (!target.alive || target.escaped) {
       return 0;
     }
@@ -2717,6 +2870,23 @@ export class DungeonSimulation {
     const healed = Math.min(amount, target.maxHp - target.hp);
     target.hp += healed;
     target.abilityFxTimerMs = Math.max(target.abilityFxTimerMs, COMBAT_ABILITY_BALANCE.abilityFxMs);
+
+    if (healed > 0 && this.state.runtime) {
+      this.state.runtime.stats.combatFeedbackEvents += 1;
+
+      if (healer) {
+        this.state.defenses.forEach((defense) => {
+          if (defense.alive && defense.kind === 'minion' && distance(defense.x, defense.y, healer.x, healer.y) <= 4.4) {
+            addThreat(defense.threatByAdventurerId, healer, healed * 0.65);
+          }
+        });
+
+        if (distance(this.state.boss.x, this.state.boss.y, healer.x, healer.y) <= this.state.boss.detectionRange + 1.2) {
+          addThreat(this.state.boss.threatByAdventurerId, healer, healed * 0.55);
+        }
+      }
+    }
+
     return healed;
   }
 
@@ -2887,21 +3057,15 @@ export class DungeonSimulation {
     this.state.defenses = this.state.defenses.filter((defense) => defense.kind === 'trap' || defense.alive);
   }
 
-  private findNearestAdventurer(x: number, y: number, maxRange: number, preferredId: string | null = null): AdventurerEntity | null {
+  private findNearestAdventurer(
+    x: number,
+    y: number,
+    maxRange: number,
+    preferredId: string | null = null,
+    threatByAdventurerId: Record<string, number> = {},
+  ): AdventurerEntity | null {
     const alive = this.state.adventurers.filter((adventurer) => adventurer.alive && !adventurer.escaped);
-    const preferred = preferredId ? alive.find((adventurer) => adventurer.id === preferredId) ?? null : null;
-
-    if (preferred && distance(x, y, preferred.x, preferred.y) <= maxRange + 0.8) {
-      return preferred;
-    }
-
-    return alive
-      .map((adventurer) => ({
-        adventurer,
-        distance: distance(x, y, adventurer.x, adventurer.y),
-      }))
-      .filter((entry) => entry.distance <= maxRange)
-      .sort((a, b) => a.distance - b.distance)[0]?.adventurer ?? null;
+    return chooseThreatTarget(x, y, alive, maxRange, threatByAdventurerId, preferredId);
   }
 
   private findTargetMinion(adventurer: AdventurerEntity): DefenseEntity | null {
@@ -2998,6 +3162,8 @@ function createEmptyWaveStats(): WaveStats {
     treasureTargetId: null,
     treasureValueStolen: 0,
     goldTreasureValueStolen: 0,
+    specialTreasureLoots: [],
+    combatFeedbackEvents: 0,
   };
 }
 
@@ -3019,6 +3185,25 @@ function createMainTreasure(): DungeonTreasure {
     holderAdventurerId: null,
     droppedCell: null,
   };
+}
+
+function isAddTreasureTool(type: ConstructionTool): boolean {
+  return type === 'addGoldTreasure'
+    || type === 'addWeaponTreasure'
+    || type === 'addArmorTreasure'
+    || type === 'addTechniqueTreasure';
+}
+
+function treasureAttraction(kind: DungeonTreasureKind): number {
+  if (kind === 'main') {
+    return 2;
+  }
+
+  if (kind === 'gold') {
+    return 1.4;
+  }
+
+  return SPECIAL_TREASURE_BALANCE.attractionWeight;
 }
 
 function formatRoster(roles: AdventurerRole[]): string {

@@ -22,6 +22,9 @@ export type ConstructionTool =
   | 'moveBoss'
   | 'moveTreasure'
   | 'addGoldTreasure'
+  | 'addWeaponTreasure'
+  | 'addArmorTreasure'
+  | 'addTechniqueTreasure'
   | 'removeTreasure';
 
 export type AdventurerRole = 'warrior' | 'thief' | 'mage' | 'healer';
@@ -82,7 +85,15 @@ export interface TavernRumor {
 }
 
 export type TreasureStatus = 'secure' | 'carried' | 'dropped' | 'stolen';
-export type DungeonTreasureKind = 'main' | 'gold';
+export type SpecialTreasureKind = 'weapon' | 'armor' | 'technique';
+export type DungeonTreasureKind = 'main' | 'gold' | 'specialWeapon' | 'specialArmor' | 'specialTechnique';
+
+export interface SpecialTreasureBonus {
+  kind: SpecialTreasureKind;
+  label: string;
+  sourceTreasureId: string;
+  acquiredWave: number;
+}
 
 export interface TreasureState {
   status: TreasureStatus;
@@ -224,6 +235,7 @@ export interface AdventurerProfile {
   lastLootedGold: number;
   totalLootedGold: number;
   notableLootEscapeCount: number;
+  specialTreasureBonuses: SpecialTreasureBonus[];
 }
 
 export interface GuildProfile {
@@ -303,6 +315,7 @@ export interface DefenseEntity {
   kills: number;
   wavesSurvived: number;
   summoned: boolean;
+  threatByAdventurerId: Record<string, number>;
 }
 
 export interface AdventurerEntity {
@@ -352,6 +365,7 @@ export interface AdventurerEntity {
   lastBarkKey: string | null;
   lastAvoidedTrapKey: string | null;
   isHeir: boolean;
+  specialTreasureBonuses: SpecialTreasureBonus[];
 }
 
 export interface BossAbilityState {
@@ -376,6 +390,7 @@ export interface BossEntity {
   tauntedByAdventurerId: string | null;
   tauntTimerMs: number;
   abilities: Record<BossAbilityType, BossAbilityState>;
+  threatByAdventurerId: Record<string, number>;
 }
 
 export interface AdaptationMemory {
@@ -445,6 +460,8 @@ export interface WaveStats {
   treasureTargetId: string | null;
   treasureValueStolen: number;
   goldTreasureValueStolen: number;
+  specialTreasureLoots: string[];
+  combatFeedbackEvents: number;
 }
 
 export interface WaveRuntime {
@@ -600,6 +617,7 @@ export interface WaveReport {
   panicRetreats: number;
   disobeys: number;
   treasureStolen: boolean;
+  specialTreasureLoots: string[];
   dungeonReputation: number;
   reputationDelta: number;
   trapHighlights: ReportEntry[];

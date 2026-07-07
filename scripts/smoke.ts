@@ -30,8 +30,10 @@ import {
 import { computeDoorRemovalRefund } from '../src/systems/economyBalance';
 import { updateMonsterAI } from '../src/systems/monsterAISystem';
 import { choosePostTreasureGoal, chooseTreasureGroupObjective, createPartyPlan } from '../src/systems/partyAISystem';
+import { addThreat, chooseThreatTarget } from '../src/systems/combatThreatSystem';
 import {
   activateProfileForExpedition,
+  createAdventurerProfile,
   createInitialWorldMemory,
   getReturningSurvivorCandidates,
   recordProfileDeath,
@@ -43,7 +45,11 @@ import {
   selectProfilesForWave,
   type ExpeditionCompositionContext,
 } from '../src/systems/expeditionComposition';
-import { buildWaveRoster } from '../src/systems/waveDirector';
+import { buildWaveRoster, createAdventurer } from '../src/systems/waveDirector';
+import {
+  computeSpecialTreasureModifiers,
+  grantSpecialTreasureBonus,
+} from '../src/systems/specialTreasuresSystem';
 import { findPath, hasWalkablePath } from '../src/systems/pathfinding';
 import { buildGuildTavernScene } from '../src/systems/guildTavernSceneSystem';
 import type {
@@ -53,6 +59,7 @@ import type {
   BossEntity,
   DefenseEntity,
   DefenseType,
+  DungeonTreasure,
   ExpeditionParticipantReport,
   GridCell,
   WaveReport,
@@ -94,6 +101,8 @@ function createSmokeStats(): WaveStats {
     treasureTargetId: null,
     treasureValueStolen: 0,
     goldTreasureValueStolen: 0,
+    specialTreasureLoots: [],
+    combatFeedbackEvents: 0,
   };
 }
 
@@ -177,6 +186,7 @@ function createSmokeAdventurer(role: AdventurerRole, id: string, x: number, y: n
     lastBarkKey: null,
     lastAvoidedTrapKey: null,
     isHeir: false,
+    specialTreasureBonuses: [],
   };
 }
 
@@ -210,6 +220,7 @@ function createSmokeDefense(type: DefenseType, id: string, x: number, y: number)
     kills: 0,
     wavesSurvived: 0,
     summoned: false,
+    threatByAdventurerId: {},
   };
 }
 
@@ -333,6 +344,7 @@ function createSmokeBoss(): BossEntity {
     targetAdventurerId: null,
     tauntedByAdventurerId: null,
     tauntTimerMs: 0,
+    threatByAdventurerId: {},
     abilities: {
       shockwave: { type: 'shockwave', cooldownRemainingMs: 0, usesThisWave: 0 },
       roar: { type: 'roar', cooldownRemainingMs: 0, usesThisWave: 0 },
@@ -1152,6 +1164,72 @@ function validateTreasureGroupDecisionRules(): void {
   }
 }
 
+function validateSpecialTreasureRules(): void {
+  const memory = createInitialWorldMemory();
+  const warriorProfile = createAdventurerProfile('warrior', memory, 2, 0);
+  const mageProfile = createAdventurerProfile('mage', memory, 2, 1);
+  const healerProfile = createAdventurerProfile('healer', memory, 2, 2);
+
+  const weaponTreasure: DungeonTreasure = {
+    id: 'weapon-test',
+    kind: 'specialWeapon',
+    cell: { x: 8, y: 8 },
+    value: 18,
+    status: 'stolen',
+    holderAdventurerId: null,
+    droppedCell: null,
+  };
+  const techniqueTreasure: DungeonTreasure = {
+    id: 'technique-test',
+    kind: 'specialTechnique',
+    cell: { x: 9, y: 8 },
+    value: 20,
+    status: 'stolen',
+    holderAdventurerId: null,
+    droppedCell: null,
+  };
+
+  const firstWeaponBonus = grantSpecialTreasureBonus(warriorProfile, weaponTreasure, 2);
+  const duplicateWeaponBonus = grantSpecialTreasureBonus(warriorProfile, weaponTreasure, 3);
+  const warriorModifiers = computeSpecialTreasureModifiers(warriorProfile);
+  const warriorEntity = createAdventurer(warriorProfile, 'special-warrior', 2, 0);
+
+  if (!firstWeaponBonus || duplicateWeaponBonus || warriorProfile.specialTreasureBonuses.length !== 1 || warriorModifiers.damageBonus < 2) {
+    console.error('ECHEC: un tresor d arme devrait accorder un bonus persistant unique au survivant.');
+    process.exit(1);
+  }
+
+  if (warriorEntity.specialTreasureBonuses.length !== 1 || warriorEntity.damage <= 0) {
+    console.error('ECHEC: un aventurier cree depuis un profil bonifie devrait conserver ses tresors speciaux.');
+    process.exit(1);
+  }
+
+  grantSpecialTreasureBonus(mageProfile, techniqueTreasure, 2);
+  const mageModifiers = computeSpecialTreasureModifiers(mageProfile);
+
+  if (mageModifiers.damageBonus < 2) {
+    console.error('ECHEC: un tresor de technique devrait renforcer le mage sans creer de nouvelle capacite.');
+    process.exit(1);
+  }
+
+  grantSpecialTreasureBonus(healerProfile, techniqueTreasure, 2);
+  const healerModifiers = computeSpecialTreasureModifiers(healerProfile);
+
+  if (healerModifiers.damageBonus !== 0) {
+    console.error('ECHEC: la technique du soigneur ne devrait pas devenir un bonus de degats generique.');
+    process.exit(1);
+  }
+
+  const buildSim = new DungeonSimulation();
+  buildSim.startNewGame();
+  const toolTypes = buildSim.getSnapshot().constructionTools.map((tool) => tool.type);
+
+  if (!toolTypes.includes('addWeaponTreasure') || !toolTypes.includes('addArmorTreasure') || !toolTypes.includes('addTechniqueTreasure')) {
+    console.error('ECHEC: les outils de tresors speciaux devraient etre disponibles en phase Build.');
+    process.exit(1);
+  }
+}
+
 function validateCombatAbilityRules(): void {
   const warrior = createSmokeAdventurer('warrior', 'warrior', 4, 4);
   const healer = createSmokeAdventurer('healer', 'healer', 4.7, 4);
@@ -1505,6 +1583,25 @@ function validateDefenseAggroRules(): void {
     console.error("ECHEC: un sbire attaque devrait garder l'attaquant comme cible d'aggro et avancer vers lui.");
     process.exit(1);
   }
+
+  const warrior = createSmokeAdventurer('warrior', 'aggro-warrior', 6, 6);
+  const mage = createSmokeAdventurer('mage', 'aggro-mage', 6.2, 6);
+  const healer = createSmokeAdventurer('healer', 'aggro-healer', 6.1, 6);
+  const emptyThreat: Record<string, number> = {};
+  const defaultTarget = chooseThreatTarget(6, 5, [mage, healer, warrior], 2, emptyThreat);
+
+  if (defaultTarget?.id !== warrior.id) {
+    console.error('ECHEC: a menace egale, un ennemi devrait privilegier le guerrier de premiere ligne.');
+    process.exit(1);
+  }
+
+  addThreat(emptyThreat, mage, 120);
+  const threatenedTarget = chooseThreatTarget(6, 5, [warrior, mage, healer], 2, emptyThreat);
+
+  if (threatenedTarget?.id !== mage.id) {
+    console.error('ECHEC: une forte menace accumulee devrait pouvoir attirer l aggro sur un DPS.');
+    process.exit(1);
+  }
 }
 
 function buildFakeParticipant(overrides: Partial<ExpeditionParticipantReport>): ExpeditionParticipantReport {
@@ -1553,6 +1650,7 @@ function buildFakeReport(overrides: Partial<Omit<WaveReport, 'guildTavernScene'>
     gainsLosses: [],
     guildChanges: [],
     economyLines: [],
+    specialTreasureLoots: [],
     participants: [],
     chronicle: {
       title: 'Test',
@@ -1758,6 +1856,7 @@ validateDoorRemovalRules();
 validateDoorNoThiefRetreat();
 validateDefensiveUnitsRespectClosedDoors();
 validateTreasureGroupDecisionRules();
+validateSpecialTreasureRules();
 validateCombatAbilityRules();
 validateGoblinChaseRules();
 validateDefenseAggroRules();

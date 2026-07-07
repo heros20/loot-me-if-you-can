@@ -22,7 +22,14 @@ import {
   hasAdjacentDugTile,
 } from '../game/dungeonTiles';
 import { DungeonSimulation } from '../game/DungeonSimulation';
-import type { AdventurerEntity, DefenseEntity, DungeonDoor, DungeonTile } from '../game/types';
+import type {
+  AdventurerEntity,
+  ConstructionTool,
+  DefenseEntity,
+  DungeonDoor,
+  DungeonTile,
+  DungeonTreasureKind,
+} from '../game/types';
 import { getAdventurerDefinition, getDefenseDefinition } from '../entities/definitions';
 import { canBuildDefenseOnTile, canMarkRoomTile } from '../systems/dungeonConstruction';
 import { canPlaceDoorAt, findActiveDoorAt, findDoorAt } from '../systems/doorSystem';
@@ -265,6 +272,7 @@ export class DungeonScene extends Phaser.Scene {
       this.bossView.container.setAlpha(renderState.phase === 'defeat' ? 0.55 : 1);
 
       if (this.previousBossHp > 0 && renderState.boss.hp < this.previousBossHp) {
+        this.spawnFloatingText(bossWorld.x, bossWorld.y - 36, `-${Math.ceil(this.previousBossHp - renderState.boss.hp)}`, 0xffd1d1);
         this.pulseHit(this.bossView.container);
         this.cameras.main.shake(90, 0.0025);
       }
@@ -324,15 +332,16 @@ export class DungeonScene extends Phaser.Scene {
       this.defenseViews.set(defense.id, view);
     }
 
+    const currentWorld = defense.kind === 'minion'
+      ? gridPositionToWorld(defense.x, defense.y)
+      : cellToWorld(defense.cell);
     const previousHp = this.previousDefenseHp.get(defense.id);
     if (previousHp !== undefined && defense.hp < previousHp) {
+      this.spawnFloatingText(currentWorld.x, currentWorld.y - 28, `-${Math.ceil(previousHp - defense.hp)}`, 0xffd1d1);
       this.pulseHit(view.container);
     }
 
     this.previousDefenseHp.set(defense.id, defense.hp);
-    const currentWorld = defense.kind === 'minion'
-      ? gridPositionToWorld(defense.x, defense.y)
-      : cellToWorld(defense.cell);
     view.container.setPosition(currentWorld.x, currentWorld.y);
     view.container.setAlpha(defense.kind === 'trap' && defense.cooldownRemainingMs > 0 ? 0.52 : 1);
 
@@ -416,8 +425,11 @@ export class DungeonScene extends Phaser.Scene {
 
     const previousHp = this.previousAdventurerHp.get(adventurer.id);
     if (previousHp !== undefined && adventurer.hp < previousHp) {
+      this.spawnFloatingText(world.x, world.y - 30, `-${Math.ceil(previousHp - adventurer.hp)}`, 0xffd1d1);
       this.pulseHit(view.container);
       this.cameras.main.shake(60, 0.0017);
+    } else if (previousHp !== undefined && adventurer.hp > previousHp) {
+      this.spawnFloatingText(world.x, world.y - 30, `+${Math.ceil(adventurer.hp - previousHp)}`, 0x9ee29f);
     }
 
     this.previousAdventurerHp.set(adventurer.id, adventurer.hp);
@@ -556,6 +568,29 @@ export class DungeonScene extends Phaser.Scene {
     }
   }
 
+  private spawnFloatingText(x: number, y: number, text: string, color: number): void {
+    const label = this.add
+      .text(x, y, text, {
+        color: `#${color.toString(16).padStart(6, '0')}`,
+        fontSize: '11px',
+        fontStyle: 'bold',
+        fontFamily: 'monospace',
+        stroke: '#100e12',
+        strokeThickness: 3,
+      })
+      .setOrigin(0.5)
+      .setDepth(260);
+
+    this.tweens.add({
+      targets: label,
+      y: y - 18,
+      alpha: 0,
+      duration: 620,
+      ease: 'Sine.easeOut',
+      onComplete: () => label.destroy(),
+    });
+  }
+
   private drawHealthBars(): void {
     const renderState = this.simulation.getRenderState();
     this.hpGraphics.clear();
@@ -648,16 +683,16 @@ export class DungeonScene extends Phaser.Scene {
     });
   }
 
-  private drawTreasureMarker(x: number, y: number, kind: 'main' | 'gold', radius: number): void {
-    const fill = kind === 'main' ? 0xf6d88a : 0xffc44d;
-    const stroke = kind === 'main' ? 0xa8791f : 0x7a4a13;
+  private drawTreasureMarker(x: number, y: number, kind: DungeonTreasureKind, radius: number): void {
+    const fill = treasureFillColor(kind);
+    const stroke = treasureStrokeColor(kind);
 
     this.treasureGraphics.fillStyle(fill, 0.96);
     this.treasureGraphics.fillCircle(x, y, radius);
     this.treasureGraphics.lineStyle(2, stroke, 1);
     this.treasureGraphics.strokeCircle(x, y, radius);
 
-    if (kind === 'gold') {
+    if (kind !== 'main') {
       this.treasureGraphics.lineStyle(1, 0x3a220a, 0.9);
       this.treasureGraphics.beginPath();
       this.treasureGraphics.moveTo(x - radius + 2, y);
@@ -732,7 +767,7 @@ export class DungeonScene extends Phaser.Scene {
               || activeTreasureOnCell
               || Boolean(findActiveDoorAt(renderState.doors, cell))
               || renderState.defenses.some((defense) => defense.alive && isSameCell(defense.cell, cell))
-          : constructionTool === 'moveTreasure' || constructionTool === 'addGoldTreasure'
+          : constructionTool === 'moveTreasure' || isTreasurePlacementTool(constructionTool)
             ? !tile
               || tile.type !== 'floor' && tile.type !== 'room'
               || isInEntrySafeZone(cell)
@@ -741,9 +776,9 @@ export class DungeonScene extends Phaser.Scene {
               || activeTreasureOnCell
               || Boolean(findActiveDoorAt(renderState.doors, cell))
               || renderState.defenses.some((defense) => defense.alive && isSameCell(defense.cell, cell))
-              || (constructionTool === 'addGoldTreasure' && renderState.gold < 20)
+              || renderState.gold < treasurePlacementCost(constructionTool)
           : constructionTool === 'removeTreasure'
-            ? !renderState.treasures.some((treasure) => treasure.kind === 'gold' && treasure.status !== 'stolen' && isSameCell(treasure.cell, cell))
+            ? !renderState.treasures.some((treasure) => treasure.kind !== 'main' && treasure.status !== 'stolen' && isSameCell(treasure.cell, cell))
           : !canBuildDefenseOnTile(tile);
     const color = invalid ? 0x8f2631 : 0xe1b35a;
     this.hoverGraphics.lineStyle(3, color, 0.86);
@@ -907,6 +942,61 @@ function defenseFxText(defense: DefenseEntity): string {
       return 'PIEGE -';
     default:
       return 'ACTIF';
+  }
+}
+
+function isTreasurePlacementTool(tool: ConstructionTool | null): boolean {
+  return tool === 'addGoldTreasure'
+    || tool === 'addWeaponTreasure'
+    || tool === 'addArmorTreasure'
+    || tool === 'addTechniqueTreasure';
+}
+
+function treasurePlacementCost(tool: ConstructionTool | null): number {
+  switch (tool) {
+    case 'addGoldTreasure':
+      return 20;
+    case 'addWeaponTreasure':
+    case 'addArmorTreasure':
+      return 18;
+    case 'addTechniqueTreasure':
+      return 20;
+    default:
+      return 0;
+  }
+}
+
+function treasureFillColor(kind: DungeonTreasureKind): number {
+  switch (kind) {
+    case 'main':
+      return 0xf6d88a;
+    case 'gold':
+      return 0xffc44d;
+    case 'specialWeapon':
+      return 0xd85a32;
+    case 'specialArmor':
+      return 0x7d94d6;
+    case 'specialTechnique':
+      return 0xb873d6;
+    default:
+      return 0xffc44d;
+  }
+}
+
+function treasureStrokeColor(kind: DungeonTreasureKind): number {
+  switch (kind) {
+    case 'main':
+      return 0xa8791f;
+    case 'gold':
+      return 0x7a4a13;
+    case 'specialWeapon':
+      return 0x7d2f1b;
+    case 'specialArmor':
+      return 0x3d508f;
+    case 'specialTechnique':
+      return 0x66357d;
+    default:
+      return 0x7a4a13;
   }
 }
 

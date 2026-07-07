@@ -4,7 +4,7 @@
 |---|---|
 | **Statut** | Vivant — journal append-only, on n'édite jamais une décision passée |
 | **Propriétaire** | Game Design |
-| **Dernière mise à jour** | 2026-07-07 (D-018) |
+| **Dernière mise à jour** | 2026-07-07 (D-020) |
 | **Documents liés** | [DESIGN_PRINCIPLES.md](./DESIGN_PRINCIPLES.md) · [GAME_DESIGN_DOCUMENT.md](./GAME_DESIGN_DOCUMENT.md) |
 
 ---
@@ -26,6 +26,18 @@ Chaque décision structurante obtient une entrée, numérotée dans l'ordre chro
 **Conséquences** : impact sur le design, le code ou la production
 **Remplace / Remplacé par** : lien vers une autre entrée le cas échéant
 ```
+
+---
+
+## D-020 - Les tresors speciaux sont des bonus persistants simples, pas un inventaire
+
+**Date** : 2026-07-07
+**Statut** : Actif
+**Contexte** : passe Special Treasures V1 + Combat Damage Feedback V0 + Formation/Aggro Logic V0. Le studio voulait que certains tresors secondaires donnent une consequence durable si un aventurier survit avec eux, sans ouvrir Combat Roles & Abilities V1, Kingdom Remembers, inventaire complet, talents ou systeme d'equipement.
+**Decision** : les tresors d'arme, d'armure et de technique sont des objectifs secondaires Build comme l'or, limites par le plafond global de tresors. Ils n'accordent un bonus qu'au profil du porteur qui s'echappe vivant. Chaque type de bonus est unique par profil. Les effets restent passifs et lisibles : arme = degats, armure = PV + reduction legere, technique = bonus adapte au role. Le combat affiche les degats/soins par feedback flottant et l'IA cible via une table de menace legere qui favorise naturellement le guerrier sauf menace DPS/soin plus forte.
+**Alternatives envisagees** : creer un inventaire/slot d'equipement (rejete : trop gros pour V1) ; ajouter des sorts/capacites liees aux tresors (rejete : demarrerait Combat Roles & Abilities V1) ; lier les tresors a une memoire du Royaume (rejete : Kingdom Remembers reste hors perimetre) ; faire ignorer les tresors speciaux par l'IA (rejete : ils doivent attirer le risque comme des objectifs secondaires).
+**Consequences** : `specialTreasuresSystem.ts` centralise les bonus, `combatThreatSystem.ts` centralise l'aggro legere, et les rapports/taverne peuvent mentionner le loot special sans creer de nouvel ecran. Les futures extensions devront partir de ce contrat minimal ou le reviser explicitement.
+**Remplace / Remplace par** :
 
 ---
 

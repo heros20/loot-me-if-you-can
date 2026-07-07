@@ -1,6 +1,8 @@
 import { cellKey } from '../game/constants';
 import { getDefenseDefinition } from '../entities/definitions';
 import { findVisibleTrap } from './adventurerDecisionSystem';
+import { chooseThreatTarget } from './combatThreatSystem';
+import { SPECIAL_TREASURE_BALANCE } from './specialTreasuresSystem';
 import type {
   AdventurerEntity,
   BossEntity,
@@ -51,7 +53,7 @@ export interface AdventurerAbilityContext {
   elapsedMs: number;
   damageMinion: (target: DefenseEntity, damage: number, attacker: AdventurerEntity) => void;
   damageBoss: (damage: number, attacker: AdventurerEntity) => void;
-  healAdventurer: (target: AdventurerEntity, amount: number) => number;
+  healAdventurer: (target: AdventurerEntity, amount: number, healer?: AdventurerEntity) => number;
   suppressTrap: (trap: DefenseEntity, durationMs: number) => void;
   bark: (adventurer: AdventurerEntity, kind: BarkKind) => void;
   message: (text: string) => void;
@@ -284,7 +286,8 @@ function tryHealerSingleHeal(adventurer: AdventurerEntity, context: AdventurerAb
     return false;
   }
 
-  const healed = context.healAdventurer(target, COMBAT_ABILITY_BALANCE.healerSingleAmount);
+  const amount = COMBAT_ABILITY_BALANCE.healerSingleAmount + healerTechniqueBonus(adventurer);
+  const healed = context.healAdventurer(target, amount, adventurer);
 
   if (healed <= 0) {
     return false;
@@ -313,7 +316,8 @@ function tryHealerGroupHeal(adventurer: AdventurerEntity, context: AdventurerAbi
     return false;
   }
 
-  const healed = wounded.reduce((total, ally) => total + context.healAdventurer(ally, COMBAT_ABILITY_BALANCE.healerGroupAmount), 0);
+  const amount = COMBAT_ABILITY_BALANCE.healerGroupAmount + healerTechniqueBonus(adventurer);
+  const healed = wounded.reduce((total, ally) => total + context.healAdventurer(ally, amount, adventurer), 0);
 
   if (healed <= 0) {
     return false;
@@ -464,14 +468,14 @@ function findMinionTarget(
   range: number,
   predicate: (adventurer: AdventurerEntity) => boolean = () => true,
 ): AdventurerEntity | null {
-  return adventurers
-    .filter((adventurer) => adventurer.alive && !adventurer.escaped && predicate(adventurer))
-    .map((adventurer) => ({
-      adventurer,
-      distance: distance(defense.x, defense.y, adventurer.x, adventurer.y),
-    }))
-    .filter((entry) => entry.distance <= range)
-    .sort((a, b) => a.distance - b.distance)[0]?.adventurer ?? null;
+  return chooseThreatTarget(
+    defense.x,
+    defense.y,
+    adventurers.filter((adventurer) => predicate(adventurer)),
+    range,
+    defense.threatByAdventurerId,
+    defense.tauntedByAdventurerId,
+  );
 }
 
 function isNearLockedDoor(adventurer: AdventurerEntity, doors: DungeonDoor[]): boolean {
@@ -485,4 +489,10 @@ function isNearLockedDoor(adventurer: AdventurerEntity, doors: DungeonDoor[]): b
 
 function distance(ax: number, ay: number, bx: number, by: number): number {
   return Math.hypot(ax - bx, ay - by);
+}
+
+function healerTechniqueBonus(adventurer: AdventurerEntity): number {
+  return adventurer.specialTreasureBonuses.some((bonus) => bonus.kind === 'technique')
+    ? SPECIAL_TREASURE_BALANCE.techniqueHealingBonus
+    : 0;
 }

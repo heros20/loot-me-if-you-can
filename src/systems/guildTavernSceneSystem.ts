@@ -250,6 +250,16 @@ function buildSurvivorBeats(report: SceneSource, layout: TavernSceneLayout, ctx:
 
   const archivist = layout.counterActors.find((actor) => actor.id === 'archivist');
 
+  if (archivist && report.specialTreasureLoots.length > 0) {
+    beats.push({
+      id: 'special-treasure-loot',
+      actorId: archivist.id,
+      speakerName: archivist.name,
+      role: archivist.role,
+      text: report.specialTreasureLoots[0],
+    });
+  }
+
   if (archivist && report.heldBackSurvivorNames.length > 0) {
     const heldBack = report.heldBackSurvivorNames[0];
     const text = report.doorNoThiefRetreats > 0 && heldBack

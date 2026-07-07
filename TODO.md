@@ -8,7 +8,7 @@
   - V1.4 Initial Dungeon Layout V1.1 is implemented: corrected the over-carved V1 (10.9% dug, straight highway) into a ~48% dug / ~52% rock layout with 7 real rooms/corridors, an 11-turn 37-cell entry -> boss route, and a mandatory defense-room choke point.
   - V2.0 generation aleatoire de la carte au lancement d'un run (seed, une seule fois par partie, jamais par expedition) should use the V1.1 room/corridor/choke-point shape as its baseline, not just its dug ratio.
   - V2.1 zones/antichambres sur une meme carte, V3.0 plusieurs niveaux + sous-boss.
-- Future treasure types: weapon, armor, and technique treasures are not started; decide later whether they are loot, equipment hooks, or named legendary objects.
+- Special Treasures V1 is implemented for weapon, armor, and technique secondary treasures. Future work: decide later whether any of them become named legendary objects, relationship hooks, or visible inventory, without expanding V1 into a full inventory now.
 - Future survivor continuity: connect survivor chronicle consequences into the next expedition only after the current profile/chronicle loop is playtested.
 - Future survivor availability: explicit rest/refusal/hospital rules only after Survivor Continuity V1 has enough playtest data.
 - Future veteran leadership: turn the current narrative veteran into a mechanical leader only if repeated returnees need gameplay weight.
@@ -29,6 +29,7 @@
 - Add more boss abilities and an ability upgrade path funded by infamy.
 - Add adventurer equipment traits after repeated deaths.
 - Combat Roles & Abilities V0 is in: future work should tune cooldowns/readability only after more playtest data, not add new classes or ability trees yet.
+- Combat Damage Feedback V0 and Formation/Aggro Logic V0 are in: future work should tune readability/threat weights only after playtest data, not add new abilities or classes yet.
 - Let escaped treasure thieves come back richer and better equipped (bounty pressure).
 - Give named rooms persistent titles based on what happened there.
 - Improve injuries with recovery timers, permanent scars, and visible behavior changes.

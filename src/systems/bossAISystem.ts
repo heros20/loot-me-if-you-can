@@ -1,4 +1,5 @@
 import type { AdventurerEntity, BossEntity } from '../game/types';
+import { chooseThreatTarget } from './combatThreatSystem';
 
 interface BossMovementOptions {
   canMoveBetween: (fromX: number, fromY: number, toX: number, toY: number) => boolean;
@@ -15,14 +16,14 @@ export function chooseBossTarget(boss: BossEntity, adventurers: AdventurerEntity
     return taunter;
   }
 
-  return active
-    .map((adventurer) => ({
-      adventurer,
-      distance: distance(boss.x, boss.y, adventurer.x, adventurer.y),
-      healthRatio: adventurer.hp / adventurer.maxHp,
-    }))
-    .filter((entry) => entry.distance <= boss.detectionRange)
-    .sort((a, b) => a.healthRatio - b.healthRatio || a.distance - b.distance)[0]?.adventurer ?? null;
+  return chooseThreatTarget(
+    boss.x,
+    boss.y,
+    active,
+    boss.detectionRange,
+    boss.threatByAdventurerId,
+    null,
+  );
 }
 
 export function updateBossMovement(

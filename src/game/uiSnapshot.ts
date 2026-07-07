@@ -9,6 +9,7 @@ import type {
   DefenseType,
   DungeonValidation,
   GamePhase,
+  SpecialTreasureBonus,
   TreasureStatus,
   WaveReport,
 } from './types';
@@ -66,6 +67,7 @@ export interface InspectedAdventurer {
   traits: AdventurerTrait[];
   hp: number;
   maxHp: number;
+  damage: number;
   expeditionCount: number;
   survivedExpeditions: number;
   monstersKilled: number;
@@ -78,6 +80,7 @@ export interface InspectedAdventurer {
   isHeir: boolean;
   heirNote: string | null;
   carryingTreasure: boolean;
+  specialTreasureBonuses: SpecialTreasureBonus[];
   lastFeat: string | null;
 }
 

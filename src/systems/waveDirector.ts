@@ -2,6 +2,7 @@ import { ENTRY_CELL, PARTY_SIZE, cellKey } from '../game/constants';
 import type { AdventurerEntity, AdventurerProfile, AdventurerRole, AdaptationMemory } from '../game/types';
 import { getAdventurerDefinition } from '../entities/definitions';
 import { COMBAT_ABILITY_BALANCE } from './combatAbilitySystem';
+import { computeSpecialTreasureModifiers } from './specialTreasuresSystem';
 
 const ADAPTIVE_ROLE_ORDER: AdventurerRole[] = ['warrior', 'thief', 'mage', 'healer'];
 const BASE_ROLE_SCORE: Record<AdventurerRole, number> = {
@@ -45,11 +46,20 @@ export function createAdventurer(profile: AdventurerProfile, id: string, wave: n
   const courageDamage = profile.traits.includes('courageous') ? 1.05 : 1;
   const cautionHp = profile.traits.includes('cautious') ? 1.04 : 1;
   const greedSpeed = profile.traits.includes('greedy') ? 1.04 : 1;
+  const specialModifiers = computeSpecialTreasureModifiers(profile);
   const injuryPerformanceMultiplier = profile.injuries.reduce(
     (multiplier, injury) => multiplier * injury.performanceMultiplier,
     1,
   );
   const spawnOffset = ((index % 5) - 2) * 0.08;
+
+  const baseMaxHp = Math.round(definition.hp * hpScale * veteranScale * levelScale * cautionHp * heirScale * injuryPerformanceMultiplier)
+    + specialModifiers.maxHpBonus;
+  const baseDamage = Math.max(
+    1,
+    Math.round(definition.damage * damageScale * veteranScale * levelScale * courageDamage * heirScale * injuryPerformanceMultiplier)
+      + specialModifiers.damageBonus,
+  );
 
   return {
     id,
@@ -62,9 +72,9 @@ export function createAdventurer(profile: AdventurerProfile, id: string, wave: n
     nemesisDefenseType: profile.nemesisDefenseType,
     x: ENTRY_CELL.x,
     y: ENTRY_CELL.y + spawnOffset,
-    hp: Math.round(definition.hp * hpScale * veteranScale * levelScale * cautionHp * heirScale * injuryPerformanceMultiplier),
-    maxHp: Math.round(definition.hp * hpScale * veteranScale * levelScale * cautionHp * heirScale * injuryPerformanceMultiplier),
-    damage: Math.max(1, Math.round(definition.damage * damageScale * veteranScale * levelScale * courageDamage * heirScale * injuryPerformanceMultiplier)),
+    hp: baseMaxHp,
+    maxHp: baseMaxHp,
+    damage: baseDamage,
     speed: definition.speed * speedScale * greedSpeed * injuryPerformanceMultiplier,
     attackRange: definition.attackRange,
     attackCooldownMs: definition.attackCooldownMs,
@@ -98,6 +108,7 @@ export function createAdventurer(profile: AdventurerProfile, id: string, wave: n
     lastBarkKey: null,
     lastAvoidedTrapKey: null,
     isHeir: profile.heirOfProfileId !== null,
+    specialTreasureBonuses: [...profile.specialTreasureBonuses],
   };
 }
 

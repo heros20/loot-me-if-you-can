@@ -606,14 +606,18 @@ export class GameDomUi {
 
     const traits = target.traits.join(', ') || 'aucun';
     const injuries = target.injuries.length > 0 ? target.injuries.join(', ') : 'aucune';
+    const specialTreasures = target.specialTreasureBonuses.length > 0
+      ? target.specialTreasureBonuses.map((bonus) => bonus.label).join(', ')
+      : 'aucun';
 
     return `
       <div class="panel-block inspection">
         <p class="panel-block__title">Dossier : ${escapeHtml(target.name)}</p>
         <ul class="inspection__facts">
           <li>${escapeHtml(target.className)} niveau ${target.level}, ${target.age} ans</li>
-          <li>PV : ${target.hp} / ${target.maxHp}</li>
+          <li>PV : ${target.hp} / ${target.maxHp} - Degats : ${target.damage}</li>
           <li>Personnalite : ${escapeHtml(target.personality)} (traits : ${escapeHtml(traits)})</li>
+          <li>Tresors appris/equipes : ${escapeHtml(specialTreasures)}</li>
           <li>Expeditions : ${target.expeditionCount} (survies : ${target.survivedExpeditions})</li>
           <li>Monstres tues : ${target.monstersKilled}, pieges declenches : ${target.trapsTriggered}</li>
           <li>Portes : ${target.doorsEncountered} rencontree${target.doorsEncountered > 1 ? 's' : ''}, ${target.doorsPicked} ouverte${target.doorsPicked > 1 ? 's' : ''}</li>
@@ -944,8 +948,12 @@ function placementHintFor(type: ConstructionTool): string {
       return 'Placement : sol ou salle creusee accessible, hors boss, portes, defenses et zone de surete.';
     case 'addGoldTreasure':
       return "Placement : sol ou salle creusee accessible. Le depot coute 20 or et ne sera pas penalise deux fois.";
+    case 'addWeaponTreasure':
+    case 'addArmorTreasure':
+    case 'addTechniqueTreasure':
+      return 'Placement : sol ou salle creusee accessible. Si le porteur survit, le bonus reste sur son profil.';
     case 'removeTreasure':
-      return "Placement : clique sur un tresor d'or non vole pour recuperer sa valeur.";
+      return 'Placement : clique sur un tresor secondaire non vole pour recuperer sa valeur.';
     case 'guardRoom':
     case 'crypt':
       return 'Placement : case deja creusee.';

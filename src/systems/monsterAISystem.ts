@@ -1,4 +1,5 @@
 import type { AdventurerEntity, DefenseEntity } from '../game/types';
+import { chooseThreatTarget } from './combatThreatSystem';
 
 export interface MonsterAITickResult {
   slowedAdventurerIds: string[];
@@ -183,14 +184,7 @@ function findNearestAdventurer(
   adventurers: AdventurerEntity[],
   range: number,
 ): AdventurerEntity | null {
-  return adventurers
-    .filter((adventurer) => adventurer.alive && !adventurer.escaped)
-    .map((adventurer) => ({
-      adventurer,
-      distance: distance(minion.x, minion.y, adventurer.x, adventurer.y),
-    }))
-    .filter((entry) => entry.distance <= range)
-    .sort((a, b) => a.distance - b.distance)[0]?.adventurer ?? null;
+  return chooseThreatTarget(minion.x, minion.y, adventurers, range, minion.threatByAdventurerId);
 }
 
 function findCurrentTarget(
