@@ -153,6 +153,14 @@ export type UiAction =
   | { type: 'use-ability'; abilityType: BossAbilityType }
   | { type: 'toggle-pause' }
   | { type: 'set-speed'; speed: number }
-  | { type: 'close-inspection' };
+  | { type: 'close-inspection' }
+  | { type: 'tavern-advance' }
+  | { type: 'tavern-skip' };
+
+export interface TavernProgressState {
+  revealedCount: number;
+  totalBeats: number;
+  fullyRevealed: boolean;
+}
 
 export type RoleCountMap = Record<AdventurerRole, number>;

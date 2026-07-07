@@ -1720,11 +1720,23 @@ function validateGuildTavernSceneRules(): void {
   const noSurvivorActorIds = new Set([
     ...noSurvivorScene.layout.counterActors.map((actor) => actor.id),
     ...noSurvivorScene.layout.backgroundActors.map((actor) => actor.id),
-    'rumor',
   ]);
 
   if (!noSurvivorScene.beats.every((entryBeat) => noSurvivorActorIds.has(entryBeat.actorId))) {
-    console.error('ECHEC: sans survivants, chaque beat doit etre porte par un PNJ reellement present (ou la rumeur ambiante).');
+    console.error('ECHEC: sans survivants, chaque beat doit etre porte par un PNJ reellement present.');
+    process.exit(1);
+  }
+
+  const bannedPhrases = [
+    "Personne n'a franchi la porte depuis l'aube.",
+    'On dit que le donjon garde les voix.',
+    'La Guilde prepare deja une autre equipe.',
+  ];
+
+  const allBeats = [...survivorScene.beats, ...noSurvivorScene.beats];
+
+  if (allBeats.some((entryBeat) => bannedPhrases.some((phrase) => entryBeat.text.includes(phrase)))) {
+    console.error('ECHEC: dialogue taverne trop generique detecte.');
     process.exit(1);
   }
 

@@ -12,16 +12,9 @@ import type {
   DungeonSnapshot,
   UiSnapshot,
 } from '../game/uiSnapshot';
-import {
-  advanceTavernSceneState,
-  createInitialTavernSceneState,
-  isTavernSceneFullyRevealed,
-  renderGuildTavernScene,
-  revealAllTavernBeats,
-  type TavernSceneState,
-} from './guildTavernView';
+import type { TavernProgressState } from '../game/uiSnapshot';
 import { escapeHtml, roleLabel } from './textFormatters';
-import { emitUiAction, onUiState } from './uiEvents';
+import { emitUiAction, onTavernProgress, onUiState } from './uiEvents';
 
 const BEST_WAVE_STORAGE_KEY = 'final-boss-dungeon.best-wave';
 
@@ -56,16 +49,22 @@ export class GameDomUi {
   private openSections = new Set<string>(DEFAULT_OPEN_SECTIONS);
   private creditsOpen = false;
   private tavernReportRef: WaveReport | null = null;
-  private tavernSceneState: TavernSceneState = { revealedCount: 0 };
+  private tavernProgress: TavernProgressState = { revealedCount: 0, totalBeats: 0, fullyRevealed: false };
   private readonly unsubscribe: () => void;
+  private readonly unsubscribeTavern: () => void;
 
   constructor(private readonly root: HTMLElement) {
     this.unsubscribe = onUiState((snapshot) => this.render(snapshot));
+    this.unsubscribeTavern = onTavernProgress((progress) => {
+      this.tavernProgress = progress;
+      this.refresh();
+    });
     window.addEventListener('keydown', this.handleKeydown);
   }
 
   destroy(): void {
     this.unsubscribe();
+    this.unsubscribeTavern();
     window.removeEventListener('keydown', this.handleKeydown);
   }
 
@@ -78,53 +77,15 @@ export class GameDomUi {
 
     if (event.key === 'Escape') {
       event.preventDefault();
-      this.handleTavernSkip(snapshot);
+      emitUiAction({ type: 'tavern-skip' });
       return;
     }
 
     if (event.key === ' ' || event.key === 'Enter') {
       event.preventDefault();
-      this.handleTavernAdvance(snapshot);
+      emitUiAction({ type: 'tavern-advance' });
     }
   };
-
-  /** Avance d'un beat de dialogue, ou passe en preparation si la scene est terminee (phase report). */
-  private handleTavernAdvance(snapshot: DungeonSnapshot): void {
-    const report = snapshot.report;
-
-    if (!report) {
-      return;
-    }
-
-    const scene = report.guildTavernScene;
-
-    if (!isTavernSceneFullyRevealed(scene, this.tavernSceneState)) {
-      this.tavernSceneState = advanceTavernSceneState(scene, this.tavernSceneState);
-      this.refresh();
-      return;
-    }
-
-    if (snapshot.phase === 'report') {
-      emitUiAction({ type: 'continue-build' });
-    }
-  }
-
-  /** Passe directement en preparation (phase report), ou revele tous les beats sans agir (phase defeat). */
-  private handleTavernSkip(snapshot: DungeonSnapshot): void {
-    const report = snapshot.report;
-
-    if (!report) {
-      return;
-    }
-
-    if (snapshot.phase === 'report') {
-      emitUiAction({ type: 'continue-build' });
-      return;
-    }
-
-    this.tavernSceneState = revealAllTavernBeats(report.guildTavernScene);
-    this.refresh();
-  }
 
   private render(snapshot: UiSnapshot): void {
     this.lastSnapshot = snapshot;
@@ -134,9 +95,20 @@ export class GameDomUi {
       saveBestWave(this.bestWave);
     }
 
-    if ((snapshot.phase === 'report' || snapshot.phase === 'defeat') && snapshot.report && snapshot.report !== this.tavernReportRef) {
+    const inTavern = snapshot.phase === 'report' || snapshot.phase === 'defeat';
+    document.body.classList.toggle('tavern-active', inTavern);
+
+    if (inTavern && snapshot.report && snapshot.report !== this.tavernReportRef) {
       this.tavernReportRef = snapshot.report;
-      this.tavernSceneState = createInitialTavernSceneState(snapshot.report.guildTavernScene);
+      this.tavernProgress = {
+        revealedCount: Math.min(1, snapshot.report.guildTavernScene.beats.length),
+        totalBeats: snapshot.report.guildTavernScene.beats.length,
+        fullyRevealed: snapshot.report.guildTavernScene.beats.length === 0,
+      };
+    }
+
+    if (!inTavern) {
+      this.tavernReportRef = null;
     }
 
     const markup = snapshot.phase === 'menu' ? this.renderMenu() : this.renderDungeon(snapshot);
@@ -226,8 +198,11 @@ export class GameDomUi {
   // ---------------------------------------------------------------------
 
   private renderDungeon(snapshot: DungeonSnapshot): string {
+    const inTavern = snapshot.phase === 'report' || snapshot.phase === 'defeat';
+
     return `
-      <section class="hud">
+      <section class="hud${inTavern ? ' hud--tavern' : ''}">
+        ${inTavern ? '' : `
         <div class="status-strip">
           ${this.renderStatus('Or', `${snapshot.gold}`)}
           ${this.renderStatus('Expedition', `${snapshot.wave}`)}
@@ -241,9 +216,8 @@ export class GameDomUi {
           ${this.renderContextMessage(snapshot)}
           ${snapshot.phase === 'build' ? this.renderBuildControls(snapshot) : ''}
           ${snapshot.phase === 'wave' ? this.renderWavePanel(snapshot) : ''}
-          ${snapshot.phase === 'report' && snapshot.report ? '<p class="side-panel__hint">Le debriefing complet est ouvert.</p>' : ''}
-          ${snapshot.phase === 'defeat' && snapshot.report ? '<p class="side-panel__hint">Le boss est tombe. Rapport final ouvert.</p>' : ''}
         </aside>
+        `}
 
         ${snapshot.phase === 'report' && snapshot.report ? this.renderReport(snapshot) : ''}
         ${snapshot.phase === 'defeat' && snapshot.report ? this.renderDefeat(snapshot) : ''}
@@ -665,29 +639,25 @@ export class GameDomUi {
       return '';
     }
 
-    const scene = report.guildTavernScene;
-    const canAdvance = !isTavernSceneFullyRevealed(scene, this.tavernSceneState);
+    const canAdvance = !this.tavernProgress.fullyRevealed;
 
     return `
-      <div class="debrief-overlay">
-        <section class="debrief">
-          ${renderGuildTavernScene(scene, this.tavernSceneState, { wave: report.wave })}
-
-          <details class="debrief-details">
-            <summary>Rapport complet</summary>
-            <div class="debrief__grid debrief__grid--compact">
-              ${this.renderParticipantSection(snapshot)}
-              ${this.renderDebriefSection('Lecture tactique', report.learnedLines.slice(0, 3))}
-              ${this.renderDebriefSection('Suite probable', report.guildChanges.slice(0, 3))}
-              ${this.renderDebriefSection('Economie', report.economyLines.slice(-3))}
-            </div>
-          </details>
-
-          <div class="debrief__actions">
-            <button class="button button--ghost" data-action="tavern-skip">Passer</button>
-            <button class="button button--primary" data-action="tavern-advance">${canAdvance ? 'Continuer' : 'Vers la preparation'}</button>
+      <div class="tavern-hud" data-testid="tavern-hud">
+        <details class="debrief-details debrief-details--tavern">
+          <summary>Rapport complet</summary>
+          <div class="debrief__grid debrief__grid--compact">
+            ${this.renderParticipantSection(snapshot)}
+            ${this.renderDebriefSection('Lecture tactique', report.learnedLines.slice(0, 3))}
+            ${this.renderDebriefSection('Suite probable', report.guildChanges.slice(0, 3))}
+            ${this.renderDebriefSection('Economie', report.economyLines.slice(-3))}
           </div>
-        </section>
+        </details>
+
+        <div class="tavern-hud__actions debrief__actions">
+          <span class="tavern-hud__hint">Espace / Entree · avancer · Echap · passer</span>
+          <button class="button button--ghost" data-action="tavern-skip">Passer</button>
+          <button class="button button--primary" data-action="tavern-advance">${canAdvance ? 'Continuer' : 'Vers la preparation'}</button>
+        </div>
       </div>
     `;
   }
@@ -699,28 +669,24 @@ export class GameDomUi {
       return '';
     }
 
-    const scene = report.guildTavernScene;
-    const canAdvance = !isTavernSceneFullyRevealed(scene, this.tavernSceneState);
+    const canAdvance = !this.tavernProgress.fullyRevealed;
 
     return `
-      <div class="debrief-overlay">
-        <section class="debrief debrief--defeat">
-          ${renderGuildTavernScene(scene, this.tavernSceneState, { wave: report.wave, final: true })}
-
-          <details class="debrief-details">
-            <summary>Rapport complet</summary>
-            <div class="debrief__grid debrief__grid--compact">
-              ${this.renderParticipantSection(snapshot)}
-              ${this.renderDebriefSection('Ce que la guilde retient', report.sharedLines.slice(0, 3))}
-              ${this.renderDebriefSection('Bilan', report.gainsLosses.slice(0, 3))}
-            </div>
-          </details>
-
-          <div class="debrief__actions">
-            ${canAdvance ? '<button class="button button--ghost" data-action="tavern-skip">Passer</button><button class="button button--primary" data-action="tavern-advance">Continuer</button>' : ''}
-            <button class="button" data-action="restart">Rebatir sur les cendres</button>
+      <div class="tavern-hud tavern-hud--defeat" data-testid="tavern-hud">
+        <details class="debrief-details debrief-details--tavern">
+          <summary>Rapport complet</summary>
+          <div class="debrief__grid debrief__grid--compact">
+            ${this.renderParticipantSection(snapshot)}
+            ${this.renderDebriefSection('Ce que la guilde retient', report.sharedLines.slice(0, 3))}
+            ${this.renderDebriefSection('Bilan', report.gainsLosses.slice(0, 3))}
           </div>
-        </section>
+        </details>
+
+        <div class="tavern-hud__actions debrief__actions">
+          <span class="tavern-hud__hint">Espace / Entree · avancer · Echap · passer</span>
+          ${canAdvance ? '<button class="button button--ghost" data-action="tavern-skip">Passer</button><button class="button button--primary" data-action="tavern-advance">Continuer</button>' : ''}
+          <button class="button" data-action="restart">Rebatir sur les cendres</button>
+        </div>
       </div>
     `;
   }
@@ -822,12 +788,12 @@ export class GameDomUi {
           emitUiAction({ type: 'restart' });
         }
 
-        if (action === 'tavern-advance' && this.lastSnapshot && this.lastSnapshot.phase !== 'menu') {
-          this.handleTavernAdvance(this.lastSnapshot);
+        if (action === 'tavern-advance') {
+          emitUiAction({ type: 'tavern-advance' });
         }
 
-        if (action === 'tavern-skip' && this.lastSnapshot && this.lastSnapshot.phase !== 'menu') {
-          this.handleTavernSkip(this.lastSnapshot);
+        if (action === 'tavern-skip') {
+          emitUiAction({ type: 'tavern-skip' });
         }
       });
     });

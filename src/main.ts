@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { BootScene } from './scenes/BootScene';
 import { DungeonScene } from './scenes/DungeonScene';
+import { GuildTavernScene } from './scenes/GuildTavernScene';
 import { MenuScene } from './scenes/MenuScene';
 import { CANVAS_HEIGHT, CANVAS_WIDTH } from './game/constants';
 import { GameDomUi } from './ui/domUi';
@@ -26,5 +27,5 @@ new Phaser.Game({
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,
   },
-  scene: [BootScene, MenuScene, DungeonScene],
+  scene: [BootScene, MenuScene, DungeonScene, GuildTavernScene],
 });

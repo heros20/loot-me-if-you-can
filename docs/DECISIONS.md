@@ -41,6 +41,22 @@ Chaque décision structurante obtient une entrée, numérotée dans l'ordre chro
 
 ---
 
+**Remplace / Remplace par** : revise par D-019 (Phaser in-game).
+
+---
+
+## D-019 - La taverne/guilde est une scene Phaser in-game, pas un overlay DOM principal
+
+**Date** : 2026-07-07
+**Statut** : Actif
+**Contexte** : passe Guild Tavern Scene V3. La V2 (D-017) positionnait des acteurs dans un espace CSS, mais le rendu restait un overlay HTML de type fiche stylisee plutot qu'une vraie scene jouee dans le moteur.
+**Decision** : la taverne devient une scene Phaser dediee (`GuildTavernScene`) lancee entre fin d'expedition et phase de preparation. Le canvas affiche une vraie salle (sol, murs, table, comptoir, panneau des disparus) peuplee de sprites pour survivants et PNJ. Les dialogues sont des beats autoplay avec bulles au-dessus des locuteurs. Le DOM ne garde qu'un HUD minimal (Continuer/Passer + rapport replie). Les pools de dialogue contextualises vivent dans la couche data (`tavernDialoguePools.ts`, `guildTavernSceneSystem.ts`, `tavernDialogueSequence.ts`).
+**Alternatives envisagees** : conserver le rendu CSS V2 et n'enrichir que les textes (ecarte : ne resout pas le probleme de "vraie scene in-game") ; scene Phaser sans pools elargis (ecarte : repetition et ton generique) ; supprimer le rapport texte (ecarte : perte d'information utile).
+**Consequences** : `DungeonScene` lance/arrete `GuildTavernScene` selon la phase ; `domUi.ts` masque la sidebar pendant la taverne ; D-017 reste valide sur les regles d'acteurs/faits mais son choix DOM est depasse pour le rendu principal.
+**Remplace / Remplace par** :
+
+---
+
 ## D-017 - La scene de taverne est un espace avec des acteurs positionnes, pas des cartes de rapport
 
 **Date** : 2026-07-06

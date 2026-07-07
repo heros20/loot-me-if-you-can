@@ -62,6 +62,7 @@ export class DungeonScene extends Phaser.Scene {
   private treasureGraphics!: Phaser.GameObjects.Graphics;
   private tileViews = new Map<string, Phaser.GameObjects.Image>();
   private uiPublishTimerMs = 0;
+  private tavernReportKey: string | null = null;
 
   constructor() {
     super('DungeonScene');
@@ -755,7 +756,40 @@ export class DungeonScene extends Phaser.Scene {
   }
 
   private publishUi(): void {
-    emitUiState(this.simulation.getSnapshot());
+    const snapshot = this.simulation.getSnapshot();
+    emitUiState(snapshot);
+    this.syncTavernScene(snapshot);
+  }
+
+  private syncTavernScene(snapshot: ReturnType<DungeonSimulation['getSnapshot']>): void {
+    const inTavern = snapshot.phase === 'report' || snapshot.phase === 'defeat';
+    const tavernScene = this.scene.get('GuildTavernScene');
+
+    if (!inTavern || !snapshot.report) {
+      if (tavernScene?.scene.isActive()) {
+        this.scene.stop('GuildTavernScene');
+      }
+
+      this.tavernReportKey = null;
+      return;
+    }
+
+    const reportKey = `${snapshot.phase}-${snapshot.report.wave}-${snapshot.report.verdict}`;
+
+    if (this.tavernReportKey === reportKey && tavernScene?.scene.isActive()) {
+      return;
+    }
+
+    if (tavernScene?.scene.isActive()) {
+      this.scene.stop('GuildTavernScene');
+    }
+
+    this.tavernReportKey = reportKey;
+    this.scene.launch('GuildTavernScene', {
+      report: snapshot.report,
+      phase: snapshot.phase,
+      wave: snapshot.wave,
+    });
   }
 }
 
