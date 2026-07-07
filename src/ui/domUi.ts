@@ -654,7 +654,7 @@ export class GameDomUi {
         </details>
 
         <div class="tavern-hud__actions debrief__actions">
-          <span class="tavern-hud__hint">Espace / Entree · avancer · Echap · passer</span>
+          <span class="tavern-hud__hint">Espace/Entree: avancer | Echap: passer</span>
           <button class="button button--ghost" data-action="tavern-skip">Passer</button>
           <button class="button button--primary" data-action="tavern-advance">${canAdvance ? 'Continuer' : 'Vers la preparation'}</button>
         </div>
@@ -683,7 +683,7 @@ export class GameDomUi {
         </details>
 
         <div class="tavern-hud__actions debrief__actions">
-          <span class="tavern-hud__hint">Espace / Entree · avancer · Echap · passer</span>
+          <span class="tavern-hud__hint">Espace/Entree: avancer | Echap: passer</span>
           ${canAdvance ? '<button class="button button--ghost" data-action="tavern-skip">Passer</button><button class="button button--primary" data-action="tavern-advance">Continuer</button>' : ''}
           <button class="button" data-action="restart">Rebatir sur les cendres</button>
         </div>

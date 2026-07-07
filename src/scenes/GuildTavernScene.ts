@@ -27,7 +27,6 @@ interface ActorView {
 
 interface GuildZone {
   key: string;
-  label: string;
   x: number;
   y: number;
   width: number;
@@ -35,12 +34,12 @@ interface GuildZone {
 }
 
 const GUILD_ZONES = {
-  tavernCounter: { key: 'tavern-counter', label: 'Comptoir du tavernier', x: 48, y: 72, width: 280, height: 128 },
-  strategyTable: { key: 'strategy-table', label: 'Table strategique', x: 260, y: 226, width: 440, height: 248 },
-  missingBoard: { key: 'missing-board', label: 'Panneau des disparus', x: 48, y: 222, width: 176, height: 176 },
-  archiveCorner: { key: 'archive-corner', label: 'Archives & registres', x: 690, y: 78, width: 220, height: 188 },
-  recruiterCorner: { key: 'recruiter-corner', label: 'Contrats & volontaires', x: 718, y: 334, width: 206, height: 190 },
-  tavernLife: { key: 'tavern-life', label: 'Tables de taverne', x: 54, y: 430, width: 198, height: 110 },
+  tavernCounter: { key: 'tavern-counter', x: 48, y: 72, width: 280, height: 128 },
+  strategyTable: { key: 'strategy-table', x: 260, y: 226, width: 440, height: 248 },
+  missingBoard: { key: 'missing-board', x: 48, y: 222, width: 176, height: 176 },
+  archiveCorner: { key: 'archive-corner', x: 690, y: 78, width: 220, height: 188 },
+  recruiterCorner: { key: 'recruiter-corner', x: 718, y: 334, width: 206, height: 190 },
+  tavernLife: { key: 'tavern-life', x: 54, y: 430, width: 198, height: 110 },
 } satisfies Record<string, GuildZone>;
 
 const SEAT_POSITIONS = [
@@ -123,9 +122,11 @@ export class GuildTavernScene extends Phaser.Scene {
 
     for (let y = 0; y < CANVAS_HEIGHT; y += 32) {
       for (let x = 0; x < CANVAS_WIDTH; x += 32) {
-        const tile = this.add.image(x, y, floorKey).setOrigin(0).setDisplaySize(32, 32).setAlpha(0.9);
+        const tile = this.add.image(x, y, floorKey).setOrigin(0).setDisplaySize(32, 32).setAlpha(0.72);
         if ((x / 32 + y / 32) % 2 === 0) {
-          tile.setTint(0xb99263);
+          tile.setTint(0xa88b66);
+        } else {
+          tile.setTint(0x9a8060);
         }
       }
     }
@@ -135,24 +136,24 @@ export class GuildTavernScene extends Phaser.Scene {
     walls.fillRect(0, 0, CANVAS_WIDTH, 48);
     walls.fillRect(0, 0, 24, CANVAS_HEIGHT);
     walls.fillRect(CANVAS_WIDTH - 24, 0, 24, CANVAS_HEIGHT);
-    walls.lineStyle(3, 0x4a3528, 1);
+    walls.lineStyle(2, 0x4a3528, 0.58);
     walls.strokeRect(24, 48, CANVAS_WIDTH - 48, CANVAS_HEIGHT - 72);
-    walls.fillStyle(0x1a1410, 0.35);
+    walls.fillStyle(0x1a1410, 0.22);
     walls.fillRect(24, CANVAS_HEIGHT - 24, CANVAS_WIDTH - 48, 24);
-    walls.fillStyle(0x3a2a20, 0.92);
+    walls.fillStyle(0x3a2a20, 0.7);
     walls.fillRect(24, 48, CANVAS_WIDTH - 48, 18);
-    walls.fillStyle(0x5a3a24, 0.8);
-    [96, 224, 352, 480, 608, 736, 864].forEach((x) => walls.fillRect(x, 48, 10, CANVAS_HEIGHT - 72));
-    walls.fillStyle(0x7a4a2a, 0.45);
-    walls.fillRect(0, 190, CANVAS_WIDTH, 8);
-    walls.fillRect(0, 420, CANVAS_WIDTH, 8);
+    walls.fillStyle(0x5a3a24, 0.2);
+    [124, 322, 638, 836].forEach((x) => walls.fillRect(x, 66, 5, CANVAS_HEIGHT - 126));
+    walls.fillStyle(0x7a4a2a, 0.22);
+    walls.fillRect(0, 190, CANVAS_WIDTH, 5);
+    walls.fillRect(0, 420, CANVAS_WIDTH, 5);
 
     const rug = this.add.graphics();
-    rug.fillStyle(0x5f2730, 0.58);
+    rug.fillStyle(0x5f2730, 0.36);
     rug.fillRoundedRect(288, 258, 388, 192, 18);
-    rug.lineStyle(2, 0xb78552, 0.45);
+    rug.lineStyle(2, 0xb78552, 0.28);
     rug.strokeRoundedRect(288, 258, 388, 192, 18);
-    rug.lineStyle(1, 0xd0a15e, 0.3);
+    rug.lineStyle(1, 0xd0a15e, 0.18);
     rug.strokeRoundedRect(306, 276, 352, 156, 12);
 
     this.drawTorch(38, 118);
@@ -160,13 +161,13 @@ export class GuildTavernScene extends Phaser.Scene {
     this.drawFireplace(412, 62);
 
     this.moodGlow = this.add.graphics();
-    this.moodGlow.fillStyle(MOOD_TINT[this.tavernScene.sceneMood], 0.1);
+    this.moodGlow.fillStyle(MOOD_TINT[this.tavernScene.sceneMood], 0.055);
     this.moodGlow.fillCircle(CANVAS_WIDTH / 2, 304, 310);
   }
 
   private drawTavernCounter(): void {
     const zone = GUILD_ZONES.tavernCounter;
-    this.drawZoneFrame(zone, 0x2a1b16, 0.3);
+    this.drawZoneFrame(zone, 0x2a1b16, 0.12);
 
     const counter = this.add.graphics();
     counter.fillStyle(0x2b1d17, 1);
@@ -185,13 +186,11 @@ export class GuildTavernScene extends Phaser.Scene {
     this.drawMug(zone.x + 132, zone.y + 72);
     this.drawMug(zone.x + 156, zone.y + 70);
     this.drawCandle(zone.x + 204, zone.y + 70);
-
-    this.drawZoneLabel(zone);
   }
 
   private drawArchiveCorner(): void {
     const zone = GUILD_ZONES.archiveCorner;
-    this.drawZoneFrame(zone, 0x1f211d, 0.28);
+    this.drawZoneFrame(zone, 0x1f211d, 0.1);
 
     const archive = this.add.graphics();
     archive.fillStyle(0x31251c, 1);
@@ -213,12 +212,11 @@ export class GuildTavernScene extends Phaser.Scene {
     this.drawPaper(zone.x + 74, zone.y + 134, 34, 24, -0.08);
     this.drawPaper(zone.x + 116, zone.y + 138, 38, 22, 0.1);
     this.drawCandle(zone.x + 172, zone.y + 132);
-    this.drawZoneLabel(zone);
   }
 
   private drawRecruiterCorner(): void {
     const zone = GUILD_ZONES.recruiterCorner;
-    this.drawZoneFrame(zone, 0x241f18, 0.28);
+    this.drawZoneFrame(zone, 0x241f18, 0.1);
 
     const recruiter = this.add.graphics();
     recruiter.fillStyle(0x3b2a1f, 1);
@@ -235,15 +233,14 @@ export class GuildTavernScene extends Phaser.Scene {
     this.drawPaper(zone.x + 54, zone.y + 130, 38, 22, -0.05);
     this.drawPaper(zone.x + 104, zone.y + 132, 42, 22, 0.07);
     this.drawCandle(zone.x + 160, zone.y + 130);
-    this.drawZoneLabel(zone);
   }
 
   private drawStrategyTable(): void {
     const zone = GUILD_ZONES.strategyTable;
-    this.drawZoneFrame(zone, 0x251915, 0.2);
+    this.drawZoneFrame(zone, 0x251915, 0.08);
 
     const table = this.add.graphics();
-    table.fillStyle(0x261913, 0.7);
+    table.fillStyle(0x261913, 0.42);
     table.fillEllipse(zone.x + zone.width / 2, zone.y + zone.height / 2 + 26, 410, 86);
     table.fillStyle(0x5c3d28, 1);
     table.fillRoundedRect(zone.x + 48, zone.y + 94, zone.width - 96, 108, 18);
@@ -277,20 +274,12 @@ export class GuildTavernScene extends Phaser.Scene {
     this.drawCandle(zone.x + 120, zone.y + 106);
     this.drawCandle(zone.x + 316, zone.y + 114);
 
-    this.add
-      .text(zone.x + zone.width / 2, zone.y + 66, 'Debrief de guilde', {
-        color: '#c9b08a',
-        fontSize: '11px',
-        fontFamily: 'monospace',
-      })
-      .setOrigin(0.5);
-
     table.setData('testid', 'tavern-strategy-table');
   }
 
   private drawBoard(): void {
     const zone = GUILD_ZONES.missingBoard;
-    this.drawZoneFrame(zone, 0x201818, 0.26);
+    this.drawZoneFrame(zone, 0x201818, 0.1);
 
     const board = this.add.container(zone.x + 14, zone.y + 22);
     const boardWidth = zone.width - 28;
@@ -314,7 +303,9 @@ export class GuildTavernScene extends Phaser.Scene {
       fontFamily: 'monospace',
     }).setOrigin(0.5, 0);
 
-    const listedNames = this.tavernScene.dead.length > 0 ? this.tavernScene.dead.slice(0, 6).join('\n') : 'Aucun nom raye';
+    const listedNames = this.tavernScene.dead.length > 0
+      ? this.tavernScene.dead.slice(0, 6).map((name) => this.formatDisplayName(name)).join('\n')
+      : 'Aucun nom raye';
     const names = this.add.text(12, 40, listedNames, {
       color: '#d4c4a8',
       fontSize: '10px',
@@ -325,12 +316,11 @@ export class GuildTavernScene extends Phaser.Scene {
 
     board.add([bg, title, names]);
     board.setData('testid', 'tavern-board');
-    this.drawZoneLabel(zone);
   }
 
   private drawTavernLife(): void {
     const zone = GUILD_ZONES.tavernLife;
-    this.drawZoneFrame(zone, 0x2a1b14, 0.18);
+    this.drawZoneFrame(zone, 0x2a1b14, 0.07);
 
     const life = this.add.graphics();
     life.fillStyle(0x251812, 0.62);
@@ -349,7 +339,6 @@ export class GuildTavernScene extends Phaser.Scene {
     life.fillCircle(zone.x + 178, zone.y + 58, 8);
     this.drawMug(zone.x + 48, zone.y + 44);
     this.drawMug(zone.x + 134, zone.y + 50);
-    this.drawZoneLabel(zone);
   }
 
   private drawHeader(): void {
@@ -363,7 +352,7 @@ export class GuildTavernScene extends Phaser.Scene {
       .setOrigin(0.5, 0);
 
     this.add
-      .text(480, 36, `Expedition ${this.report.wave} — ${this.tavernScene.subtitle}`, {
+      .text(480, 36, `Expedition ${this.report.wave} - ${this.tavernScene.subtitle}`, {
         color: '#c9b08a',
         fontSize: '11px',
         fontFamily: 'monospace',
@@ -415,7 +404,7 @@ export class GuildTavernScene extends Phaser.Scene {
     highlight.lineStyle(2, 0xe1b35a, 0);
     highlight.strokeCircle(0, seated ? 4 : 0, 22);
 
-    const nameLabel = this.add.text(0, seated ? 28 : 24, actor.name, {
+    const nameLabel = this.add.text(0, seated ? 28 : 24, this.formatDisplayName(actor.name), {
       color: '#fff4d8',
       fontSize: '9px',
       fontStyle: 'bold',
@@ -443,7 +432,7 @@ export class GuildTavernScene extends Phaser.Scene {
     chair.lineStyle(1, 0x6a5040, 0.35);
     chair.strokeCircle(0, 4, 8);
 
-    const label = this.add.text(0, 28, deadName ?? 'Vide', {
+    const label = this.add.text(0, 28, deadName ? this.formatDisplayName(deadName) : 'Vide', {
       color: deadName ? '#e88b8b' : '#6a6058',
       fontSize: '8px',
       fontFamily: 'monospace',
@@ -483,23 +472,49 @@ export class GuildTavernScene extends Phaser.Scene {
     return TEXTURE_KEYS.tileFloor;
   }
 
+  private formatDisplayName(name: string): string {
+    const normalized = name
+      .replace(/\u00b9/g, '1')
+      .replace(/\u00b2/g, '2')
+      .replace(/\u00b3/g, '3');
+
+    return normalized.replace(/^([A-Za-z]+)(\d+)(\s|$)/, (_match, base: string, suffix: string, spacer: string) => {
+      return `${base} ${this.toRoman(Number(suffix))}${spacer}`;
+    });
+  }
+
+  private toRoman(value: number): string {
+    if (!Number.isFinite(value) || value <= 0 || value > 20) {
+      return String(value);
+    }
+
+    const numerals: Array<[number, string]> = [
+      [10, 'X'],
+      [9, 'IX'],
+      [5, 'V'],
+      [4, 'IV'],
+      [1, 'I'],
+    ];
+    let remaining = Math.floor(value);
+    let result = '';
+
+    numerals.forEach(([amount, roman]) => {
+      while (remaining >= amount) {
+        result += roman;
+        remaining -= amount;
+      }
+    });
+
+    return result;
+  }
+
   private drawZoneFrame(zone: GuildZone, color: number, alpha: number): void {
     const frame = this.add.graphics();
     frame.fillStyle(color, alpha);
     frame.fillRoundedRect(zone.x, zone.y, zone.width, zone.height, 10);
-    frame.lineStyle(1, 0xd7a764, 0.16);
+    frame.lineStyle(1, 0xd7a764, 0.07);
     frame.strokeRoundedRect(zone.x, zone.y, zone.width, zone.height, 10);
     frame.setData('testid', zone.key);
-  }
-
-  private drawZoneLabel(zone: GuildZone): void {
-    this.add
-      .text(zone.x + 10, zone.y + zone.height - 16, zone.label, {
-        color: '#9f947e',
-        fontSize: '8px',
-        fontFamily: 'monospace',
-      })
-      .setAlpha(0.78);
   }
 
   private drawTorch(x: number, y: number): void {
@@ -510,8 +525,8 @@ export class GuildTavernScene extends Phaser.Scene {
     torch.fillCircle(x, y - 6, 10);
     torch.fillStyle(0xf6d072, 0.95);
     torch.fillCircle(x, y - 9, 5);
-    torch.fillStyle(0xe1b35a, 0.1);
-    torch.fillCircle(x, y - 4, 54);
+    torch.fillStyle(0xe1b35a, 0.055);
+    torch.fillCircle(x, y - 4, 42);
   }
 
   private drawFireplace(x: number, y: number): void {
@@ -526,8 +541,8 @@ export class GuildTavernScene extends Phaser.Scene {
     fireplace.fillEllipse(x + 68, y + 44, 36, 24);
     fireplace.fillStyle(0xf4c35a, 0.9);
     fireplace.fillEllipse(x + 68, y + 40, 18, 28);
-    fireplace.fillStyle(0xe1b35a, 0.08);
-    fireplace.fillCircle(x + 68, y + 42, 118);
+    fireplace.fillStyle(0xe1b35a, 0.045);
+    fireplace.fillCircle(x + 68, y + 42, 88);
   }
 
   private drawShelf(x: number, y: number, width: number): void {
@@ -569,8 +584,8 @@ export class GuildTavernScene extends Phaser.Scene {
     const candle = this.add.graphics();
     candle.fillStyle(0xf0d9a3, 1);
     candle.fillRoundedRect(x, y, 8, 18, 2);
-    candle.fillStyle(0xe1b35a, 0.35);
-    candle.fillCircle(x + 4, y - 2, 16);
+    candle.fillStyle(0xe1b35a, 0.18);
+    candle.fillCircle(x + 4, y - 2, 12);
     candle.fillStyle(0xf4c35a, 1);
     candle.fillEllipse(x + 4, y - 4, 6, 10);
   }
@@ -674,15 +689,15 @@ export class GuildTavernScene extends Phaser.Scene {
         duration: initial ? 0 : 180,
         yoyo: false,
       });
-      this.showBubble(activeBeat, speakerView.container.x, speakerView.container.y - 52, initial);
+      this.showBubble(activeBeat, speakerView.container.x, speakerView.container.y, initial);
       return;
     }
 
     this.showBubble(activeBeat, CANVAS_WIDTH / 2, 200, initial);
   }
 
-  private showBubble(beat: TavernBeat, x: number, y: number, initial: boolean): void {
-    const maxWidth = 280;
+  private showBubble(beat: TavernBeat, speakerX: number, speakerY: number, initial: boolean): void {
+    const maxWidth = this.bubbleMaxWidthFor(beat.actorId);
     const text = this.add.text(0, 0, beat.text, {
       color: '#1a1410',
       fontSize: '11px',
@@ -695,8 +710,7 @@ export class GuildTavernScene extends Phaser.Scene {
     const paddingY = 10;
     const bubbleWidth = Math.min(maxWidth, text.width + paddingX * 2);
     const bubbleHeight = text.height + paddingY * 2;
-    const safeX = Phaser.Math.Clamp(x, bubbleWidth / 2 + 18, CANVAS_WIDTH - bubbleWidth / 2 - 18);
-    const safeY = Phaser.Math.Clamp(y, bubbleHeight / 2 + 72, CANVAS_HEIGHT - bubbleHeight / 2 - 116);
+    const placement = this.resolveBubblePlacement(beat.actorId, speakerX, speakerY, bubbleWidth, bubbleHeight);
 
     const bg = this.add.graphics();
     bg.fillStyle(0xfff4d8, 0.98);
@@ -704,24 +718,24 @@ export class GuildTavernScene extends Phaser.Scene {
     bg.lineStyle(1, 0xc9b08a, 0.9);
     bg.strokeRoundedRect(-bubbleWidth / 2, -bubbleHeight / 2, bubbleWidth, bubbleHeight, 8);
     bg.fillStyle(0xfff4d8, 1);
-    const pointerX = Phaser.Math.Clamp(x - safeX, -bubbleWidth / 2 + 18, bubbleWidth / 2 - 18);
+    const pointerX = Phaser.Math.Clamp(speakerX - placement.x, -bubbleWidth / 2 + 18, bubbleWidth / 2 - 18);
     bg.fillTriangle(pointerX - 8, bubbleHeight / 2, pointerX + 8, bubbleHeight / 2, pointerX, bubbleHeight / 2 + 10);
 
     text.setPosition(-text.width / 2, -text.height / 2);
 
-    this.bubbleContainer = this.add.container(safeX, safeY, [bg, text]);
+    this.bubbleContainer = this.add.container(placement.x, placement.y, [bg, text]);
     this.bubbleContainer.setData('testid', 'tavern-bubble');
     this.bubbleContainer.setAlpha(0.15);
     this.tweens.add({
       targets: this.bubbleContainer,
       alpha: 1,
-      y: safeY - 6,
+      y: placement.y - 6,
       duration: initial ? 0 : 220,
       ease: 'Sine.easeOut',
     });
 
     const speakerLabel = this.add
-      .text(safeX, safeY - bubbleHeight / 2 - 14, beat.speakerName, {
+      .text(placement.x, placement.y - bubbleHeight / 2 - 14, this.formatDisplayName(beat.speakerName), {
         color: '#e1b35a',
         fontSize: '9px',
         fontStyle: 'bold',
@@ -730,6 +744,47 @@ export class GuildTavernScene extends Phaser.Scene {
       .setOrigin(0.5, 1)
       .setAlpha(0.9);
     speakerLabel.setData('tavernBubbleExtra', true);
+  }
+
+  private bubbleMaxWidthFor(actorId: string): number {
+    if (actorId === 'recruiter' || actorId.startsWith('volunteer-')) {
+      return 218;
+    }
+
+    if (actorId === 'archivist' || actorId === 'tavernkeeper') {
+      return 232;
+    }
+
+    return 246;
+  }
+
+  private resolveBubblePlacement(
+    actorId: string,
+    speakerX: number,
+    speakerY: number,
+    bubbleWidth: number,
+    bubbleHeight: number,
+  ): { x: number; y: number } {
+    let x = speakerX;
+    let y = speakerY - 72;
+
+    if (actorId === 'recruiter' || actorId.startsWith('volunteer-')) {
+      x = speakerX - 68;
+      y = speakerY > 430 ? speakerY - 136 : speakerY - 112;
+    } else if (actorId === 'archivist') {
+      x = speakerX - 130;
+      y = speakerY - 52;
+    } else if (actorId === 'tavernkeeper') {
+      x = speakerX + 148;
+      y = speakerY - 42;
+    } else if (speakerY > 400) {
+      y = speakerY - 118;
+    }
+
+    return {
+      x: Phaser.Math.Clamp(x, bubbleWidth / 2 + 18, CANVAS_WIDTH - bubbleWidth / 2 - 18),
+      y: Phaser.Math.Clamp(y, bubbleHeight / 2 + 70, CANVAS_HEIGHT - bubbleHeight / 2 - 126),
+    };
   }
 
   private publishProgress(): void {
