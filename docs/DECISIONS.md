@@ -4,7 +4,7 @@
 |---|---|
 | **Statut** | Vivant — journal append-only, on n'édite jamais une décision passée |
 | **Propriétaire** | Game Design |
-| **Dernière mise à jour** | 2026-07-07 (D-020) |
+| **Dernière mise à jour** | 2026-07-07 (D-021) |
 | **Documents liés** | [DESIGN_PRINCIPLES.md](./DESIGN_PRINCIPLES.md) · [GAME_DESIGN_DOCUMENT.md](./GAME_DESIGN_DOCUMENT.md) |
 
 ---
@@ -26,6 +26,18 @@ Chaque décision structurante obtient une entrée, numérotée dans l'ordre chro
 **Conséquences** : impact sur le design, le code ou la production
 **Remplace / Remplacé par** : lien vers une autre entrée le cas échéant
 ```
+
+---
+
+## D-021 - Un systeme V1 doit etre perceptible en jeu, pas seulement present dans les donnees
+
+**Date** : 2026-07-07
+**Statut** : Actif
+**Contexte** : correction apres test manuel du commit 248c005. Special Treasures V1, Combat Damage Feedback V0 et Aggro V0 existaient techniquement, mais les aventuriers ignoraient trop souvent les tresors speciaux, les degats n'etaient pas attribuables, et le rogue/healer pouvaient encore lire comme frontline involontaire.
+**Decision** : les tresors speciaux doivent entrer dans la selection d'objectif avec un score fort et une affinite de role explicite. Le feedback de combat doit etre un evenement de simulation avec source/cible/montant/style, pas une deduction visuelle depuis une baisse de PV. L'aggro V0 reste simple mais doit produire une lecture RPG : guerrier devant et naturellement cible, rogue utilitaire/flank, caster/healer en retrait sauf menace accumulee ou frontline tombee.
+**Alternatives envisagees** : creer des quetes individuelles de loot (rejete : trop large) ; creer un systeme d'inventaire/equipement (rejete : hors perimetre) ; garder le feedback par delta de PV (rejete : impossible d'attribuer l'attaquant) ; coder une formation parfaite par pathfinding (rejete : risque de blocages et de refonte globale).
+**Consequences** : les prochains ajouts V1 doivent etre testes en jeu pour leur lisibilite comportementale. Les tests smoke protegent maintenant la selection de tresors speciaux, la source des degats et la priorite tank-first, mais le dernier mot reste un test manuel court.
+**Remplace / Remplace par** : precise D-020.
 
 ---
 

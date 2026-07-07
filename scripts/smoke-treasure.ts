@@ -1,5 +1,20 @@
 /* Verifie la mecanique de tresor: pickup, drop, vol, penalite. */
 import { DungeonSimulation } from '../src/game/DungeonSimulation';
+import type { GameState } from '../src/game/types';
+
+const specialTargetSim = new DungeonSimulation();
+specialTargetSim.startNewGame();
+specialTargetSim.selectConstructionTool('addWeaponTreasure');
+specialTargetSim.placeSelectedDefense({ x: 20, y: 5 });
+specialTargetSim.launchWave();
+
+const specialTargetState = (specialTargetSim as unknown as { state: GameState }).state;
+const selectedTreasure = specialTargetState.treasures.find((treasure) => treasure.id === specialTargetState.runtime?.targetTreasureId);
+
+if (!selectedTreasure || selectedTreasure.kind !== 'specialWeapon') {
+  console.error(`ECHEC: smoke-treasure attend qu'un tresor special accessible soit cible, obtenu ${selectedTreasure?.kind ?? 'aucun'}.`);
+  process.exit(1);
+}
 
 const sim = new DungeonSimulation();
 sim.startNewGame();

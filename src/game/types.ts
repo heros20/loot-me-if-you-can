@@ -464,6 +464,27 @@ export interface WaveStats {
   combatFeedbackEvents: number;
 }
 
+export type CombatFeedbackKind = 'damage' | 'heal';
+export type CombatFeedbackFaction = 'adventurer' | 'monster' | 'boss' | 'trap';
+export type CombatFeedbackStyle = 'tank' | 'rogue' | 'caster' | 'healer' | 'monster' | 'boss' | 'trap' | 'heal';
+
+export interface CombatFeedbackEvent {
+  id: string;
+  kind: CombatFeedbackKind;
+  amount: number;
+  x: number;
+  y: number;
+  sourceId: string | null;
+  sourceName: string;
+  sourceFaction: CombatFeedbackFaction;
+  sourceRole: AdventurerRole | null;
+  sourceType: DefenseType | 'boss' | 'trap' | null;
+  targetId: string;
+  targetName: string;
+  style: CombatFeedbackStyle;
+  ageMs: number;
+}
+
 export interface WaveRuntime {
   elapsedMs: number;
   spawnTimerMs: number;
@@ -475,6 +496,7 @@ export interface WaveRuntime {
   doorsEngagedIds: Set<string>;
   bossAutopilotTimerMs: number;
   targetTreasureId: string | null;
+  combatFeedbackEvents: CombatFeedbackEvent[];
 }
 
 export interface PartyPlan {

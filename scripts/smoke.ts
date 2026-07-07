@@ -61,6 +61,7 @@ import type {
   DefenseType,
   DungeonTreasure,
   ExpeditionParticipantReport,
+  GameState,
   GridCell,
   WaveReport,
   WaveStats,
@@ -643,6 +644,7 @@ function validateDungeonAnchorRules(): void {
     doorsEngagedIds: new Set<string>(),
     bossAutopilotTimerMs: 0,
     targetTreasureId: 'gold-test',
+    combatFeedbackEvents: [],
   };
 
   (economySim as unknown as { finishWaveVictory(): void }).finishWaveVictory();
@@ -1228,6 +1230,156 @@ function validateSpecialTreasureRules(): void {
     console.error('ECHEC: les outils de tresors speciaux devraient etre disponibles en phase Build.');
     process.exit(1);
   }
+
+  const targetingSim = new DungeonSimulation();
+  targetingSim.startNewGame();
+  const targetingState = (targetingSim as unknown as { state: GameState }).state;
+  targetingState.treasures = [
+    {
+      id: 'gold-target',
+      kind: 'gold',
+      cell: { x: 20, y: 5 },
+      value: GOLD_TREASURE_DEFAULT_VALUE,
+      status: 'secure',
+      holderAdventurerId: null,
+      droppedCell: null,
+    },
+    {
+      id: 'armor-target',
+      kind: 'specialArmor',
+      cell: { x: 21, y: 5 },
+      value: 18,
+      status: 'secure',
+      holderAdventurerId: null,
+      droppedCell: null,
+    },
+    {
+      id: 'weapon-target',
+      kind: 'specialWeapon',
+      cell: { x: 20, y: 6 },
+      value: 18,
+      status: 'secure',
+      holderAdventurerId: null,
+      droppedCell: null,
+    },
+    {
+      id: 'technique-target',
+      kind: 'specialTechnique',
+      cell: { x: 21, y: 6 },
+      value: 20,
+      status: 'secure',
+      holderAdventurerId: null,
+      droppedCell: null,
+    },
+  ];
+  const chooseTarget = (adventurer: AdventurerEntity) =>
+    (targetingSim as unknown as { chooseWaveTreasureTarget(target: AdventurerEntity): DungeonTreasure | null })
+      .chooseWaveTreasureTarget(adventurer);
+
+  const tankTarget = chooseTarget(createSmokeAdventurer('warrior', 'target-warrior', 2, 8));
+  const rogueTarget = chooseTarget(createSmokeAdventurer('thief', 'target-thief', 2, 8));
+  const mageTarget = chooseTarget(createSmokeAdventurer('mage', 'target-mage', 2, 8));
+  const healerTarget = chooseTarget(createSmokeAdventurer('healer', 'target-healer', 2, 8));
+
+  if (tankTarget?.kind !== 'specialArmor') {
+    console.error(`ECHEC: un tank devrait preferer l armure speciale, obtenu ${tankTarget?.kind ?? 'aucun'}.`);
+    process.exit(1);
+  }
+
+  if (rogueTarget?.kind !== 'specialWeapon') {
+    console.error(`ECHEC: un voleur/DPS devrait preferer l arme speciale, obtenu ${rogueTarget?.kind ?? 'aucun'}.`);
+    process.exit(1);
+  }
+
+  if (mageTarget?.kind !== 'specialTechnique' || healerTarget?.kind !== 'specialTechnique') {
+    console.error(`ECHEC: mage et soigneur devraient preferer la technique speciale, obtenu mage=${mageTarget?.kind ?? 'aucun'} healer=${healerTarget?.kind ?? 'aucun'}.`);
+    process.exit(1);
+  }
+
+  targetingState.treasures = targetingState.treasures.filter((treasure) => treasure.kind === 'gold' || treasure.kind === 'specialWeapon');
+  const specialOverGold = chooseTarget(createSmokeAdventurer('thief', 'target-special-over-gold', 2, 8));
+
+  if (specialOverGold?.kind !== 'specialWeapon') {
+    console.error(`ECHEC: a distance comparable, un tresor special devrait primer sur l or, obtenu ${specialOverGold?.kind ?? 'aucun'}.`);
+    process.exit(1);
+  }
+}
+
+function validateCombatFeedbackRules(): void {
+  const feedbackSim = new DungeonSimulation();
+  feedbackSim.startNewGame();
+  const feedbackState = (feedbackSim as unknown as { state: GameState }).state;
+  const warrior = createSmokeAdventurer('warrior', 'feedback-warrior', 6, 6);
+  const healer = createSmokeAdventurer('healer', 'feedback-healer', 6, 7);
+  const wounded = createSmokeAdventurer('mage', 'feedback-wounded', 6.4, 7);
+  wounded.hp = wounded.maxHp - 8;
+  const minion = createSmokeDefense('skeleton', 'feedback-skeleton', 7, 6);
+
+  feedbackState.phase = 'wave';
+  feedbackState.adventurers = [warrior, healer, wounded];
+  feedbackState.defenses = [minion];
+  feedbackState.runtime = {
+    elapsedMs: 0,
+    spawnTimerMs: 0,
+    spawnQueue: [],
+    partyProfiles: [],
+    spawned: 0,
+    partyPlan: createPartyPlan(1, feedbackState.world.dungeonReputation.value, null),
+    stats: createSmokeStats(),
+    doorsEngagedIds: new Set<string>(),
+    bossAutopilotTimerMs: 0,
+    targetTreasureId: null,
+    combatFeedbackEvents: [],
+  };
+
+  (feedbackSim as unknown as { damageMinion(target: DefenseEntity, damage: number, attacker: AdventurerEntity): void })
+    .damageMinion(minion, 7, warrior);
+  const warriorEvent = feedbackState.runtime.combatFeedbackEvents[0];
+
+  if (
+    !warriorEvent ||
+    warriorEvent.amount !== 7 ||
+    warriorEvent.sourceId !== warrior.id ||
+    warriorEvent.targetId !== minion.id ||
+    warriorEvent.sourceFaction !== 'adventurer' ||
+    warriorEvent.sourceRole !== 'warrior' ||
+    warriorEvent.style !== 'tank'
+  ) {
+    console.error('ECHEC: le feedback de degats guerrier devrait contenir source, cible, montant applique et style tank.');
+    process.exit(1);
+  }
+
+  (feedbackSim as unknown as { healAdventurer(target: AdventurerEntity, amount: number, healer: AdventurerEntity): number })
+    .healAdventurer(wounded, 4, healer);
+  const healEvent = feedbackState.runtime.combatFeedbackEvents.find((event) => event.kind === 'heal');
+
+  if (!healEvent || healEvent.amount !== 4 || healEvent.sourceId !== healer.id || healEvent.targetId !== wounded.id || healEvent.style !== 'heal') {
+    console.error('ECHEC: le feedback de soin devrait etre attribue au soigneur avec un style de soin.');
+    process.exit(1);
+  }
+
+  (feedbackSim as unknown as {
+    damageAdventurer(
+      adventurer: AdventurerEntity,
+      damage: number,
+      source: 'trap' | 'minion' | 'boss',
+      sourceType: DefenseType | null,
+      sourceCell: GridCell,
+    ): number;
+  }).damageAdventurer(warrior, 5, 'boss', null, { x: 20, y: 8 });
+  const bossEvent = feedbackState.runtime.combatFeedbackEvents.find((event) => event.sourceFaction === 'boss');
+
+  if (!bossEvent || bossEvent.amount !== 5 || bossEvent.targetId !== warrior.id || bossEvent.style !== 'boss') {
+    console.error('ECHEC: le feedback de degats boss devrait utiliser une source et un style boss.');
+    process.exit(1);
+  }
+
+  (feedbackSim as unknown as { tickTimers(deltaMs: number): void }).tickTimers(1000);
+
+  if (feedbackState.runtime.combatFeedbackEvents.length !== 0) {
+    console.error('ECHEC: les pops de degats devraient expirer et etre nettoyes.');
+    process.exit(1);
+  }
 }
 
 function validateCombatAbilityRules(): void {
@@ -1595,11 +1747,28 @@ function validateDefenseAggroRules(): void {
     process.exit(1);
   }
 
-  addThreat(emptyThreat, mage, 120);
+  addThreat(emptyThreat, mage, 170);
   const threatenedTarget = chooseThreatTarget(6, 5, [warrior, mage, healer], 2, emptyThreat);
 
   if (threatenedTarget?.id !== mage.id) {
     console.error('ECHEC: une forte menace accumulee devrait pouvoir attirer l aggro sur un DPS.');
+    process.exit(1);
+  }
+
+  const healerThreat: Record<string, number> = {};
+  addThreat(healerThreat, healer, 38);
+  const healerEarlyTarget = chooseThreatTarget(6, 5, [warrior, healer], 2, healerThreat);
+
+  if (healerEarlyTarget?.id !== warrior.id) {
+    console.error('ECHEC: un soigneur ne devrait pas reprendre l aggro initiale si le tank tient.');
+    process.exit(1);
+  }
+
+  warrior.alive = false;
+  const fallbackTarget = chooseThreatTarget(6, 5, [warrior, mage, healer], 2, healerThreat);
+
+  if (fallbackTarget?.id !== healer.id) {
+    console.error('ECHEC: si le tank tombe, la menace restante devrait choisir la meilleure cible suivante.');
     process.exit(1);
   }
 }
@@ -1857,6 +2026,7 @@ validateDoorNoThiefRetreat();
 validateDefensiveUnitsRespectClosedDoors();
 validateTreasureGroupDecisionRules();
 validateSpecialTreasureRules();
+validateCombatFeedbackRules();
 validateCombatAbilityRules();
 validateGoblinChaseRules();
 validateDefenseAggroRules();

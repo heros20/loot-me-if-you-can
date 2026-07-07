@@ -49,6 +49,11 @@ export function evaluateLocalAdventurerDecision(
   const dangerousMinionNear = context.defenses.some(
     (defense) => defense.alive && defense.kind === 'minion' && distance(defense.x, defense.y, adventurer.x, adventurer.y) <= 2.1,
   );
+  const livingWarrior = context.adventurers.find((ally) => ally.alive && !ally.escaped && ally.role === 'warrior') ?? null;
+  const warriorCloserToTarget = livingWarrior
+    ? distance(livingWarrior.x, livingWarrior.y, context.targetCell.x, context.targetCell.y) <=
+      distance(adventurer.x, adventurer.y, context.targetCell.x, context.targetCell.y) + 0.35
+    : false;
   const fanatical = context.partyPlan.type === 'fanatic' || adventurer.personality === 'courageous';
   const cautious = context.partyPlan.type === 'cautious' || adventurer.personality === 'cautious' || adventurer.personality === 'traumatized';
   const formationSpeed = computeFormationSpeed(adventurer, context.adventurers);
@@ -100,8 +105,24 @@ export function evaluateLocalAdventurerDecision(
   if ((visibleTrap || nearbyDoor) && adventurer.role === 'thief') {
     return {
       hesitateMs: 0,
-      speedMultiplier: Math.max(formationSpeed, 1.18),
+      speedMultiplier: dangerousMinionNear && livingWarrior ? Math.min(formationSpeed, 0.82) : Math.max(formationSpeed, 1.18),
       bark: visibleTrap ? 'trapThief' : 'doorThief',
+      forceExit: false,
+      clearPath: false,
+      reason: null,
+    };
+  }
+
+  if (
+    livingWarrior &&
+    warriorCloserToTarget &&
+    (adventurer.role === 'mage' || adventurer.role === 'healer') &&
+    (visibleTrap || dangerousMinionNear)
+  ) {
+    return {
+      hesitateMs: adventurer.role === 'healer' ? 320 : 220,
+      speedMultiplier: Math.min(formationSpeed, adventurer.role === 'healer' ? 0.58 : 0.68),
+      bark: visibleTrap ? 'trapSeen' : null,
       forceExit: false,
       clearPath: false,
       reason: null,
@@ -171,11 +192,11 @@ function computeFormationSpeed(adventurer: AdventurerEntity, adventurers: Advent
   const desiredRank = adventurer.role === 'warrior' ? 0 : adventurer.role === 'thief' ? 1 : adventurer.role === 'mage' ? 3 : 4;
 
   if (rank < desiredRank - 1) {
-    return 0.82;
+    return adventurer.role === 'healer' ? 0.62 : adventurer.role === 'mage' ? 0.7 : adventurer.role === 'thief' ? 0.86 : 0.82;
   }
 
   if (rank > desiredRank + 1) {
-    return 1.12;
+    return adventurer.role === 'warrior' ? 1.22 : 1.12;
   }
 
   return 1;

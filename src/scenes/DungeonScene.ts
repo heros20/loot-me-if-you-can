@@ -24,6 +24,7 @@ import {
 import { DungeonSimulation } from '../game/DungeonSimulation';
 import type {
   AdventurerEntity,
+  CombatFeedbackEvent,
   ConstructionTool,
   DefenseEntity,
   DungeonDoor,
@@ -60,6 +61,7 @@ export class DungeonScene extends Phaser.Scene {
   private previousDefenseHp = new Map<string, number>();
   private previousAdventurerHp = new Map<string, number>();
   private previousDoorHp = new Map<string, number>();
+  private seenCombatFeedbackIds = new Set<string>();
   private bossView: RenderedEntity | null = null;
   private previousBossHp = 0;
   private hoverGraphics!: Phaser.GameObjects.Graphics;
@@ -272,13 +274,14 @@ export class DungeonScene extends Phaser.Scene {
       this.bossView.container.setAlpha(renderState.phase === 'defeat' ? 0.55 : 1);
 
       if (this.previousBossHp > 0 && renderState.boss.hp < this.previousBossHp) {
-        this.spawnFloatingText(bossWorld.x, bossWorld.y - 36, `-${Math.ceil(this.previousBossHp - renderState.boss.hp)}`, 0xffd1d1);
         this.pulseHit(this.bossView.container);
         this.cameras.main.shake(90, 0.0025);
       }
 
       this.previousBossHp = renderState.boss.hp;
     }
+
+    this.syncCombatFeedback(renderState.combatFeedbackEvents);
   }
 
   private syncDungeonTiles(tiles: DungeonTile[]): void {
@@ -337,7 +340,6 @@ export class DungeonScene extends Phaser.Scene {
       : cellToWorld(defense.cell);
     const previousHp = this.previousDefenseHp.get(defense.id);
     if (previousHp !== undefined && defense.hp < previousHp) {
-      this.spawnFloatingText(currentWorld.x, currentWorld.y - 28, `-${Math.ceil(previousHp - defense.hp)}`, 0xffd1d1);
       this.pulseHit(view.container);
     }
 
@@ -425,11 +427,8 @@ export class DungeonScene extends Phaser.Scene {
 
     const previousHp = this.previousAdventurerHp.get(adventurer.id);
     if (previousHp !== undefined && adventurer.hp < previousHp) {
-      this.spawnFloatingText(world.x, world.y - 30, `-${Math.ceil(previousHp - adventurer.hp)}`, 0xffd1d1);
       this.pulseHit(view.container);
       this.cameras.main.shake(60, 0.0017);
-    } else if (previousHp !== undefined && adventurer.hp > previousHp) {
-      this.spawnFloatingText(world.x, world.y - 30, `+${Math.ceil(adventurer.hp - previousHp)}`, 0x9ee29f);
     }
 
     this.previousAdventurerHp.set(adventurer.id, adventurer.hp);
@@ -568,11 +567,43 @@ export class DungeonScene extends Phaser.Scene {
     }
   }
 
-  private spawnFloatingText(x: number, y: number, text: string, color: number): void {
+  private syncCombatFeedback(events: CombatFeedbackEvent[]): void {
+    const stackByCell = new Map<string, number>();
+
+    events.forEach((event) => {
+      if (this.seenCombatFeedbackIds.has(event.id)) {
+        return;
+      }
+
+      this.seenCombatFeedbackIds.add(event.id);
+      const world = gridPositionToWorld(event.x, event.y);
+      const key = `${Math.round(world.x / 12)},${Math.round(world.y / 12)}`;
+      const stack = stackByCell.get(key) ?? 0;
+      stackByCell.set(key, stack + 1);
+      const style = combatFeedbackVisual(event);
+      const sign = event.kind === 'heal' ? '+' : '-';
+      const label = event.kind === 'heal'
+        ? `${sign}${event.amount}`
+        : `${style.prefix} ${sign}${event.amount}`;
+      this.spawnFloatingText(
+        world.x + (stack % 2 === 0 ? -5 : 5),
+        world.y - 30 - stack * 9,
+        label,
+        style.color,
+        style.fontSize,
+      );
+    });
+
+    if (this.seenCombatFeedbackIds.size > 160) {
+      this.seenCombatFeedbackIds = new Set([...this.seenCombatFeedbackIds].slice(-96));
+    }
+  }
+
+  private spawnFloatingText(x: number, y: number, text: string, color: number, fontSize = 11): void {
     const label = this.add
       .text(x, y, text, {
         color: `#${color.toString(16).padStart(6, '0')}`,
-        fontSize: '11px',
+        fontSize: `${fontSize}px`,
         fontStyle: 'bold',
         fontFamily: 'monospace',
         stroke: '#100e12',
@@ -997,6 +1028,30 @@ function treasureStrokeColor(kind: DungeonTreasureKind): number {
       return 0x66357d;
     default:
       return 0x7a4a13;
+  }
+}
+
+function combatFeedbackVisual(event: CombatFeedbackEvent): { color: number; prefix: string; fontSize: number } {
+  if (event.kind === 'heal') {
+    return { color: 0x9ee29f, prefix: '', fontSize: 12 };
+  }
+
+  switch (event.style) {
+    case 'tank':
+      return { color: 0xf6d88a, prefix: 'G', fontSize: 11 };
+    case 'rogue':
+      return { color: 0x7d94d6, prefix: 'V', fontSize: 11 };
+    case 'caster':
+      return { color: 0xb873d6, prefix: 'M', fontSize: 11 };
+    case 'healer':
+      return { color: 0x79c7a1, prefix: 'S', fontSize: 11 };
+    case 'boss':
+      return { color: 0xff6b6b, prefix: 'BOSS', fontSize: 13 };
+    case 'trap':
+      return { color: 0xe1b35a, prefix: 'PIEGE', fontSize: 10 };
+    case 'monster':
+    default:
+      return { color: 0xc88b4a, prefix: 'DEF', fontSize: 11 };
   }
 }
 
