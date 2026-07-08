@@ -16,15 +16,18 @@ export const TEXTURE_KEYS = {
   defense: {
     spikeTrap: 'defense-spike-trap',
     fireTrap: 'defense-fire-trap',
+    roomLockTrap: 'defense-room-lock-trap',
     slime: 'defense-slime',
     skeleton: 'defense-skeleton',
     goblin: 'defense-goblin',
+    guardian: 'defense-guardian',
   } satisfies Record<DefenseType, string>,
   adventurer: {
     warrior: 'adventurer-warrior',
     thief: 'adventurer-thief',
     mage: 'adventurer-mage',
     healer: 'adventurer-healer',
+    cartographer: 'adventurer-cartographer',
   } satisfies Record<AdventurerRole, string>,
 } as const;
 
@@ -43,6 +46,7 @@ export const EXTERNAL_TEXTURES: Array<{ key: string; path: string }> = [
   { key: TEXTURE_KEYS.boss, path: '/assets/vendor/kenney/tiny-dungeon/Tiles/tile_0110.png' },
   { key: TEXTURE_KEYS.defense.spikeTrap, path: '/assets/vendor/kenney/tiny-dungeon/Tiles/tile_0101.png' },
   { key: TEXTURE_KEYS.defense.fireTrap, path: '/assets/vendor/kenney/tiny-dungeon/Tiles/tile_0029.png' },
+  { key: TEXTURE_KEYS.defense.roomLockTrap, path: '/assets/vendor/kenney/tiny-dungeon/Tiles/tile_0045.png' },
   { key: TEXTURE_KEYS.defense.slime, path: '/assets/vendor/kenney/tiny-dungeon/Tiles/tile_0108.png' },
   { key: TEXTURE_KEYS.defense.skeleton, path: '/assets/vendor/kenney/tiny-dungeon/Tiles/tile_0096.png' },
   { key: TEXTURE_KEYS.defense.goblin, path: '/assets/vendor/kenney/tiny-dungeon/Tiles/tile_0111.png' },
@@ -50,4 +54,5 @@ export const EXTERNAL_TEXTURES: Array<{ key: string; path: string }> = [
   { key: TEXTURE_KEYS.adventurer.thief, path: '/assets/vendor/kenney/tiny-dungeon/Tiles/tile_0097.png' },
   { key: TEXTURE_KEYS.adventurer.mage, path: '/assets/vendor/kenney/tiny-dungeon/Tiles/tile_0084.png' },
   { key: TEXTURE_KEYS.adventurer.healer, path: '/assets/vendor/kenney/tiny-dungeon/Tiles/tile_0085.png' },
+  { key: TEXTURE_KEYS.adventurer.cartographer, path: '/assets/vendor/kenney/tiny-dungeon/Tiles/tile_0086.png' },
 ];

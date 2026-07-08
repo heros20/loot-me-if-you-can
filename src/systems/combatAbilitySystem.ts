@@ -196,7 +196,7 @@ function tryWarriorTaunt(adventurer: AdventurerEntity, context: AdventurerAbilit
       ally.id !== adventurer.id &&
       ally.alive &&
       !ally.escaped &&
-      (ally.role === 'healer' || ally.role === 'mage' || ally.hp / ally.maxHp < 0.42) &&
+      (ally.role === 'healer' || ally.role === 'mage' || ally.role === 'cartographer' || ally.hp / ally.maxHp < 0.42) &&
       distance(adventurer.x, adventurer.y, ally.x, ally.y) <= 2.4,
   );
 
@@ -258,6 +258,9 @@ function tryThiefTrapMitigation(adventurer: AdventurerEntity, context: Adventure
   }
 
   context.suppressTrap(trap, COMBAT_ABILITY_BALANCE.thiefTrapSuppressionMs);
+  trap.trapState = 'disarmed';
+  trap.roomLockMinionIds = [];
+  trap.roomLockZoneId = null;
   adventurer.thiefTrapInterventionsRemaining -= 1;
   adventurer.abilityCooldowns.thiefTrapMitigation = COMBAT_ABILITY_BALANCE.thiefTrapMitigationCooldownMs;
   adventurer.attackTimerMs = Math.max(adventurer.attackTimerMs, Math.round(adventurer.attackCooldownMs * 0.55));
@@ -265,9 +268,10 @@ function tryThiefTrapMitigation(adventurer: AdventurerEntity, context: Adventure
   context.stats.abilityStats.thiefTrapMitigations += 1;
   context.stats.thiefTrapMitigations += 1;
   context.stats.abilityUses += 1;
-  context.stats.storyEvents.push(`${adventurer.name} reduit l'impact du ${getDefenseDefinition(trap.type).name}.`);
+  context.stats.storyEvents.push(`${adventurer.name} desamorce le ${getDefenseDefinition(trap.type).name}.`);
   context.rememberTrap(trap.cell, 0.35);
   context.bark(adventurer, 'trapThief');
+  context.message(`${adventurer.name}: Piege desamorce.`);
   return true;
 }
 

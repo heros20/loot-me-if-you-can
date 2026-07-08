@@ -175,6 +175,7 @@ function describeTechniqueEffect(role: AdventurerRole | null): string {
       return `+${SPECIAL_TREASURE_BALANCE.techniqueHealingBonus} soin`;
     case 'warrior':
     case 'thief':
+    case 'cartographer':
       return `+${SPECIAL_TREASURE_BALANCE.techniqueDamageBonus} degat`;
     default:
       return 'passif de role';

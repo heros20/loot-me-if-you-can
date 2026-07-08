@@ -89,6 +89,22 @@ function buildSurvivorLines(report: ChronicleSource, survivorNames: string[]): s
     lines.push('Le boss bougeait sans attendre les ordres du maitre, detail que la Guilde note deux fois.');
   }
 
+  if (report.cartographerLines.length > 0) {
+    lines.push(report.cartographerLines[0]);
+  }
+
+  if (report.zoneLines.length > 0) {
+    lines.push(report.zoneLines[0]);
+  }
+
+  if (report.guardianLines.length > 0) {
+    lines.push(report.guardianLines[0]);
+  }
+
+  if (report.remainsLines.length > 0) {
+    lines.push(report.remainsLines[0]);
+  }
+
   lines.push(report.adaptationNotes[0] ?? 'La Guilde pretend garder son calme. Personne ne la croit vraiment.');
   return unique(lines);
 }
@@ -121,6 +137,10 @@ function buildNoSurvivorLines(report: ChronicleSource): string[] {
     lines.push('Quelque chose pres du trone a resiste assez longtemps pour devenir une rumeur.');
   }
 
+  if (report.cartographerDeaths > 0) {
+    lines.push("Le cartographe n'est pas revenu. La carte non plus.");
+  }
+
   lines.push(report.adaptationNotes[0] ?? 'Le Royaume prepare deja des volontaires plus prudents.');
   return unique(lines);
 }
@@ -133,6 +153,10 @@ function buildBadges(report: ChronicleSource): ChronicleBadge[] {
     { label: 'Boss', value: report.cleared ? 'Debout' : 'Tombe', tone: report.cleared ? 'good' : 'bad' },
     { label: 'Portes', value: report.doorsPicked > 0 ? `${report.doorsPicked} ouverte` : report.doorNoThiefRetreats > 0 ? 'Blocage' : 'RAS', tone: report.doorNoThiefRetreats > 0 ? 'good' : 'neutral' },
     { label: 'Pieges', value: report.trapHighlights.length > 0 ? report.trapHighlights[0].label : 'RAS', tone: report.trapHighlights.length > 0 ? 'good' : 'neutral' },
+    { label: 'Carte', value: report.cartographerReports > 0 ? 'Croquis fiable' : report.cartographerDeaths > 0 ? 'Perdue' : 'RAS', tone: report.cartographerReports > 0 ? 'warning' : 'neutral' },
+    { label: 'Zone', value: report.zoneLines.length > 0 ? 'Rapportee' : 'RAS', tone: report.zoneLines.length > 0 ? 'warning' : 'neutral' },
+    { label: 'Gardien', value: report.guardianLines.length > 0 ? report.guardianDeaths > 0 ? 'Abattu' : 'Vu' : 'RAS', tone: report.guardianLines.length > 0 ? report.guardianDeaths > 0 ? 'bad' : 'warning' : 'neutral' },
+    { label: 'Restes', value: report.relicsRecognized > 0 ? 'Relique' : report.remainsSeen > 0 ? 'Vus' : 'RAS', tone: report.relicsRecognized > 0 ? 'warning' : 'neutral' },
   ];
 }
 

@@ -2,10 +2,13 @@ import {
   BOSS_CELL,
   DIG_COST,
   DOOR_COST,
+  ENTRANCE_MAP_ID,
   ENTRY_CELL,
+  FINAL_MAP_ID,
   GOLD_TREASURE_DEFAULT_VALUE,
   MAX_TREASURES_V1,
   PARTY_SIZE,
+  RESEAL_TILE_COST,
   SAFE_ZONE_RADIUS,
   STARTING_GOLD,
   TREASURE_CELL,
@@ -16,7 +19,6 @@ import {
 } from './constants';
 import {
   canEntityMoveBetween,
-  createInitialDungeonTiles,
   getBlockedCellKeys,
   getTileAt,
   setDungeonTile,
@@ -25,6 +27,7 @@ import {
 import type {
   AdventurerEntity,
   AdventurerProfile,
+  AdventurerRemains,
   AdventurerRole,
   BossAbilityType,
   BossEngagementState,
@@ -36,13 +39,18 @@ import type {
   DefenseStatsByType,
   DefenseType,
   DungeonDoor,
+  DungeonMap,
+  DungeonTransition,
   DungeonTreasure,
   DungeonTreasureKind,
+  DungeonZone,
   DungeonValidation,
   EffectStats,
+  ExpeditionExplorationTarget,
   ExpeditionParticipantReport,
   GameState,
   GridCell,
+  KingdomMemoryFactKind,
   PartyPlan,
   ReportEntry,
   TreasureState,
@@ -139,6 +147,7 @@ import {
   digRockTile,
   hasDefenseOnCell,
   markPlayerRoom,
+  resealDugTile,
 } from '../systems/dungeonConstruction';
 import {
   findActiveDoorAt,
@@ -163,8 +172,34 @@ import {
   chooseThreatTarget,
   decayThreat,
 } from '../systems/combatThreatSystem';
+import {
+  BASE_OBSERVATION_RADIUS,
+  CARTOGRAPHER_OBSERVATION_RADIUS,
+  commitSurvivorObservations,
+  computeCartographerRecruitmentPressure,
+  summarizeCartographyResult,
+} from '../systems/kingdomMemorySystem';
+import {
+  compressRemains,
+  createAdventurerRemains,
+  deathSiteFactKinds,
+  describeRemainsLoot,
+  reactionLineFor,
+  shouldReactToRemains,
+  shouldRecognizeRelic,
+  updateRemainsVisualState,
+} from '../systems/remainsRelicsSystem';
+import {
+  findZoneForCell,
+  isGuardianPreferredCell,
+} from '../systems/dungeonZoneSystem';
+import {
+  createInitialDungeonMaps,
+  recalculateDungeonMapZones,
+} from '../systems/dungeonMapSystem';
 
 const BOSS_TEMPLATE: Omit<BossEntity, 'hp' | 'attackTimerMs' | 'abilities'> = {
+  mapId: FINAL_MAP_ID,
   homeCell: BOSS_CELL,
   x: BOSS_CELL.x,
   y: BOSS_CELL.y,
@@ -200,6 +235,13 @@ const CONSTRUCTION_TOOLS: Array<{
     description: `Transforme une roche adjacente en sol. ${DIG_COST} or.`,
     category: 'construction',
     cost: DIG_COST,
+  },
+  {
+    type: 'reseal',
+    name: 'Reboucher',
+    description: `Rebouche une case creusee non critique. ${RESEAL_TILE_COST} or.`,
+    category: 'construction',
+    cost: RESEAL_TILE_COST,
   },
   {
     type: 'door',
@@ -265,6 +307,13 @@ const CONSTRUCTION_TOOLS: Array<{
     cost: null,
   },
   {
+    type: 'collectRemainsLoot',
+    name: 'Fouiller restes',
+    description: "Recupere le petit butin laisse par les aventuriers morts. Le marqueur de restes demeure.",
+    category: 'objectives',
+    cost: null,
+  },
+  {
     type: 'guardRoom',
     name: ROOM_TOOL_LABELS.guardRoom,
     description: 'Marque une zone creusee autour de la case.',
@@ -287,6 +336,7 @@ export class DungeonSimulation {
   private nextDoorId = 1;
   private nextTreasureId = 1;
   private nextCombatFeedbackId = 1;
+  private nextRemainsId = 1;
   private minionNameCounters: Partial<Record<DefenseType, number>> = {};
 
   constructor() {
@@ -299,6 +349,7 @@ export class DungeonSimulation {
     this.nextDoorId = 1;
     this.nextTreasureId = 1;
     this.nextCombatFeedbackId = 1;
+    this.nextRemainsId = 1;
     this.minionNameCounters = {};
     this.state = this.createInitialState();
   }
@@ -321,6 +372,7 @@ export class DungeonSimulation {
     this.updateDefenders(deltaMs);
     this.updateAdventurers(deltaMs);
     this.removeDeadMinions();
+    this.updateRoomLocks();
     this.state.adventurers = this.state.adventurers.filter((adventurer) => adventurer.alive && !adventurer.escaped);
 
     if (this.state.boss.hp <= 0) {
@@ -360,10 +412,11 @@ export class DungeonSimulation {
 
     const definition = BOSS_ABILITY_DEFINITIONS[type];
     const boss = this.state.boss;
+    const adventurersOnBossMap = this.state.adventurers.filter((adventurer) => adventurer.mapId === boss.mapId);
 
     if (type === 'shockwave') {
       let touched = 0;
-      this.state.adventurers.forEach((adventurer) => {
+      adventurersOnBossMap.forEach((adventurer) => {
         if (!adventurer.alive || distance(boss.x, boss.y, adventurer.x, adventurer.y) > definition.radius) {
           return;
         }
@@ -380,7 +433,7 @@ export class DungeonSimulation {
 
     if (type === 'roar') {
       let feared = 0;
-      this.state.adventurers.forEach((adventurer) => {
+      adventurersOnBossMap.forEach((adventurer) => {
         if (
           !adventurer.alive ||
           adventurer.targetStage === 'exit' ||
@@ -462,6 +515,22 @@ export class DungeonSimulation {
     this.state.message = `${getDefenseDefinition(type).name} selectionne. La decoration devient enfin hostile.`;
   }
 
+  selectMap(mapId: string): void {
+    if (this.state.phase !== 'build') {
+      this.state.message = "Pendant l'expedition, la vue suit le groupe principal en V1.";
+      return;
+    }
+
+    const map = this.state.dungeonMaps.find((candidate) => candidate.id === mapId) ?? null;
+
+    if (!map) {
+      return;
+    }
+
+    this.setDisplayedMap(map.id);
+    this.state.message = `${map.label} selectionne. Les outils s'appliquent uniquement a cet etage.`;
+  }
+
   placeSelectedDefense(cell: GridCell): void {
     if (this.state.phase !== 'build') {
       this.state.message = 'Pendant la vague, on regarde ses mauvais choix agir.';
@@ -485,13 +554,27 @@ export class DungeonSimulation {
       return;
     }
 
-    if (hasDefenseOnCell(this.state.defenses, cell)) {
+    if (hasDefenseOnCell(this.visibleDefenses(), cell)) {
       this.state.message = 'Une defense occupe deja cette dalle. Meme les monstres ont besoin de place.';
       return;
     }
 
-    if (findActiveDoorAt(this.state.doors, cell)) {
+    if (findActiveDoorAt(this.visibleDoors(), cell)) {
       this.state.message = 'Une porte renforcee occupe deja cette case.';
+      return;
+    }
+
+    const guardianRejection = selected === 'guardian' ? this.describeGuardianPlacementRejection(cell) : null;
+
+    if (guardianRejection) {
+      this.state.message = guardianRejection;
+      return;
+    }
+
+    const roomLockRejection = selected === 'roomLockTrap' ? this.describeRoomLockTrapPlacementRejection(cell) : null;
+
+    if (roomLockRejection) {
+      this.state.message = roomLockRejection;
       return;
     }
 
@@ -505,6 +588,7 @@ export class DungeonSimulation {
     this.state.gold -= definition.cost;
     const entity = this.createDefenseEntity(selected, cell, false);
     this.state.defenses.push(entity);
+    this.recalculateZones();
     this.state.message = definition.kind === 'minion'
       ? `${entity.name} le ${definition.name} prend son poste. Il a deja des exigences.`
       : `${definition.name} pose. C'est juridiquement discutable, donc parfait.`;
@@ -518,6 +602,11 @@ export class DungeonSimulation {
 
     if (tool === 'dig') {
       this.digTile(cell);
+      return;
+    }
+
+    if (tool === 'reseal') {
+      this.resealTile(cell);
       return;
     }
 
@@ -568,6 +657,11 @@ export class DungeonSimulation {
 
     if (tool === 'removeTreasure') {
       this.removeGoldTreasure(cell);
+      return;
+    }
+
+    if (tool === 'collectRemainsLoot') {
+      this.collectRemainsLoot(cell);
     }
   }
 
@@ -580,7 +674,38 @@ export class DungeonSimulation {
     }
 
     this.state.gold -= result.cost;
-    this.state.tiles = result.tiles;
+    this.updateActiveMapTiles(result.tiles);
+    this.recalculateZones();
+  }
+
+  private resealTile(cell: GridCell): void {
+    const baseRejection = this.describeResealRejection(cell);
+
+    if (baseRejection) {
+      this.state.message = baseRejection;
+      return;
+    }
+
+    const result = resealDugTile(this.state.tiles, cell, this.state.gold);
+    this.state.message = result.message;
+
+    if (!result.ok) {
+      return;
+    }
+
+    const nextMaps = this.state.dungeonMaps.map((map) => (
+      map.id === this.state.currentMapId ? { ...map, tiles: result.tiles } : map
+    ));
+    const validation = this.validateDungeonLayoutOnMaps(nextMaps);
+
+    if (!validation.valid) {
+      this.state.message = validation.reason ?? 'Rebouchage refuse: cette roche condamnerait une route obligatoire.';
+      return;
+    }
+
+    this.state.gold -= result.cost;
+    this.updateActiveMapTiles(result.tiles);
+    this.recalculateZones();
   }
 
   private markRoom(center: GridCell, tool: 'guardRoom' | 'crypt'): void {
@@ -588,17 +713,18 @@ export class DungeonSimulation {
     this.state.message = result.message;
 
     if (result.ok) {
-      this.state.tiles = result.tiles;
+      this.updateActiveMapTiles(result.tiles);
+      this.recalculateZones();
     }
   }
 
   private placeDoor(cell: GridCell): void {
     const result = placeDoorAt(
       this.state.tiles,
-      this.state.doors,
+      this.visibleDoors(),
       cell,
       this.state.gold,
-      hasDefenseOnCell(this.state.defenses, cell),
+      hasDefenseOnCell(this.visibleDefenses(), cell),
       `door-${this.nextDoorId}`,
     );
     this.state.message = result.message;
@@ -608,24 +734,37 @@ export class DungeonSimulation {
     }
 
     this.state.gold -= result.cost;
-    this.state.doors = result.doors;
+    this.state.doors = [
+      ...this.state.doors.filter((door) => door.mapId !== this.state.currentMapId),
+      ...result.doors.map((door) => ({ ...door, mapId: this.state.currentMapId })),
+    ];
     this.nextDoorId += 1;
+    this.recalculateZones();
   }
 
   private removeDoor(cell: GridCell): void {
     const refund = computeDoorRemovalRefund();
-    const result = removeDoorAt(this.state.doors, cell, refund);
+    const result = removeDoorAt(this.visibleDoors(), cell, refund);
     this.state.message = result.message;
 
     if (!result.ok) {
       return;
     }
 
-    this.state.doors = result.doors;
+    this.state.doors = [
+      ...this.state.doors.filter((door) => door.mapId !== this.state.currentMapId),
+      ...result.doors.map((door) => ({ ...door, mapId: this.state.currentMapId })),
+    ];
     this.state.gold += result.refundGold;
+    this.recalculateZones();
   }
 
   private moveBoss(cell: GridCell): void {
+    if (this.state.currentMapId !== this.state.boss.mapId) {
+      this.state.message = 'Le boss final reste sur l etage profond en V1.';
+      return;
+    }
+
     const rejection = this.describeObjectiveAnchorRejection(cell, 'boss');
 
     if (rejection) {
@@ -642,12 +781,13 @@ export class DungeonSimulation {
       return;
     }
 
-    this.state.tiles = this.replaceAnchorTile(this.state.tiles, oldCell, nextBossCell, 'throne');
+    this.updateActiveMapTiles(this.replaceAnchorTile(this.state.tiles, oldCell, nextBossCell, 'throne'));
     this.state.boss.homeCell = nextBossCell;
     this.state.boss.x = nextBossCell.x;
     this.state.boss.y = nextBossCell.y;
     this.state.boss.targetAdventurerId = null;
     this.state.message = 'Boss deplace. Le trone suit, les menaces restent.';
+    this.recalculateZones();
   }
 
   private moveMainTreasure(cell: GridCell): void {
@@ -655,6 +795,11 @@ export class DungeonSimulation {
 
     if (!treasure) {
       this.state.message = 'Aucun tresor principal a deplacer.';
+      return;
+    }
+
+    if (this.state.currentMapId !== treasure.mapId) {
+      this.state.message = "Le tresor principal reste sur l etage final en V1.";
       return;
     }
 
@@ -674,10 +819,11 @@ export class DungeonSimulation {
       return;
     }
 
-    this.state.tiles = this.replaceAnchorTile(this.state.tiles, treasure.cell, cell, 'treasure');
+    this.updateActiveMapTiles(this.replaceAnchorTile(this.state.tiles, treasure.cell, cell, 'treasure'));
     this.state.treasures = nextTreasures;
     this.state.treasure = this.toLegacyTreasureState(movedTreasure);
     this.state.message = 'Tresor principal deplace. La Guilde devra refaire ses cartes.';
+    this.recalculateZones();
   }
 
   private addGoldTreasure(cell: GridCell): void {
@@ -710,6 +856,7 @@ export class DungeonSimulation {
     this.state.gold -= GOLD_TREASURE_DEFAULT_VALUE;
     this.state.treasures = nextTreasures;
     this.state.message = `Tresor d'or depose: -${GOLD_TREASURE_DEFAULT_VALUE} or maintenant, pas de double punition s'il est vole.`;
+    this.recalculateZones();
   }
 
   private addSpecialTreasure(cell: GridCell, kind: Extract<DungeonTreasureKind, 'specialWeapon' | 'specialArmor' | 'specialTechnique'>): void {
@@ -745,11 +892,12 @@ export class DungeonSimulation {
     this.state.gold -= cost;
     this.state.treasures = nextTreasures;
     this.state.message = `${specialKind ? specialTreasureLabel(specialKind) : 'Tresor special'} depose: les heros risquent de repartir plus dangereux.`;
+    this.recalculateZones();
   }
 
   private removeGoldTreasure(cell: GridCell): void {
     const treasure = this.state.treasures.find(
-      (candidate) => candidate.kind !== 'main' && candidate.status !== 'stolen' && isSameCell(candidate.cell, cell),
+      (candidate) => candidate.mapId === this.state.currentMapId && candidate.kind !== 'main' && candidate.status !== 'stolen' && isSameCell(candidate.cell, cell),
     );
 
     if (!treasure) {
@@ -760,6 +908,27 @@ export class DungeonSimulation {
     this.state.treasures = this.state.treasures.filter((candidate) => candidate.id !== treasure.id);
     this.state.gold += treasure.value;
     this.state.message = `Tresor secondaire retire: ${treasure.value} or recuperes.`;
+    this.recalculateZones();
+  }
+
+  private collectRemainsLoot(cell: GridCell): void {
+    const remains = [...this.state.remains]
+      .filter((candidate) => candidate.mapId === this.state.currentMapId)
+      .filter((candidate) => isSameCell(candidate.cell, cell))
+      .reverse()
+      .find((candidate) => !candidate.loot.claimed) ?? null;
+
+    if (!remains) {
+      const hasRemains = this.state.remains.some((candidate) => candidate.mapId === this.state.currentMapId && isSameCell(candidate.cell, cell));
+      this.state.message = hasRemains
+        ? 'Ces restes ont deja ete fouilles. Il ne reste que la mauvaise ambiance.'
+        : 'Aucun reste aventurier a fouiller ici.';
+      return;
+    }
+
+    this.state.gold += remains.loot.goldValue;
+    remains.loot.claimed = true;
+    this.state.message = `${remains.loot.label} recupere sur les restes de ${remains.ownerName}: +${remains.loot.goldValue} or.`;
   }
 
   private createDefenseEntity(type: DefenseType, cell: GridCell, summoned: boolean): DefenseEntity {
@@ -767,6 +936,7 @@ export class DungeonSimulation {
     const name = definition.kind === 'minion' ? this.nextMinionName(type) : `${definition.shortName}-${this.nextDefenseId}`;
     const entity: DefenseEntity = {
       id: `defense-${this.nextDefenseId}`,
+      mapId: this.state.currentMapId,
       type,
       kind: definition.kind,
       name,
@@ -794,6 +964,9 @@ export class DungeonSimulation {
       wavesSurvived: 0,
       summoned,
       threatByAdventurerId: {},
+      trapState: definition.kind === 'trap' ? 'armed' : null,
+      roomLockZoneId: null,
+      roomLockMinionIds: [],
     };
     this.nextDefenseId += 1;
     return entity;
@@ -807,6 +980,8 @@ export class DungeonSimulation {
 
   private summonSkeletons(count: number): number {
     const bossCell = { x: Math.round(this.state.boss.x), y: Math.round(this.state.boss.y) };
+    const bossMapId = this.state.boss.mapId;
+    const bossTiles = this.tilesForMap(bossMapId);
     let spawned = 0;
 
     for (let radius = 1; radius <= 2 && spawned < count; radius += 1) {
@@ -815,14 +990,14 @@ export class DungeonSimulation {
           const cell = { x: bossCell.x + dx, y: bossCell.y + dy };
 
           if (
-            !canBuildDefenseAt(this.state.tiles, cell) ||
-            hasDefenseOnCell(this.state.defenses, cell) ||
-            findActiveDoorAt(this.state.doors, cell)
+            !canBuildDefenseAt(bossTiles, cell) ||
+            hasDefenseOnCell(this.state.defenses.filter((defense) => defense.mapId === bossMapId), cell) ||
+            findActiveDoorAt(this.doorsForMap(bossMapId), cell)
           ) {
             continue;
           }
 
-          this.state.defenses.push(this.createDefenseEntity('skeleton', cell, true));
+          this.state.defenses.push({ ...this.createDefenseEntity('skeleton', cell, true), mapId: bossMapId });
           spawned += 1;
         }
       }
@@ -849,6 +1024,10 @@ export class DungeonSimulation {
     const lastRumor = this.state.world.rumors[this.state.world.rumors.length - 1] ?? null;
 
     this.state.phase = 'wave';
+    this.state.currentMapId = ENTRANCE_MAP_ID;
+    this.state.expeditionMapId = ENTRANCE_MAP_ID;
+    this.syncLegacyActiveMapFields();
+    this.state.remains = this.state.remains.map((remains) => updateRemainsVisualState(remains, this.state.wave));
     this.state.treasures = this.state.treasures.map((treasure) => ({
       ...treasure,
       status: 'secure',
@@ -856,6 +1035,7 @@ export class DungeonSimulation {
       droppedCell: null,
     }));
     this.state.treasure = this.toLegacyTreasureState(this.getMainTreasure());
+    this.recalculateZones();
     const targetTreasure = this.chooseWaveTreasureTarget();
     this.state.runtime = {
       elapsedMs: 0,
@@ -870,6 +1050,14 @@ export class DungeonSimulation {
       targetTreasureId: targetTreasure?.id ?? null,
       bossEngagement: createBossEngagementState(),
       combatFeedbackEvents: [],
+      remainsReactedKeys: new Set<string>(),
+      remainsRecognizedKeys: new Set<string>(),
+      roomsSeenThisExpedition: new Set<string>(),
+      roomsEnteredThisExpedition: new Set<string>(),
+      unexploredRooms: new Set<string>(),
+      frontierRooms: new Set<string>(),
+      explorationTarget: null,
+      explorationChoicesRemaining: profiles.some((profile) => profile.role === 'cartographer') ? 4 : 2,
     };
     this.state.report = null;
     this.state.adventurers = [];
@@ -889,6 +1077,11 @@ export class DungeonSimulation {
       defense.tauntedByAdventurerId = null;
       defense.tauntTimerMs = 0;
       defense.threatByAdventurerId = {};
+      if (defense.kind === 'trap') {
+        defense.trapState = 'armed';
+        defense.roomLockZoneId = null;
+        defense.roomLockMinionIds = [];
+      }
     });
     this.state.message = `${this.state.runtime.partyPlan.label}: ${PARTY_SIZE} heros arrivent avec une strategie, ce qui est nouveau et inquietant.`;
   }
@@ -906,8 +1099,8 @@ export class DungeonSimulation {
         ...treasure,
         status: 'secure',
         holderAdventurerId: null,
-        droppedCell: null,
-      }));
+      droppedCell: null,
+    }));
     this.state.treasure = this.toLegacyTreasureState(this.getMainTreasure());
     this.state.defenses = this.state.defenses.filter((defense) => defense.alive && !defense.summoned);
     this.state.defenses.forEach((defense) => {
@@ -925,6 +1118,8 @@ export class DungeonSimulation {
       defense.threatByAdventurerId = {};
     });
     this.state.doors = repairDoors(this.state.doors);
+    this.state.remains = this.state.remains.map((remains) => updateRemainsVisualState(remains, this.state.wave));
+    this.recalculateZones();
     this.state.message = hadSurvivors
       ? 'Nouvelle preparation. Les survivants racontent deja des mensonges tactiques.'
       : "Nouvelle preparation. Aucun survivant officiel: la taverne invente le reste.";
@@ -950,6 +1145,14 @@ export class DungeonSimulation {
       phase: this.state.phase === 'menu' ? 'build' : this.state.phase,
       wave: this.state.wave,
       gold: this.state.gold,
+      dungeonMaps: this.state.dungeonMaps.map((map) => ({
+        id: map.id,
+        label: map.label,
+        depth: map.depth,
+      })),
+      currentMapId: this.state.currentMapId,
+      currentMapLabel: this.getActiveMap().label,
+      expeditionMapId: this.state.expeditionMapId,
       selectedDefense: this.state.selectedDefense,
       selectedConstructionTool: this.state.selectedConstructionTool,
       bossHp: Math.ceil(this.state.boss.hp),
@@ -965,6 +1168,7 @@ export class DungeonSimulation {
       })),
       availableDefenses: DEFENSE_ORDER.map((type) => {
         const definition = getDefenseDefinition(type);
+        const uniqueGuardianAlreadyPlaced = type === 'guardian' && this.state.defenses.some((defense) => defense.alive && defense.type === 'guardian');
         return {
           type,
           kind: definition.kind,
@@ -972,7 +1176,7 @@ export class DungeonSimulation {
           description: definition.description,
           cost: definition.cost,
           color: definition.color,
-          disabled: this.state.phase !== 'build' || this.state.gold < definition.cost,
+          disabled: this.state.phase !== 'build' || this.state.gold < definition.cost || uniqueGuardianAlreadyPlaced,
         };
       }),
       dungeonTiles: this.state.tiles,
@@ -1014,20 +1218,30 @@ export class DungeonSimulation {
     };
   }
 
-  getRenderState(): Pick<GameState, 'defenses' | 'adventurers' | 'boss' | 'phase' | 'gold' | 'selectedDefense' | 'selectedConstructionTool' | 'treasure' | 'treasures' | 'tiles' | 'doors'> & { combatFeedbackEvents: CombatFeedbackEvent[] } {
+  getRenderState(): Pick<GameState, 'defenses' | 'adventurers' | 'remains' | 'zones' | 'boss' | 'phase' | 'gold' | 'selectedDefense' | 'selectedConstructionTool' | 'treasure' | 'treasures' | 'tiles' | 'doors'> & { combatFeedbackEvents: CombatFeedbackEvent[]; transitions: DungeonTransition[]; currentMapId: string; currentMapLabel: string } {
+    const activeMap = this.getActiveMap();
+    const boss = this.state.boss.mapId === this.state.currentMapId
+      ? this.state.boss
+      : { ...this.state.boss, hp: this.state.boss.hp, x: -100, y: -100, homeCell: { x: -100, y: -100 } };
+
     return {
-      defenses: this.state.defenses,
-      adventurers: this.state.adventurers,
-      boss: this.state.boss,
+      defenses: this.visibleDefenses(),
+      adventurers: this.visibleAdventurers(),
+      remains: this.visibleRemains(),
+      zones: this.state.zones,
+      boss,
       phase: this.state.phase,
       gold: this.state.gold,
       selectedDefense: this.state.selectedDefense,
       selectedConstructionTool: this.state.selectedConstructionTool,
       treasure: this.state.treasure,
-      treasures: this.state.treasures,
+      treasures: this.visibleTreasures(),
       tiles: this.state.tiles,
-      doors: this.state.doors,
-      combatFeedbackEvents: this.state.runtime?.combatFeedbackEvents ?? [],
+      doors: this.visibleDoors(),
+      combatFeedbackEvents: this.state.runtime?.combatFeedbackEvents.filter((event) => this.eventVisibleOnCurrentMap(event)) ?? [],
+      transitions: activeMap.transitions,
+      currentMapId: activeMap.id,
+      currentMapLabel: activeMap.label,
     };
   }
 
@@ -1042,7 +1256,16 @@ export class DungeonSimulation {
 
   private buildAdaptiveRoster(wave: number): AdventurerRole[] {
     const candidateRoles = getReturningSurvivorCandidates(this.state.world, PARTY_SIZE).map((profile) => profile.role);
-    return buildWaveRoster(wave, this.state.memory, this.hasActiveLockedDoor(), candidateRoles);
+    const cartographerPressure = computeCartographerRecruitmentPressure(this.state.world);
+    const memory = {
+      ...this.state.memory,
+      rolePressure: {
+        ...this.state.memory.rolePressure,
+        cartographer: (this.state.memory.rolePressure.cartographer ?? 0) + cartographerPressure,
+      },
+    };
+
+    return buildWaveRoster(wave, memory, this.hasActiveLockedDoor(), candidateRoles);
   }
 
   private buildPlannedRoster(wave: number): AdventurerRole[] {
@@ -1090,14 +1313,21 @@ export class DungeonSimulation {
     treasures = this.state.treasures,
     bossCell = this.getBossCell(),
   ): DungeonValidation {
-    const blockedCellKeys = getBlockedCellKeys(this.state.tiles);
+    return this.validateDungeonLayoutOnMaps(this.state.dungeonMaps, treasures, bossCell);
+  }
+
+  private validateDungeonLayoutOnMaps(
+    maps: DungeonMap[],
+    treasures = this.state.treasures,
+    bossCell = this.getBossCell(),
+  ): DungeonValidation {
     const activeTreasures = this.getActiveTreasures(treasures);
     const entryToTreasure = activeTreasures.length === 0
-      ? hasWalkablePath(ENTRY_CELL, bossCell, blockedCellKeys)
-      : activeTreasures.every((treasure) => hasWalkablePath(ENTRY_CELL, treasure.cell, blockedCellKeys));
+      ? this.hasGlobalWalkablePathInMaps(maps, ENTRANCE_MAP_ID, ENTRY_CELL, this.state.boss.mapId, bossCell)
+      : activeTreasures.every((treasure) => this.hasGlobalWalkablePathInMaps(maps, ENTRANCE_MAP_ID, ENTRY_CELL, treasure.mapId, treasure.cell));
     const treasureToBoss = activeTreasures.length === 0
       ? entryToTreasure
-      : activeTreasures.every((treasure) => hasWalkablePath(treasure.cell, bossCell, blockedCellKeys));
+      : activeTreasures.every((treasure) => this.hasGlobalWalkablePathInMaps(maps, treasure.mapId, treasure.cell, this.state.boss.mapId, bossCell));
     const valid = entryToTreasure && treasureToBoss;
 
     return {
@@ -1110,6 +1340,281 @@ export class DungeonSimulation {
           ? "Chemin bloque: les aventuriers ne peuvent plus rejoindre tous les tresors depuis l'entree."
           : 'Chemin bloque: les tresors et la salle du boss ne sont plus relies.',
     };
+  }
+
+  private recalculateZones(): void {
+    this.state.dungeonMaps = recalculateDungeonMapZones({
+      maps: this.state.dungeonMaps,
+      defenses: this.state.defenses,
+      treasures: this.state.treasures,
+      bossMapId: this.state.boss.mapId,
+      bossCell: this.getBossCell(),
+    });
+    this.syncLegacyActiveMapFields();
+  }
+
+  private syncLegacyActiveMapFields(): void {
+    this.syncLegacyActiveMapFieldsForState(this.state);
+  }
+
+  private syncLegacyActiveMapFieldsForState(state: GameState): void {
+    const activeMap = state.dungeonMaps.find((map) => map.id === state.currentMapId) ?? state.dungeonMaps[0];
+    state.currentMapId = activeMap.id;
+    state.tiles = activeMap.tiles;
+    state.zones = activeMap.zones;
+  }
+
+  private getActiveMap(): DungeonMap {
+    return this.getMap(this.state.currentMapId);
+  }
+
+  private getMap(mapId: string): DungeonMap {
+    return this.state.dungeonMaps.find((map) => map.id === mapId) ?? this.state.dungeonMaps[0];
+  }
+
+  private tilesForMap(mapId: string): GameState['tiles'] {
+    return this.getMap(mapId).tiles;
+  }
+
+  private updateActiveMapTiles(tiles: GameState['tiles']): void {
+    this.state.dungeonMaps = this.state.dungeonMaps.map((map) => (
+      map.id === this.state.currentMapId ? { ...map, tiles } : map
+    ));
+    this.syncLegacyActiveMapFields();
+  }
+
+  private transitionsFrom(mapId: string): DungeonTransition[] {
+    return this.getMap(mapId).transitions.filter((transition) => !transition.locked);
+  }
+
+  private findTransitionAt(mapId: string, cell: GridCell): DungeonTransition | null {
+    return this.transitionsFrom(mapId).find((transition) => isSameCell(transition.fromCell, cell)) ?? null;
+  }
+
+  private hasGlobalWalkablePath(
+    fromMapId: string,
+    fromCell: GridCell,
+    toMapId: string,
+    toCell: GridCell,
+    visited = new Set<string>(),
+  ): boolean {
+    const visitKey = `${fromMapId}:${cellKey(fromCell)}`;
+
+    if (visited.has(visitKey)) {
+      return false;
+    }
+
+    const nextVisited = new Set(visited);
+    nextVisited.add(visitKey);
+
+    if (fromMapId === toMapId) {
+      return hasWalkablePath(fromCell, toCell, getBlockedCellKeys(this.tilesForMap(fromMapId)));
+    }
+
+    return this.transitionsFrom(fromMapId).some((transition) =>
+      hasWalkablePath(fromCell, transition.fromCell, getBlockedCellKeys(this.tilesForMap(fromMapId))) &&
+      this.hasGlobalWalkablePath(transition.toMapId, transition.toCell, toMapId, toCell, nextVisited),
+    );
+  }
+
+  private hasGlobalWalkablePathInMaps(
+    maps: DungeonMap[],
+    fromMapId: string,
+    fromCell: GridCell,
+    toMapId: string,
+    toCell: GridCell,
+    visited = new Set<string>(),
+  ): boolean {
+    const map = maps.find((candidate) => candidate.id === fromMapId) ?? null;
+
+    if (!map) {
+      return false;
+    }
+
+    const visitKey = `${fromMapId}:${cellKey(fromCell)}`;
+
+    if (visited.has(visitKey)) {
+      return false;
+    }
+
+    const nextVisited = new Set(visited);
+    nextVisited.add(visitKey);
+
+    if (fromMapId === toMapId) {
+      return hasWalkablePath(fromCell, toCell, getBlockedCellKeys(map.tiles));
+    }
+
+    return map.transitions
+      .filter((transition) => !transition.locked)
+      .some((transition) =>
+        hasWalkablePath(fromCell, transition.fromCell, getBlockedCellKeys(map.tiles)) &&
+        this.hasGlobalWalkablePathInMaps(maps, transition.toMapId, transition.toCell, toMapId, toCell, nextVisited),
+      );
+  }
+
+  private targetThroughTransition(adventurer: AdventurerEntity, targetMapId: string, targetCell: GridCell): GridCell {
+    if (adventurer.mapId === targetMapId) {
+      return targetCell;
+    }
+
+    const currentDepth = this.getMap(adventurer.mapId).depth;
+    const targetDepth = this.getMap(targetMapId).depth;
+    const expectedDirection = Math.sign(targetDepth - currentDepth);
+    const transition = this.transitionsFrom(adventurer.mapId)
+      .filter((candidate) => this.hasGlobalWalkablePath(candidate.toMapId, candidate.toCell, targetMapId, targetCell))
+      .map((candidate) => {
+        const toDepth = this.getMap(candidate.toMapId).depth;
+        const direction = Math.sign(toDepth - currentDepth);
+        const directionalPenalty = expectedDirection !== 0 && direction !== expectedDirection ? 100 : 0;
+        return {
+          transition: candidate,
+          score: directionalPenalty + Math.abs(targetDepth - toDepth),
+        };
+      })
+      .sort((a, b) => a.score - b.score)[0]?.transition ?? null;
+
+    return transition?.fromCell ?? targetCell;
+  }
+
+  private setDisplayedMap(mapId: string): void {
+    if (!this.state.dungeonMaps.some((map) => map.id === mapId)) {
+      return;
+    }
+
+    this.state.currentMapId = mapId;
+    this.syncLegacyActiveMapFields();
+  }
+
+  private visibleDefenses(): DefenseEntity[] {
+    return this.state.defenses.filter((defense) => defense.mapId === this.state.currentMapId);
+  }
+
+  private visibleDoors(): DungeonDoor[] {
+    return this.state.doors.filter((door) => door.mapId === this.state.currentMapId);
+  }
+
+  private doorsForMap(mapId: string): DungeonDoor[] {
+    return this.state.doors.filter((door) => door.mapId === mapId);
+  }
+
+  private visibleTreasures(): DungeonTreasure[] {
+    return this.state.treasures.filter((treasure) => treasure.mapId === this.state.currentMapId);
+  }
+
+  private visibleRemains(): AdventurerRemains[] {
+    return this.state.remains.filter((remains) => remains.mapId === this.state.currentMapId);
+  }
+
+  private visibleAdventurers(): AdventurerEntity[] {
+    return this.state.adventurers.filter((adventurer) => adventurer.mapId === this.state.currentMapId);
+  }
+
+  private describeResealRejection(cell: GridCell): string | null {
+    const tile = getTileAt(this.state.tiles, cell);
+
+    if (!tile || (tile.type !== 'floor' && tile.type !== 'room')) {
+      return 'Rebouchage refuse: choisis un sol ou une salle creusee simple.';
+    }
+
+    if (isInEntrySafeZone(cell) || isSameCell(cell, ENTRY_CELL)) {
+      return "Rebouchage refuse: l'entree doit rester ouverte.";
+    }
+
+    if (this.getActiveMap().transitions.some((transition) => isSameCell(transition.fromCell, cell))) {
+      return 'Rebouchage refuse: cette case porte une transition critique entre etages.';
+    }
+
+    if (this.state.currentMapId === this.state.boss.mapId && isSameCell(cell, this.getBossCell())) {
+      return 'Rebouchage refuse: le boss garde son trone.';
+    }
+
+    if (this.visibleTreasures().some((treasure) => treasure.status !== 'stolen' && isSameCell(treasure.cell, cell))) {
+      return 'Rebouchage refuse: un tresor occupe cette dalle.';
+    }
+
+    if (this.visibleDoors().some((door) => !door.destroyed && isSameCell(door.cell, cell))) {
+      return 'Rebouchage refuse: retire la porte avant de remonter le mur.';
+    }
+
+    if (hasDefenseOnCell(this.visibleDefenses(), cell)) {
+      return 'Rebouchage refuse: une defense occupe cette dalle.';
+    }
+
+    if (this.visibleRemains().some((remains) => isSameCell(remains.cell, cell))) {
+      return 'Rebouchage refuse: des restes persistants reposent ici.';
+    }
+
+    if (this.visibleAdventurers().some((adventurer) => adventurer.alive && isSameCell({ x: Math.round(adventurer.x), y: Math.round(adventurer.y) }, cell))) {
+      return 'Rebouchage refuse: un aventurier est sur cette dalle.';
+    }
+
+    return null;
+  }
+
+  private describeGuardianPlacementRejection(cell: GridCell): string | null {
+    if (this.state.defenses.some((defense) => defense.alive && defense.type === 'guardian')) {
+      return 'Un seul gardien de zone peut tenir le donjon pour cette V1.';
+    }
+
+    if (this.visibleRemains().some((remains) => isSameCell(remains.cell, cell))) {
+      return 'Impossible: des restes aventuriers reposent ici.';
+    }
+
+    if (this.visibleTreasures().some((treasure) => treasure.status !== 'stolen' && isSameCell(treasure.cell, cell))) {
+      return 'Impossible: le gardien ne doit pas se tenir sur un tresor.';
+    }
+
+    if (this.state.currentMapId === this.state.boss.mapId && isSameCell(cell, this.getBossCell())) {
+      return 'Impossible: le gardien protege une zone, pas le trone du boss.';
+    }
+
+    if (!isGuardianPreferredCell(this.state.zones, cell)) {
+      return "Le gardien doit tenir une zone de defense, une salle secondaire ou l'antichambre.";
+    }
+
+    if (
+      !this.hasGlobalWalkablePath(ENTRANCE_MAP_ID, ENTRY_CELL, this.state.currentMapId, cell) ||
+      !this.hasGlobalWalkablePath(this.state.currentMapId, cell, this.state.boss.mapId, this.getBossCell())
+    ) {
+      return "Placement refuse: le gardien doit rester sur une route accessible sans condamner l'approche du boss.";
+    }
+
+    return null;
+  }
+
+  private describeRoomLockTrapPlacementRejection(cell: GridCell): string | null {
+    if (this.getActiveMap().transitions.some((transition) => isSameCell(transition.fromCell, cell))) {
+      return 'Piege de verrouillage refuse: ne le place pas directement sur une transition critique.';
+    }
+
+    if (this.visibleRemains().some((remains) => isSameCell(remains.cell, cell))) {
+      return 'Piege de verrouillage refuse: des restes persistants occupent cette dalle.';
+    }
+
+    if (this.visibleTreasures().some((treasure) => treasure.status !== 'stolen' && isSameCell(treasure.cell, cell))) {
+      return 'Piege de verrouillage refuse: pas sur un tresor.';
+    }
+
+    if (this.state.currentMapId === this.state.boss.mapId && isSameCell(cell, this.getBossCell())) {
+      return 'Piege de verrouillage refuse: pas sur le trone du boss en V1.';
+    }
+
+    const zone = findZoneForCell(this.state.zones, cell);
+
+    if (!zone || zone.type === 'corridor' || zone.type === 'entrance' || zone.type === 'boss' || zone.type === 'treasure') {
+      return 'Piege de verrouillage refuse: choisis une vraie salle defensive ou secondaire, hors entree/boss/tresor.';
+    }
+
+    const zoneKeys = new Set(zone.cells.map((zoneCell) => cellKey(zoneCell)));
+    const hasMinionInRoom = this.visibleDefenses().some(
+      (defense) => defense.alive && defense.kind === 'minion' && zoneKeys.has(cellKey(defense.cell)),
+    );
+
+    if (!hasMinionInRoom) {
+      return 'Piege de verrouillage refuse: la salle doit deja contenir au moins un monstre.';
+    }
+
+    return null;
   }
 
   private buildAbilitySnapshot(): BossAbilityUiItem[] {
@@ -1243,23 +1748,23 @@ export class DungeonSimulation {
 
     if (
       target === 'boss' &&
-      this.state.treasures.some((treasure) => treasure.id !== movingTreasureId && treasure.status !== 'stolen' && isSameCell(treasure.cell, cell))
+      this.visibleTreasures().some((treasure) => treasure.id !== movingTreasureId && treasure.status !== 'stolen' && isSameCell(treasure.cell, cell))
     ) {
       return 'Impossible: un tresor occupe deja cette dalle.';
     }
 
     if (
       target === 'treasure' &&
-      this.state.treasures.some((treasure) => treasure.id !== movingTreasureId && treasure.status !== 'stolen' && isSameCell(treasure.cell, cell))
+      this.visibleTreasures().some((treasure) => treasure.id !== movingTreasureId && treasure.status !== 'stolen' && isSameCell(treasure.cell, cell))
     ) {
       return 'Impossible: un autre tresor occupe deja cette dalle.';
     }
 
-    if (hasDefenseOnCell(this.state.defenses, cell)) {
+    if (hasDefenseOnCell(this.visibleDefenses(), cell)) {
       return 'Impossible: une defense occupe deja cette dalle.';
     }
 
-    if (findActiveDoorAt(this.state.doors, cell)) {
+    if (findActiveDoorAt(this.visibleDoors(), cell)) {
       return 'Impossible: une porte occupe deja cette dalle.';
     }
 
@@ -1298,14 +1803,18 @@ export class DungeonSimulation {
   }
 
   private chooseWaveTreasureTarget(adventurer: AdventurerEntity | null = null): DungeonTreasure | null {
-    const blockedCellKeys = getBlockedCellKeys(this.state.tiles);
     const profile = adventurer ? this.state.world.profiles[adventurer.profileId] ?? null : null;
+    const startMapId = adventurer?.mapId ?? ENTRANCE_MAP_ID;
+    const startCell = adventurer ? { x: Math.round(adventurer.x), y: Math.round(adventurer.y) } : ENTRY_CELL;
 
     return this.getActiveTreasures()
       .map((treasure) => ({
         treasure,
-        accessible: hasWalkablePath(ENTRY_CELL, treasure.cell, blockedCellKeys),
-        distance: Math.abs(ENTRY_CELL.x - treasure.cell.x) + Math.abs(ENTRY_CELL.y - treasure.cell.y),
+        accessible: this.hasGlobalWalkablePath(startMapId, startCell, treasure.mapId, getTreasureCurrentCell(treasure) ?? treasure.cell),
+        distance:
+          Math.abs(startCell.x - treasure.cell.x) +
+          Math.abs(startCell.y - treasure.cell.y) +
+          (startMapId === treasure.mapId ? 0 : 18),
         score: treasureAttraction(treasure, adventurer, profile),
       }))
       .filter((entry) => entry.accessible)
@@ -1368,6 +1877,7 @@ export class DungeonSimulation {
   private createGoldTreasure(cell: GridCell): DungeonTreasure {
     const treasure: DungeonTreasure = {
       id: `gold-${this.nextTreasureId}`,
+      mapId: this.state.currentMapId,
       kind: 'gold',
       cell: { ...cell },
       value: GOLD_TREASURE_DEFAULT_VALUE,
@@ -1386,6 +1896,7 @@ export class DungeonSimulation {
     const specialKind = specialKindFromTreasureKind(kind);
     const treasure: DungeonTreasure = {
       id: `special-${this.nextTreasureId}`,
+      mapId: this.state.currentMapId,
       kind,
       cell: { ...cell },
       value: specialKind ? specialTreasureValue(specialKind) : 0,
@@ -1410,24 +1921,37 @@ export class DungeonSimulation {
   }
 
   private createInitialState(): GameState {
-    return {
+    const mainTreasure = createMainTreasure();
+    const boss = {
+      ...BOSS_TEMPLATE,
+      hp: BOSS_TEMPLATE.maxHp,
+      attackTimerMs: 0,
+      abilities: createBossAbilities(),
+    };
+    const dungeonMaps = createInitialDungeonMaps({
+      defenses: [],
+      treasures: [mainTreasure],
+      bossCell: boss.homeCell,
+    });
+    const activeMap = dungeonMaps.find((map) => map.id === ENTRANCE_MAP_ID) ?? dungeonMaps[0];
+    const state: GameState = {
       phase: 'build',
       wave: 1,
       gold: STARTING_GOLD,
+      dungeonMaps,
+      currentMapId: activeMap.id,
+      expeditionMapId: activeMap.id,
       selectedDefense: 'spikeTrap',
       selectedConstructionTool: null,
-      tiles: createInitialDungeonTiles(),
+      tiles: activeMap.tiles,
       doors: [],
       defenses: [],
       adventurers: [],
-      boss: {
-        ...BOSS_TEMPLATE,
-        hp: BOSS_TEMPLATE.maxHp,
-        attackTimerMs: 0,
-        abilities: createBossAbilities(),
-      },
+      remains: [],
+      zones: activeMap.zones,
+      boss,
       treasure: createSecureTreasure(),
-      treasures: [createMainTreasure()],
+      treasures: [mainTreasure],
       memory: {
         trapAvoidance: 0.35,
         trapDangerByCell: {},
@@ -1436,6 +1960,7 @@ export class DungeonSimulation {
           thief: 0,
           mage: 0,
           healer: 0,
+          cartographer: 0,
         },
         doorBlockedWithoutThief: false,
       },
@@ -1449,6 +1974,8 @@ export class DungeonSimulation {
       bossAutopilotIntent: null,
       bossLastAbilityName: null,
     };
+    this.syncLegacyActiveMapFieldsForState(state);
+    return state;
   }
 
   private tickTimers(deltaMs: number): void {
@@ -1557,8 +2084,8 @@ export class DungeonSimulation {
       }
 
       if (tryUseDefenseAbility(defense, {
-        adventurers: this.state.adventurers,
-        doors: this.state.doors,
+        adventurers: this.state.adventurers.filter((adventurer) => adventurer.mapId === defense.mapId),
+        doors: this.doorsForMap(defense.mapId),
         stats: runtime.stats,
         damageAdventurer: (target, damage, source) => this.damageAdventurer(target, damage, 'minion', source.type, source.cell, source),
         message: (text) => {
@@ -1576,6 +2103,7 @@ export class DungeonSimulation {
         definition.attackRange ?? 1,
         defense.tauntedByAdventurerId,
         defense.threatByAdventurerId,
+        defense.mapId,
       );
 
       if (!target) {
@@ -1634,6 +2162,7 @@ export class DungeonSimulation {
       const targetMinion = this.findTargetMinion(adventurer);
       const canAttackBoss =
         this.canAdventurerAttackBoss(adventurer) &&
+        adventurer.mapId === this.state.boss.mapId &&
         distance(adventurer.x, adventurer.y, this.state.boss.x, this.state.boss.y) <= adventurer.attackRange + 0.3;
 
       if (!targetMinion && !canAttackBoss && this.tryStartOpportunisticLoot(adventurer)) {
@@ -1666,6 +2195,10 @@ export class DungeonSimulation {
     const currentCell = { x: Math.round(adventurer.x), y: Math.round(adventurer.y) };
 
     if (isSameCell(currentCell, targetCell)) {
+      if (this.tryUseMapTransition(adventurer, currentCell)) {
+        return;
+      }
+
       if (adventurer.targetStage === 'exit' && !adventurer.hasEnteredDungeon) {
         this.withdrawUndeployedAdventurer(adventurer);
         return;
@@ -1680,14 +2213,18 @@ export class DungeonSimulation {
         role: adventurer.role,
         trapAvoidance: this.state.memory.trapAvoidance * personalityTrapAvoidance(adventurer),
         trapDangerByCell: this.state.memory.trapDangerByCell,
-        knownTrapCells: this.getKnownTrapCells(),
-        blockedCellKeys: getBlockedCellKeys(this.state.tiles),
+        knownTrapCells: this.getKnownTrapCells(adventurer.mapId),
+        blockedCellKeys: getBlockedCellKeys(this.tilesForMap(adventurer.mapId)),
       });
     }
 
     const nextCell = adventurer.path[0];
 
     if (!nextCell) {
+      this.recordMemoryObservation(adventurer, 'routeChangedSuspected', currentCell, 'Route introuvable', 0.42, 'room');
+      if (adventurer.role === 'cartographer') {
+        tryBark(adventurer, 'mapChanged', this.visibleBarkCount());
+      }
       return;
     }
 
@@ -1695,7 +2232,16 @@ export class DungeonSimulation {
       return;
     }
 
-    const blockingDoor = findActiveDoorAt(this.state.doors, nextCell);
+    if (this.roomLockBlocksStep(adventurer.mapId, currentCell, nextCell)) {
+      adventurer.path = [];
+      adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, 220);
+      adventurer.behaviorState = 'evaluatingRoom';
+      tryBark(adventurer, 'roomLockTriggered', this.visibleBarkCount());
+      this.state.message = 'Les issues sont verrouillees: il faut abattre les defenseurs de la salle.';
+      return;
+    }
+
+    const blockingDoor = findActiveDoorAt(this.doorsForMap(adventurer.mapId), nextCell);
 
     if (blockingDoor) {
       this.engageDoor(adventurer, blockingDoor, deltaMs);
@@ -1719,6 +2265,10 @@ export class DungeonSimulation {
       adventurer.y = nextCell.y;
       adventurer.path.shift();
       adventurer.path = [];
+      if (this.tryUseMapTransition(adventurer, nextCell)) {
+        return;
+      }
+
       this.handleCellEntered(adventurer, nextCell);
 
       if (isSameCell(nextCell, targetCell)) {
@@ -1743,7 +2293,13 @@ export class DungeonSimulation {
     }
 
     const trap = this.state.defenses.find(
-      (defense) => defense.alive && defense.kind === 'trap' && defense.cooldownRemainingMs <= 0 && isSameCell(defense.cell, nextCell),
+      (defense) =>
+        defense.mapId === adventurer.mapId &&
+        defense.alive &&
+        defense.kind === 'trap' &&
+        (defense.trapState === null || defense.trapState === 'armed') &&
+        defense.cooldownRemainingMs <= 0 &&
+        isSameCell(defense.cell, nextCell),
     );
 
     if (!trap) {
@@ -1769,13 +2325,13 @@ export class DungeonSimulation {
       return false;
     }
 
-    const blockedCellKeys = getBlockedCellKeys(this.state.tiles);
+    const blockedCellKeys = getBlockedCellKeys(this.tilesForMap(adventurer.mapId));
     blockedCellKeys.add(cellKey(nextCell));
     const alternative = findPath(currentCell, targetCell, {
       role: adventurer.role,
       trapAvoidance: this.state.memory.trapAvoidance * personalityTrapAvoidance(adventurer) * 1.6,
       trapDangerByCell: this.state.memory.trapDangerByCell,
-      knownTrapCells: this.getKnownTrapCells(),
+      knownTrapCells: this.getKnownTrapCells(adventurer.mapId),
       blockedCellKeys,
     });
 
@@ -1809,13 +2365,26 @@ export class DungeonSimulation {
       this.state.runtime.doorsEngagedIds.add(door.id);
       stats.doorEncounters += 1;
       recordProfileDoorEncounter(this.state.world, adventurer.profileId);
+      this.recordMemoryObservation(adventurer, 'doorSeen', door.cell, 'Porte verrouillee', 0.5, 'exact');
       this.state.message = `${adventurer.name} trouve une porte verrouillee. La force brute signe sa demission.`;
     }
 
     const livingThief = this.state.adventurers.find((candidate) => candidate.alive && !candidate.escaped && candidate.role === 'thief') ?? null;
+    const thiefWithLockpicks = this.state.adventurers.find(
+      (candidate) =>
+        candidate.alive &&
+        !candidate.escaped &&
+        candidate.role === 'thief' &&
+        candidate.lockpicksUsedThisExpedition < candidate.maxLockpicksPerExpedition,
+    ) ?? null;
 
     if (!livingThief) {
       this.retreatFromDoorWithoutThief(adventurer);
+      return;
+    }
+
+    if (!thiefWithLockpicks) {
+      this.retreatFromDoorWithoutLockpicks(adventurer);
       return;
     }
 
@@ -1825,24 +2394,66 @@ export class DungeonSimulation {
       return;
     }
 
+    if (adventurer.lockpicksUsedThisExpedition >= adventurer.maxLockpicksPerExpedition) {
+      adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, 520);
+      tryBark(adventurer, 'doorNoLockpicks', this.visibleBarkCount());
+      this.state.message = `${adventurer.name}: Plus de crochets. Deux portes, pas trois.`;
+      return;
+    }
+
+    if (door.beingPickedById && door.beingPickedById !== adventurer.id) {
+      adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, 220);
+      return;
+    }
+
+    const wasPicking = door.beingPickedById === adventurer.id;
     door.beingPickedById = adventurer.id;
     door.pickProgressMs = Math.min(door.pickRequiredMs, door.pickProgressMs + deltaMs);
     adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, 80);
     stats.thiefDoorLeads += 1;
     tryBark(adventurer, 'doorThief', this.visibleBarkCount());
+
+    if (!wasPicking) {
+      stats.storyEvents.push(`${adventurer.name} commence a crocheter une porte verrouillee.`);
+    }
     this.state.message = `${adventurer.name} crochète la porte verrouillee...`;
+
+    this.state.message = `${adventurer.name}: Je crochete cette porte.`;
 
     if (door.pickProgressMs >= door.pickRequiredMs) {
       door.locked = false;
       door.openedForExpedition = true;
       door.beingPickedById = null;
       door.pickProgressMs = door.pickRequiredMs;
+      adventurer.lockpicksUsedThisExpedition += 1;
       stats.doorsPicked += 1;
       recordProfileDoorPicked(this.state.world, adventurer.profileId);
+      this.recordMemoryObservation(adventurer, 'doorSeen', door.cell, 'Porte crochetee', 0.58, 'exact');
       stats.storyEvents.push(`${adventurer.name} crochete une porte verrouillee et ouvre le passage.`);
       tryBark(adventurer, 'doorOpened', this.visibleBarkCount());
-      this.state.message = `${adventurer.name} ouvre la porte. Le groupe peut passer.`;
+      const remaining = Math.max(0, adventurer.maxLockpicksPerExpedition - adventurer.lockpicksUsedThisExpedition);
+      this.state.message = remaining > 0
+        ? `${adventurer.name}: C'est ouvert. Il me reste de quoi faire.`
+        : `${adventurer.name}: C'est ouvert. Plus de crochets.`;
     }
+  }
+
+  private retreatFromDoorWithoutLockpicks(adventurer: AdventurerEntity): void {
+    if (!this.state.runtime) {
+      return;
+    }
+
+    if (this.state.runtime.stats.doorNoThiefRetreats === 0) {
+      this.state.runtime.stats.storyEvents.push("L'expedition abandonne devant une porte verrouillee: le voleur n'a plus de crochets.");
+      this.recordMemoryObservation(adventurer, 'routeBlocked', { x: Math.round(adventurer.x), y: Math.round(adventurer.y) }, 'Route bloquee par serrure', 0.54, 'room');
+      this.state.memory.rolePressure.thief += 1.5;
+      this.state.runtime.stats.doorNoThiefRetreats = 1;
+      this.startGroupRetreat('Porte verrouillee: plus de crochets.', 'lockedDoorNoThief');
+    }
+
+    adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, 900);
+    tryBark(adventurer, 'doorNoLockpicks', this.visibleBarkCount());
+    this.state.message = 'Plus de crochets. La serrure gagne par plafond logistique.';
   }
 
   private retreatFromDoorWithoutThief(adventurer: AdventurerEntity): void {
@@ -1852,6 +2463,7 @@ export class DungeonSimulation {
 
     if (this.state.runtime.stats.doorNoThiefRetreats === 0) {
       this.state.runtime.stats.storyEvents.push("L'expedition abandonne devant une porte verrouillee faute de voleur.");
+      this.recordMemoryObservation(adventurer, 'routeBlocked', { x: Math.round(adventurer.x), y: Math.round(adventurer.y) }, 'Route bloquee par porte', 0.52, 'room');
       this.state.memory.rolePressure.thief += 3;
       this.state.runtime.stats.doorNoThiefRetreats = 1;
       this.startGroupRetreat('Porte verrouillee sans voleur.', 'lockedDoorNoThief');
@@ -1918,6 +2530,18 @@ export class DungeonSimulation {
       this.state.treasure = this.toLegacyTreasureState(treasure);
       adventurer.carryingTreasure = true;
       adventurer.targetTreasureId = null;
+      this.recordMemoryObservation(
+        adventurer,
+        isSpecialTreasureKind(treasure.kind) ? 'specialTreasureSeen' : 'treasureSeen',
+        getTreasureCurrentCell(treasure),
+        treasure.kind === 'main'
+          ? 'Tresor principal'
+          : isSpecialTreasureKind(treasure.kind)
+            ? specialTreasureNameForKind(treasure.kind)
+            : "Tresor d'or",
+        0.62,
+        'exact',
+      );
       this.applySpecialTreasurePickupFeedback(adventurer, treasure);
 
       if (this.state.runtime) {
@@ -2088,13 +2712,14 @@ export class DungeonSimulation {
         role: adventurer.role,
         trapAvoidance: this.state.memory.trapAvoidance * personalityTrapAvoidance(adventurer),
         trapDangerByCell: this.state.memory.trapDangerByCell,
-        knownTrapCells: this.getKnownTrapCells(),
-        blockedCellKeys: getBlockedCellKeys(this.state.tiles),
+        knownTrapCells: this.getKnownTrapCells(adventurer.mapId),
+        blockedCellKeys: getBlockedCellKeys(this.tilesForMap(adventurer.mapId)),
       });
     const nextPathKeys = new Set(plannedPath.slice(0, 5).map((cell) => cellKey(cell)));
     const immediateDanger = this.hasImmediateDangerNear(adventurer);
 
     return this.state.treasures
+      .filter((treasure) => treasure.mapId === adventurer.mapId)
       .filter((treasure) => treasure.status === 'secure' || treasure.status === 'dropped')
       .map((treasure) => {
         const treasureCell = getTreasureCurrentCell(treasure);
@@ -2103,8 +2728,8 @@ export class DungeonSimulation {
             role: adventurer.role,
             trapAvoidance: this.state.memory.trapAvoidance * personalityTrapAvoidance(adventurer),
             trapDangerByCell: this.state.memory.trapDangerByCell,
-            knownTrapCells: this.getKnownTrapCells(),
-            blockedCellKeys: getBlockedCellKeys(this.state.tiles),
+            knownTrapCells: this.getKnownTrapCells(adventurer.mapId),
+            blockedCellKeys: getBlockedCellKeys(this.tilesForMap(adventurer.mapId)),
           })
           : [];
         const directDistance = treasureCell ? distance(currentCell.x, currentCell.y, treasureCell.x, treasureCell.y) : Number.POSITIVE_INFINITY;
@@ -2148,9 +2773,9 @@ export class DungeonSimulation {
     }
 
     const minionOnTreasure = this.state.defenses.some(
-      (defense) => defense.alive && defense.kind === 'minion' && distance(defense.x, defense.y, treasureCell.x, treasureCell.y) <= 1.35,
+      (defense) => defense.mapId === treasure.mapId && defense.alive && defense.kind === 'minion' && distance(defense.x, defense.y, treasureCell.x, treasureCell.y) <= 1.35,
     );
-    const bossTooClose = distance(this.state.boss.x, this.state.boss.y, treasureCell.x, treasureCell.y) <= this.state.boss.attackRange + 0.8;
+    const bossTooClose = this.state.boss.mapId === treasure.mapId && distance(this.state.boss.x, this.state.boss.y, treasureCell.x, treasureCell.y) <= this.state.boss.attackRange + 0.8;
 
     if (minionOnTreasure || bossTooClose) {
       return false;
@@ -2178,10 +2803,11 @@ export class DungeonSimulation {
 
   private hasImmediateDangerNear(adventurer: AdventurerEntity): boolean {
     const minionNear = this.state.defenses.some(
-      (defense) => defense.alive && defense.kind === 'minion' && distance(defense.x, defense.y, adventurer.x, adventurer.y) <= 2.25,
+      (defense) => defense.mapId === adventurer.mapId && defense.alive && defense.kind === 'minion' && distance(defense.x, defense.y, adventurer.x, adventurer.y) <= 2.25,
     );
     const bossNear =
       adventurer.targetStage === 'boss' &&
+      adventurer.mapId === this.state.boss.mapId &&
       distance(this.state.boss.x, this.state.boss.y, adventurer.x, adventurer.y) <= this.state.boss.detectionRange;
 
     return minionNear || bossNear;
@@ -2197,6 +2823,7 @@ export class DungeonSimulation {
     const droppedCell = { x: Math.round(adventurer.x), y: Math.round(adventurer.y) };
 
     if (treasure) {
+      treasure.mapId = adventurer.mapId;
       treasure.status = 'dropped';
       treasure.holderAdventurerId = null;
       treasure.droppedCell = droppedCell;
@@ -2217,7 +2844,7 @@ export class DungeonSimulation {
   }
 
   private handleCellEntered(adventurer: AdventurerEntity, cell: GridCell): void {
-    const key = cellKey(cell);
+    const key = `${adventurer.mapId}:${cellKey(cell)}`;
 
     if (adventurer.lastCellKey === key || !adventurer.alive) {
       return;
@@ -2230,9 +2857,20 @@ export class DungeonSimulation {
     }
 
     this.maybeEvaluateRoom(adventurer, cell);
+    this.observeDungeonAround(adventurer, cell);
+    this.observeCurrentZone(adventurer, cell);
+    this.maybeReactToRemains(adventurer, cell);
+    this.maybeTriggerRoomLock(adventurer, cell);
 
     const trap = this.state.defenses.find(
-      (defense) => defense.alive && defense.kind === 'trap' && defense.cooldownRemainingMs <= 0 && isSameCell(defense.cell, cell),
+      (defense) =>
+        defense.mapId === adventurer.mapId &&
+        defense.alive &&
+        defense.kind === 'trap' &&
+        defense.type !== 'roomLockTrap' &&
+        (defense.trapState === null || defense.trapState === 'armed') &&
+        defense.cooldownRemainingMs <= 0 &&
+        isSameCell(defense.cell, cell),
     );
 
     if (!trap) {
@@ -2242,9 +2880,115 @@ export class DungeonSimulation {
     const definition = getDefenseDefinition(trap.type);
     const baseDamage = definition.trapDamage ?? 0;
     const damage = Math.max(1, Math.round(baseDamage * adventurer.trapDamageMultiplier));
+    this.recordMemoryObservation(adventurer, 'trapSeen', trap.cell, getDefenseDefinition(trap.type).name, 0.52, 'exact');
     recordProfileTrapTriggered(this.state.world, adventurer.profileId);
     this.damageAdventurer(adventurer, damage, 'trap', trap.type, cell, trap);
     trap.cooldownRemainingMs = definition.trapCooldownMs ?? 1500;
+  }
+
+  private maybeTriggerRoomLock(adventurer: AdventurerEntity, cell: GridCell): void {
+    if (!this.state.runtime || adventurer.targetStage === 'exit') {
+      return;
+    }
+
+    const zone = findZoneForCell(this.getMap(adventurer.mapId).zones, cell);
+
+    if (!zone || zone.type === 'corridor' || zone.type === 'entrance') {
+      return;
+    }
+
+    const zoneKeys = new Set(zone.cells.map((zoneCell) => cellKey(zoneCell)));
+    const trap = this.state.defenses.find(
+      (defense) =>
+        defense.mapId === adventurer.mapId &&
+        defense.alive &&
+        defense.type === 'roomLockTrap' &&
+        defense.trapState === 'armed' &&
+        zoneKeys.has(cellKey(defense.cell)),
+    ) ?? null;
+
+    if (!trap) {
+      return;
+    }
+
+    const minionIds = this.state.defenses
+      .filter((defense) => defense.mapId === adventurer.mapId && defense.alive && defense.kind === 'minion' && zoneKeys.has(cellKey(defense.cell)))
+      .map((defense) => defense.id);
+
+    if (minionIds.length === 0) {
+      trap.trapState = 'cleared';
+      trap.abilityFxTimerMs = COMBAT_ABILITY_BALANCE.abilityFxMs;
+      this.state.message = 'Le piege de verrouillage claque a vide puis se rouvre.';
+      return;
+    }
+
+    trap.trapState = 'triggered';
+    trap.roomLockZoneId = zone.id;
+    trap.roomLockMinionIds = minionIds;
+    trap.abilityFxTimerMs = COMBAT_ABILITY_BALANCE.abilityFxMs;
+    adventurer.path = [];
+    adventurer.behaviorState = 'evaluatingRoom';
+    adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, 220);
+    this.recordMemoryObservation(adventurer, 'roomLockTrapSeen', trap.cell, 'Salle verrouillee', 0.54, adventurer.role === 'cartographer' ? 'exact' : 'room');
+    this.recordMemoryObservation(adventurer, 'dangerousRoomSeen', zone.center, `${zone.label} verrouillee`, 0.46, adventurer.role === 'cartographer' ? 'exact' : 'room');
+    this.state.runtime.stats.storyEvents.push(`${adventurer.name} declenche un piege de verrouillage: ${zone.label} se ferme.`);
+    tryBark(adventurer, 'roomLockTriggered', this.visibleBarkCount());
+    this.state.message = 'La salle se ferme. Les issues se verrouillent.';
+  }
+
+  private updateRoomLocks(): void {
+    const runtime = this.state.runtime;
+
+    if (!runtime) {
+      return;
+    }
+
+    this.state.defenses
+      .filter((defense) => defense.type === 'roomLockTrap' && defense.trapState === 'triggered')
+      .forEach((trap) => {
+        const remainingMinions = trap.roomLockMinionIds
+          .map((id) => this.state.defenses.find((defense) => defense.id === id) ?? null)
+          .filter((defense): defense is DefenseEntity => Boolean(defense && defense.alive));
+
+        if (remainingMinions.length > 0) {
+          return;
+        }
+
+        trap.trapState = 'cleared';
+        trap.roomLockMinionIds = [];
+        trap.abilityFxTimerMs = COMBAT_ABILITY_BALANCE.abilityFxMs;
+        runtime.stats.storyEvents.push('La salle verrouillee se rouvre apres la mort de ses defenseurs.');
+        const witness = this.state.adventurers.find((adventurer) => adventurer.alive && !adventurer.escaped && adventurer.mapId === trap.mapId) ?? null;
+
+        if (witness) {
+          this.recordMemoryObservation(witness, 'trappedRoomSurvived', trap.cell, 'Salle piegee survecue', 0.5, witness.role === 'cartographer' ? 'exact' : 'room');
+          tryBark(witness, 'roomLockCleared', this.visibleBarkCount());
+        }
+
+        this.state.message = 'La salle se rouvre. Le verrou cede.';
+      });
+  }
+
+  private tryUseMapTransition(adventurer: AdventurerEntity, cell: GridCell): boolean {
+    const transition = this.findTransitionAt(adventurer.mapId, cell);
+
+    if (!transition || transition.locked) {
+      return false;
+    }
+
+    this.recordMemoryObservation(adventurer, 'transitionSeen', transition.fromCell, transition.label, 0.5, adventurer.role === 'cartographer' ? 'exact' : 'room');
+    adventurer.mapId = transition.toMapId;
+    adventurer.x = transition.toCell.x;
+    adventurer.y = transition.toCell.y;
+    adventurer.path = [];
+    adventurer.lastCellKey = `${adventurer.mapId}:${cellKey(transition.toCell)}`;
+    adventurer.behaviorState = 'regrouping';
+    adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, adventurer.role === 'warrior' ? 120 : 220);
+    this.recordMemoryObservation(adventurer, 'floorReached', transition.toCell, this.getMap(transition.toMapId).label, 0.52, adventurer.role === 'cartographer' ? 'exact' : 'room');
+    this.state.expeditionMapId = transition.toMapId;
+    this.setDisplayedMap(transition.toMapId);
+    this.state.message = `${adventurer.name} emprunte ${transition.label} vers ${this.getMap(transition.toMapId).label}.`;
+    return true;
   }
 
   private maybeEvaluateRoom(adventurer: AdventurerEntity, cell: GridCell): void {
@@ -2252,30 +2996,341 @@ export class DungeonSimulation {
       return;
     }
 
-    const tile = getTileAt(this.state.tiles, cell);
-    const roomKey = tile?.roomType ? `${tile.roomType}:${cell.x >> 1},${cell.y >> 1}` : null;
+    const tile = getTileAt(this.tilesForMap(adventurer.mapId), cell);
+    const zone = findZoneForCell(this.getMap(adventurer.mapId).zones, cell);
+    const roomKey = zone && isExplorableZone(zone)
+      ? zoneMemoryKey(zone)
+      : tile?.roomType
+        ? `${adventurer.mapId}:${tile.roomType}:${cell.x >> 1},${cell.y >> 1}`
+        : null;
 
     if (!tile || (tile.type !== 'room' && tile.type !== 'treasure' && tile.type !== 'throne') || !roomKey || adventurer.lastEvaluatedRoomKey === roomKey) {
       return;
     }
 
-    const hasSomethingToRead =
-      this.state.defenses.some((defense) => defense.alive && distance(defense.x, defense.y, cell.x, cell.y) <= 3) ||
-      this.state.treasures.some((treasure) => {
-        const treasureCell = getTreasureCurrentCell(treasure);
-        return treasure.status !== 'stolen' && treasureCell && distance(treasureCell.x, treasureCell.y, cell.x, cell.y) <= 3;
-      }) ||
-      distance(this.state.boss.x, this.state.boss.y, cell.x, cell.y) <= this.state.boss.detectionRange + 0.8;
+    adventurer.lastEvaluatedRoomKey = roomKey;
+    adventurer.behaviorState = adventurer.role === 'cartographer' ? 'mapping' : 'evaluatingRoom';
+    adventurer.hesitationTimerMs = Math.max(
+      adventurer.hesitationTimerMs,
+      adventurer.role === 'warrior' ? 120 : adventurer.role === 'cartographer' ? 360 : 220,
+    );
+    this.state.runtime.stats.roomEvaluations += 1;
+    tryBark(adventurer, adventurer.role === 'warrior' ? 'secureArea' : adventurer.role === 'cartographer' ? 'mapping' : 'stayTogether', this.visibleBarkCount());
+  }
 
-    if (!hasSomethingToRead) {
+  private observeDungeonAround(adventurer: AdventurerEntity, cell: GridCell): void {
+    if (!this.state.runtime || !adventurer.alive || adventurer.escaped || adventurer.targetStage === 'exit') {
       return;
     }
 
-    adventurer.lastEvaluatedRoomKey = roomKey;
-    adventurer.behaviorState = 'evaluatingRoom';
-    adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, adventurer.role === 'warrior' ? 120 : 220);
-    this.state.runtime.stats.roomEvaluations += 1;
-    tryBark(adventurer, adventurer.role === 'warrior' ? 'secureArea' : 'stayTogether', this.visibleBarkCount());
+    const radius = adventurer.role === 'cartographer' ? CARTOGRAPHER_OBSERVATION_RADIUS : BASE_OBSERVATION_RADIUS;
+    const precision = adventurer.role === 'cartographer' ? 'room' : 'vague';
+
+    this.state.doors
+      .filter((door) => door.mapId === adventurer.mapId && !door.destroyed && distance(door.cell.x, door.cell.y, cell.x, cell.y) <= radius)
+      .forEach((door) => {
+        this.recordMemoryObservation(adventurer, 'doorSeen', door.cell, door.locked ? 'Porte verrouillee' : 'Porte ouverte', 0.44, precision);
+      });
+
+    this.state.defenses
+      .filter((defense) => defense.mapId === adventurer.mapId && defense.alive && distance(defense.x, defense.y, cell.x, cell.y) <= radius)
+      .forEach((defense) => {
+        const label = getDefenseDefinition(defense.type).name;
+        this.recordMemoryObservation(
+          adventurer,
+          defense.kind === 'trap' ? 'trapSeen' : 'defenderSeen',
+          defense.cell,
+          label,
+          defense.kind === 'trap' ? 0.46 : 0.42,
+          precision,
+        );
+
+        if (defense.type === 'guardian') {
+          const recorded = this.recordMemoryObservation(
+            adventurer,
+            'guardianSeen',
+            defense.cell,
+            label,
+            adventurer.role === 'cartographer' ? 0.58 : 0.46,
+            adventurer.role === 'cartographer' ? 'exact' : precision,
+          );
+
+          if (recorded) {
+            this.state.runtime!.stats.guardianSightings += 1;
+          }
+        }
+
+        if (adventurer.role === 'cartographer' && defense.kind === 'trap') {
+          tryBark(adventurer, 'mapTrap', this.visibleBarkCount());
+        }
+      });
+
+    this.state.treasures
+      .filter((treasure) => treasure.mapId === adventurer.mapId && treasure.status !== 'stolen')
+      .map((treasure) => ({ treasure, cell: getTreasureCurrentCell(treasure) }))
+      .filter((entry): entry is { treasure: DungeonTreasure; cell: GridCell } => entry.cell !== null)
+      .filter((entry) => distance(entry.cell.x, entry.cell.y, cell.x, cell.y) <= radius)
+      .forEach(({ treasure, cell: treasureCell }) => {
+        this.recordMemoryObservation(
+          adventurer,
+          isSpecialTreasureKind(treasure.kind) ? 'specialTreasureSeen' : 'treasureSeen',
+          treasureCell,
+          treasure.kind === 'main'
+            ? 'Tresor principal'
+            : isSpecialTreasureKind(treasure.kind)
+              ? specialTreasureNameForKind(treasure.kind)
+              : "Tresor d'or",
+          isSpecialTreasureKind(treasure.kind) ? 0.48 : 0.4,
+          precision,
+        );
+      });
+
+    if (adventurer.mapId === this.state.boss.mapId && distance(this.state.boss.x, this.state.boss.y, cell.x, cell.y) <= radius + 0.65) {
+      this.recordMemoryObservation(adventurer, 'bossSeen', this.getBossCell(), 'Boss du donjon', 0.5, precision);
+
+      if (adventurer.role === 'cartographer') {
+        tryBark(adventurer, 'mapBoss', this.visibleBarkCount());
+      }
+    }
+
+    const dangerCount = this.state.defenses.filter(
+      (defense) => defense.mapId === adventurer.mapId && defense.alive && distance(defense.x, defense.y, cell.x, cell.y) <= Math.min(radius, 3.1),
+    ).length;
+
+    if (dangerCount >= 2) {
+      this.recordMemoryObservation(adventurer, 'dangerZone', cell, 'Zone dangereuse', 0.38, precision);
+      this.recordMemoryObservation(adventurer, 'dangerousZoneSeen', cell, 'Zone dangereuse confirmee', 0.4, precision);
+    }
+  }
+
+  private observeCurrentZone(adventurer: AdventurerEntity, cell: GridCell): void {
+    const runtime = this.state.runtime;
+
+    if (!runtime || !adventurer.alive || adventurer.escaped || adventurer.targetStage === 'exit') {
+      return;
+    }
+
+    const zone = findZoneForCell(this.getMap(adventurer.mapId).zones, cell);
+
+    if (!zone) {
+      adventurer.currentZoneId = null;
+      return;
+    }
+
+    adventurer.currentZoneId = zone.id;
+    if (isExplorableZone(zone)) {
+      const key = zoneMemoryKey(zone);
+      runtime.roomsSeenThisExpedition.add(key);
+      runtime.roomsEnteredThisExpedition.add(key);
+      runtime.unexploredRooms.delete(key);
+
+      if (runtime.explorationTarget?.mapId === zone.mapId && runtime.explorationTarget.zoneId === zone.id) {
+        runtime.explorationTarget = null;
+      }
+    }
+    const important = zone.type === 'defense' || zone.type === 'secondary' || zone.type === 'antechamber' || zone.type === 'treasure' || zone.type === 'boss';
+
+    if (!important || adventurer.lastImportantZoneId === zone.id) {
+      return;
+    }
+
+    adventurer.lastImportantZoneId = zone.id;
+    const precision = adventurer.role === 'cartographer' ? 'exact' : 'room';
+    const confidence = adventurer.role === 'cartographer' ? 0.62 : 0.46;
+    const reached = this.recordMemoryObservation(adventurer, 'zoneReached', zone.center, `${zone.label} atteinte`, confidence, precision);
+
+    if (reached) {
+      runtime.stats.zoneObservations += 1;
+    }
+
+    if (zone.type === 'antechamber') {
+      if (this.recordMemoryObservation(adventurer, 'antechamberSeen', zone.center, 'Antichambre du boss', confidence + 0.04, precision)) {
+        runtime.stats.zoneObservations += 1;
+      }
+
+      this.recordMemoryObservation(adventurer, 'bossApproachKnown', zone.center, 'Approche du boss', confidence + 0.02, precision);
+      adventurer.behaviorState = adventurer.role === 'cartographer' ? 'mapping' : 'bossPreparation';
+      adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, adventurer.role === 'warrior' ? 120 : 260);
+      runtime.stats.tacticalHesitations += 1;
+      tryBark(adventurer, adventurer.role === 'cartographer' ? 'mapBoss' : 'stayTogether', this.visibleBarkCount());
+    }
+
+    if (zone.type === 'treasure') {
+      this.recordMemoryObservation(adventurer, 'treasureRoomSeen', zone.center, 'Salle du tresor', confidence, precision);
+    }
+
+    if (zone.dangerLevel >= 2.2 || this.zoneHasSeveralRemains(zone)) {
+      this.recordMemoryObservation(adventurer, 'dangerousZoneSeen', zone.center, `${zone.label} dangereuse`, confidence - 0.04, precision);
+    }
+
+    if (zone.guardianId) {
+      const guardian = this.state.defenses.find((defense) => defense.mapId === adventurer.mapId && defense.id === zone.guardianId && defense.alive) ?? null;
+
+      if (guardian && this.recordMemoryObservation(adventurer, 'guardianSeen', guardian.cell, `${guardian.name} le ${getDefenseDefinition(guardian.type).name}`, confidence + 0.04, precision)) {
+        runtime.stats.guardianSightings += 1;
+      }
+    }
+  }
+
+  private zoneHasSeveralRemains(zone: DungeonZone): boolean {
+    const zoneCells = new Set(zone.cells.map((cell) => cellKey(cell)));
+    return this.state.remains.filter((remains) => remains.mapId === zone.mapId && zoneCells.has(cellKey(remains.cell))).length >= 2;
+  }
+
+  private maybeReactToRemains(adventurer: AdventurerEntity, cell: GridCell): void {
+    const runtime = this.state.runtime;
+
+    if (!runtime || !adventurer.alive || adventurer.escaped) {
+      return;
+    }
+
+    const nearby = this.state.remains
+      .filter((remains) => remains.mapId === adventurer.mapId && remains.deathWave < this.state.wave && distance(remains.x, remains.y, cell.x, cell.y) <= 1.65)
+      .sort((a, b) => distance(a.x, a.y, cell.x, cell.y) - distance(b.x, b.y, cell.x, cell.y))[0] ?? null;
+
+    if (!nearby) {
+      return;
+    }
+
+    const key = `${adventurer.profileId}:${nearby.id}`;
+    const alreadyReacted = runtime.remainsReactedKeys.has(key);
+    const profile = this.state.world.profiles[adventurer.profileId] ?? null;
+    const cartographerInParty = runtime.partyProfiles.some((partyProfile) => partyProfile.role === 'cartographer');
+    const kingdomAlreadyKnows = this.state.world.kingdomFacts.some(
+      (fact) =>
+        (fact.kind === 'deathSiteKnown' || fact.kind === 'relicRecognized' || fact.kind === 'remainsSeen') &&
+        fact.mapId === nearby.mapId &&
+        fact.cell &&
+        isSameCell(fact.cell, nearby.cell),
+    );
+    const shouldReact = shouldReactToRemains({
+      adventurer,
+      remains: nearby,
+      wave: this.state.wave,
+      alreadyReacted,
+      immediateDanger: this.hasImmediateDangerNear(adventurer),
+    });
+    const shouldRecognize = shouldReact && shouldRecognizeRelic({
+      adventurer,
+      profile,
+      remains: nearby,
+      kingdomAlreadyKnows,
+      cartographerInParty,
+      alreadyRecognized: runtime.remainsRecognizedKeys.has(key),
+    });
+
+    this.recordRemainsObservation(adventurer, nearby, shouldRecognize);
+
+    if (!shouldReact) {
+      return;
+    }
+
+    runtime.remainsReactedKeys.add(key);
+    nearby.discoveredByFutureParty = true;
+    nearby.reactionCount += 1;
+    runtime.stats.remainsSeen += 1;
+
+    if (shouldRecognize) {
+      runtime.remainsRecognizedKeys.add(key);
+      nearby.recognizedByProfileIds.push(adventurer.profileId);
+      runtime.stats.relicsRecognized += 1;
+    }
+
+    const line = reactionLineFor(nearby, shouldRecognize);
+    runtime.stats.remainsReactionEvents.push(line);
+    runtime.stats.storyEvents.push(line);
+    adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, adventurer.role === 'warrior' ? 180 : 360);
+    runtime.stats.tacticalHesitations += 1;
+    adventurer.behaviorState = adventurer.role === 'cartographer' ? 'mapping' : 'evaluatingRoom';
+    tryBark(adventurer, shouldRecognize ? 'relicRecognized' : 'remainsSeen', this.visibleBarkCount());
+    this.state.message = line;
+  }
+
+  private recordRemainsObservation(adventurer: AdventurerEntity, remains: AdventurerRemains, recognized: boolean): void {
+    const precision = adventurer.role === 'cartographer' ? 'exact' : 'room';
+    const baseConfidence = adventurer.role === 'cartographer' ? 0.62 : 0.46;
+    const label = recognized
+      ? `${remains.ownerName}: ${remains.relicLabel}`
+      : `Restes de ${remains.ownerName}`;
+
+    deathSiteFactKinds(remains, recognized).forEach((kind) => {
+      const kindLabel =
+        kind === 'relicRecognized'
+          ? label
+          : kind === 'bossKilledAdventurerHere'
+            ? `Mort face au boss: ${remains.ownerName}`
+            : kind === 'trapKilledAdventurerHere'
+              ? `Mort sur piege: ${remains.ownerName}`
+              : kind === 'dangerousDeathSite'
+                ? `Site de mort dangereux: ${remains.ownerName}`
+                : `Site de mort: ${remains.ownerName}`;
+
+      this.recordMemoryObservation(
+        adventurer,
+        kind,
+        remains.cell,
+        kindLabel,
+        kind === 'relicRecognized' ? baseConfidence + 0.1 : baseConfidence,
+        precision,
+      );
+    });
+  }
+
+  private recordMemoryObservation(
+    adventurer: AdventurerEntity,
+    kind: KingdomMemoryFactKind,
+    cell: GridCell | null,
+    label: string,
+    confidence: number,
+    precision: 'vague' | 'room' | 'exact',
+  ): boolean {
+    const runtime = this.state.runtime;
+
+    if (!runtime || !adventurer.alive || adventurer.escaped) {
+      return false;
+    }
+
+    const observationKey = [
+      adventurer.profileId,
+      kind,
+      adventurer.mapId,
+      cell ? cellKey(cell) : 'unknown',
+      label,
+    ].join('|');
+    const alreadyRecorded = runtime.stats.cartographyObservations.some((observation) => {
+      const existingKey = [
+        observation.observerProfileId,
+        observation.kind,
+        observation.mapId ?? null,
+        observation.cell ? cellKey(observation.cell) : 'unknown',
+        observation.label,
+      ].join('|');
+
+      return existingKey === observationKey;
+    });
+
+    if (alreadyRecorded) {
+      return false;
+    }
+
+    runtime.stats.cartographyObservations.push({
+      kind,
+      label,
+      mapId: adventurer.mapId,
+      cell: cell ? { ...cell } : null,
+      precision,
+      confidence,
+      observerProfileId: adventurer.profileId,
+      observerName: adventurer.name,
+      observerRole: adventurer.role,
+      wave: this.state.wave,
+    });
+
+    if (adventurer.role === 'cartographer') {
+      runtime.stats.cartographerObservedFacts += 1;
+    }
+
+    return true;
   }
 
   private damageAdventurer(
@@ -2302,6 +3357,7 @@ export class DungeonSimulation {
     adventurer.hp -= actualDamage;
     this.queueCombatFeedback({
       kind: 'damage',
+      mapId: adventurer.mapId,
       amount: actualDamage,
       targetId: adventurer.id,
       targetName: adventurer.name,
@@ -2312,7 +3368,7 @@ export class DungeonSimulation {
       sourceFaction: source === 'minion' ? 'monster' : source,
       sourceRole: null,
       sourceType: source === 'boss' ? 'boss' : sourceType,
-      style: source === 'boss' ? 'boss' : source === 'trap' ? 'trap' : 'monster',
+      style: source === 'boss' ? 'boss' : source === 'trap' ? 'trap' : sourceType === 'guardian' ? 'guardian' : 'monster',
     });
 
     if (reduction > 0) {
@@ -2349,6 +3405,11 @@ export class DungeonSimulation {
         this.state.runtime.stats.minionKillsByDefenseId[sourceDefense.id] =
           (this.state.runtime.stats.minionKillsByDefenseId[sourceDefense.id] ?? 0) + 1;
       }
+
+      if (sourceDefense.type === 'guardian') {
+        this.state.runtime.stats.guardianKills += 1;
+        this.recordGuardianKillWitnesses(sourceDefense, adventurer);
+      }
     }
 
     if (source === 'trap' && sourceType) {
@@ -2369,15 +3430,89 @@ export class DungeonSimulation {
       this.state.message = `${adventurer.name} rencontre le patron. Reunion courte.`;
     }
 
+    this.createRemainsForDeath(adventurer, {
+      kind: source,
+      type: source === 'boss' ? 'boss' : sourceType,
+      label: cause,
+    });
+
     return actualDamage;
   }
 
+  private recordGuardianKillWitnesses(guardian: DefenseEntity, victim: AdventurerEntity): void {
+    const runtime = this.state.runtime;
+
+    if (!runtime) {
+      return;
+    }
+
+    this.state.adventurers
+      .filter((candidate) => candidate.mapId === guardian.mapId && candidate.alive && !candidate.escaped && candidate.id !== victim.id)
+      .filter((candidate) => distance(candidate.x, candidate.y, guardian.x, guardian.y) <= 4.2)
+      .forEach((witness) => {
+        const precision = witness.role === 'cartographer' ? 'exact' : 'room';
+        this.recordMemoryObservation(
+          witness,
+          'guardianKilledAdventurer',
+          guardian.cell,
+          `${guardian.name} a tue ${victim.name}`,
+          witness.role === 'cartographer' ? 0.64 : 0.52,
+          precision,
+        );
+      });
+
+    runtime.stats.storyEvents.push(`${guardian.name} tient sa zone et abat ${victim.name}.`);
+  }
+
+  private createRemainsForDeath(
+    adventurer: AdventurerEntity,
+    cause: { kind: 'trap' | 'minion' | 'boss'; type: DefenseType | 'boss' | null; label: string },
+  ): void {
+    const cell = { x: Math.round(adventurer.x), y: Math.round(adventurer.y) };
+    const profile = this.state.world.profiles[adventurer.profileId] ?? null;
+    const remains = createAdventurerRemains({
+      id: `remains-${this.nextRemainsId}`,
+      adventurer,
+      profile,
+      cell,
+      wave: this.state.wave,
+      day: this.state.world.currentDay,
+      cause,
+    });
+
+    this.nextRemainsId += 1;
+    this.state.remains = compressRemains([...this.state.remains, remains]);
+
+    if (this.state.runtime) {
+      this.state.runtime.stats.storyEvents.push(
+        `${adventurer.name} laisse des restes dans le donjon: ${remains.relicLabel}. ${describeRemainsLoot(remains.loot)}`,
+      );
+    }
+  }
+
   private damageMinion(minion: DefenseEntity, damage: number, attacker: AdventurerEntity): void {
+    if (minion.mapId !== attacker.mapId) {
+      return;
+    }
+
+    if (minion.type === 'guardian' && this.state.runtime) {
+      this.state.runtime.stats.guardianFights += 1;
+      this.recordMemoryObservation(
+        attacker,
+        'guardianFought',
+        minion.cell,
+        `${attacker.name} affronte ${minion.name}`,
+        attacker.role === 'cartographer' ? 0.62 : 0.5,
+        attacker.role === 'cartographer' ? 'exact' : 'room',
+      );
+    }
+
     const actualDamage = Math.min(minion.hp, damage);
     minion.hp -= actualDamage;
     addThreat(minion.threatByAdventurerId, attacker, actualDamage * 2 + (attacker.role === 'warrior' ? 14 : attacker.role === 'thief' ? 1 : 0));
     this.queueCombatFeedback({
       kind: 'damage',
+      mapId: minion.mapId,
       amount: actualDamage,
       targetId: minion.id,
       targetName: minion.name,
@@ -2405,6 +3540,11 @@ export class DungeonSimulation {
       const label = `${minion.name} le ${getDefenseDefinition(minion.type).name}`;
       this.state.runtime?.stats.storyEvents.push(`${attacker.name} abat ${label}.`);
 
+      if (minion.type === 'guardian') {
+        this.state.runtime!.stats.guardianDeaths += 1;
+        this.recalculateZones();
+      }
+
       if (minion.kills >= 3 || minion.wavesSurvived >= 2) {
         addChronicle(this.state.world, `${label} tombe apres ${minion.kills} victoires. Une minute de silence syndicale.`);
       }
@@ -2414,7 +3554,7 @@ export class DungeonSimulation {
   }
 
   private damageBoss(damage: number, attacker: AdventurerEntity): void {
-    if (!this.state.runtime) {
+    if (!this.state.runtime || attacker.mapId !== this.state.boss.mapId) {
       return;
     }
 
@@ -2422,11 +3562,13 @@ export class DungeonSimulation {
     const previousProfileDamage = this.state.runtime.stats.bossDamageByProfile[attacker.profileId] ?? 0;
     const engagement = this.state.runtime.bossEngagement;
     this.state.boss.hp -= actualDamage;
+    this.recordMemoryObservation(attacker, 'bossSeen', this.getBossCell(), 'Boss du donjon', 0.58, 'exact');
 
     if (!engagement.firstBossAttackerId && actualDamage > 0) {
       engagement.firstBossAttackerId = attacker.id;
       engagement.firstBossAttackerRole = attacker.role;
       engagement.lockedForFrontline = false;
+      this.recordMemoryObservation(attacker, 'bossReached', this.getBossCell(), 'Salle du boss atteinte', 0.64, 'exact');
       this.state.runtime.stats.storyEvents.push(`${attacker.name} ouvre le combat contre le boss.`);
     }
 
@@ -2434,6 +3576,7 @@ export class DungeonSimulation {
     this.state.runtime.stats.bossDamageTaken += actualDamage;
     this.queueCombatFeedback({
       kind: 'damage',
+      mapId: this.state.boss.mapId,
       amount: actualDamage,
       targetId: 'boss',
       targetName: 'Boss',
@@ -2480,10 +3623,13 @@ export class DungeonSimulation {
     });
     const goldAwarded = economy.goldAwarded;
     const preparationBudget = economy.preparationBudget;
-    const adaptationNotes = this.applyAdaptation(runtime.stats, runtime.elapsedMs);
+    const adaptationNotes = [
+      ...this.applyKingdomMemoryTransmission(runtime, currentWave),
+      ...this.applyAdaptation(runtime.stats, runtime.elapsedMs),
+    ];
     this.recordTopMinionFeat(runtime.stats);
 
-    const rumor = generateTavernRumor({
+    let rumor = generateTavernRumor({
       wave: currentWave,
       stats: runtime.stats,
       trapKills: sumStats(runtime.stats.trapStats, 'kills'),
@@ -2492,6 +3638,11 @@ export class DungeonSimulation {
       treasureStolen,
       cleared: true,
     });
+    if (runtime.stats.cartographerReports > 0) {
+      rumor = { ...rumor, text: `Croquis fiable: ${rumor.text}` };
+    } else if (runtime.stats.cartographerLostReports > 0) {
+      rumor = { ...rumor, text: `Carte perdue: ${rumor.text}` };
+    }
     recordRumor(this.state.world, rumor);
     const rumorPressureNote = applyRumorPressure(rumor, this.state.memory);
     adaptationNotes.push(`Rumeur de taverne: ${rumor.text}`);
@@ -2582,6 +3733,7 @@ export class DungeonSimulation {
     );
     runtime.stats.survivors.push(...survivorRecords);
     runtime.stats.adventurersEscaped += survivorRecords.length;
+    adaptationNotes.unshift(...this.applyKingdomMemoryTransmission(runtime, this.state.wave));
     const previousTitle = this.state.world.dungeonReputation.title;
     const reputationDelta = updateDungeonReputation(
       this.state.world,
@@ -2607,6 +3759,45 @@ export class DungeonSimulation {
     this.state.inspectedAdventurerId = null;
   }
 
+  private applyKingdomMemoryTransmission(runtime: WaveRuntime, wave: number): string[] {
+    const survivorProfileIds = runtime.stats.survivors.map((record) => record.profileId);
+    const survivorIdSet = new Set(survivorProfileIds);
+    const partyCartographers = runtime.partyProfiles.filter((profile) => profile.role === 'cartographer');
+    runtime.stats.cartographerSurvivors = partyCartographers.filter((profile) => survivorIdSet.has(profile.id)).length;
+    runtime.stats.cartographerDeaths = runtime.stats.deaths.filter((record) => record.role === 'cartographer').length;
+
+    const result = commitSurvivorObservations(
+      this.state.world,
+      runtime.stats.cartographyObservations,
+      survivorProfileIds,
+      wave,
+    );
+
+    runtime.stats.cartographerReports = result.cartographerReports;
+    runtime.stats.cartographerLostReports = result.lostCartographerReports;
+
+    if (result.cartographerReports > 0) {
+      this.state.memory.rolePressure.cartographer = Math.max(0, (this.state.memory.rolePressure.cartographer ?? 0) - 0.65);
+      addChronicle(
+        this.state.world,
+        `${result.cartographerNames[0] ?? 'Un cartographe'} remet un croquis moins faux que les precedents.`,
+      );
+    }
+
+    if (result.lostCartographerReports > 0) {
+      this.state.memory.rolePressure.cartographer = (this.state.memory.rolePressure.cartographer ?? 0) + 1.1;
+      addChronicle(this.state.world, "Un cartographe disparait avec ses notes. La Guilde deteste l'ironie.");
+    }
+
+    const unreliablePressure = computeCartographerRecruitmentPressure(this.state.world);
+
+    if (unreliablePressure >= 1.2) {
+      this.state.memory.rolePressure.cartographer = (this.state.memory.rolePressure.cartographer ?? 0) + 0.45;
+    }
+
+    return summarizeCartographyResult(result);
+  }
+
   private createReport(
     cleared: boolean,
     wave: number,
@@ -2624,6 +3815,10 @@ export class DungeonSimulation {
     const minionHighlights = statsToReportEntries(runtime.stats.minionStats, 'minion');
     const participants = this.buildParticipantReports(runtime, cleared);
     const continuity = this.buildContinuityPreview(wave + 1);
+    const cartographerLines = this.buildCartographerReportLines(runtime, wave);
+    const remainsLines = this.buildRemainsReportLines(runtime, wave);
+    const zoneLines = this.buildZoneReportLines(wave);
+    const guardianLines = this.buildGuardianReportLines(runtime, wave);
     const storyLines = buildWaveStoryLines({
       cleared,
       wave,
@@ -2659,13 +3854,28 @@ export class DungeonSimulation {
       disobeys: runtime.stats.disobeys,
       treasureStolen: runtime.stats.treasureStolen,
       specialTreasureLoots: runtime.stats.specialTreasureLoots.slice(0, 4),
+      cartographerSurvivors: runtime.stats.cartographerSurvivors,
+      cartographerDeaths: runtime.stats.cartographerDeaths,
+      cartographerReports: runtime.stats.cartographerReports,
+      cartographerLostReports: runtime.stats.cartographerLostReports,
+      cartographerLines,
+      zoneObservations: runtime.stats.zoneObservations,
+      guardianSightings: runtime.stats.guardianSightings,
+      guardianFights: runtime.stats.guardianFights,
+      guardianKills: runtime.stats.guardianKills,
+      guardianDeaths: runtime.stats.guardianDeaths,
+      zoneLines,
+      guardianLines,
+      remainsSeen: runtime.stats.remainsSeen,
+      relicsRecognized: runtime.stats.relicsRecognized,
+      remainsLines,
       dungeonReputation: this.state.world.dungeonReputation.value,
       reputationDelta,
       trapHighlights,
       minionHighlights,
       storyLines,
-      learnedLines: this.buildLearnedLines(runtime, trapHighlights, minionHighlights),
-      sharedLines: this.buildSharedLines(runtime, storyLines),
+      learnedLines: [...this.buildLearnedLines(runtime, trapHighlights, minionHighlights), ...cartographerLines, ...zoneLines, ...guardianLines, ...remainsLines],
+      sharedLines: this.buildSharedLines(runtime, storyLines, [...cartographerLines, ...zoneLines, ...guardianLines, ...remainsLines]),
       gainsLosses: this.buildGainsLosses(runtime, participants),
       guildChanges: this.buildGuildChanges(wave, adaptationNotes),
       economyLines: this.buildEconomyLines(
@@ -2798,7 +4008,7 @@ export class DungeonSimulation {
     return lines;
   }
 
-  private buildSharedLines(runtime: WaveRuntime, storyLines: string[]): string[] {
+  private buildSharedLines(runtime: WaveRuntime, storyLines: string[], cartographerLines: string[]): string[] {
     const survivorNames = runtime.stats.survivors.map((record) => record.adventurerName);
     const lines: string[] = [];
 
@@ -2818,8 +4028,127 @@ export class DungeonSimulation {
       lines.push(runtime.stats.specialTreasureLoots[0]);
     }
 
+    lines.push(...cartographerLines.slice(0, 2));
     lines.push(storyLines[0] ?? 'Le royaume classe cette expedition comme instructive et tres mal payee.');
     return lines;
+  }
+
+  private buildCartographerReportLines(runtime: WaveRuntime, wave: number): string[] {
+    const lines: string[] = [];
+
+    if (runtime.stats.cartographerReports > 0) {
+      const confirmedFacts = this.state.world.kingdomFacts
+        .filter((fact) => fact.lastSeenWave === wave && fact.confirmedByCartographer)
+        .sort((a, b) => b.confidence - a.confidence)
+        .slice(0, 2);
+      const factLabels = confirmedFacts
+        .map((fact) => `${fact.label} (${Math.round(fact.confidence * 100)}%, ${fact.precision})`)
+        .join(', ');
+
+      lines.push(
+        factLabels
+          ? `Cartographe: croquis fiable sur ${factLabels}.`
+          : `Cartographe: ${runtime.stats.cartographerReports} observation${runtime.stats.cartographerReports > 1 ? 's' : ''} transmise${runtime.stats.cartographerReports > 1 ? 's' : ''}.`,
+      );
+    }
+
+    if (runtime.stats.cartographerLostReports > 0) {
+      lines.push("Cartographe perdu: ses observations personnelles ne sont pas transmises.");
+    }
+
+    if (runtime.stats.cartographerObservedFacts > 0 && runtime.stats.cartographerReports === 0 && runtime.stats.cartographerDeaths > 0) {
+      lines.push("Le cartographe avait vu quelque chose, mais personne n'a rapporte son carnet.");
+    }
+
+    return lines;
+  }
+
+  private buildZoneReportLines(wave: number): string[] {
+    const lines: string[] = [];
+    const zoneFacts = this.state.world.kingdomFacts
+      .filter((fact) =>
+        fact.lastSeenWave === wave &&
+        (fact.kind === 'zoneReached' ||
+          fact.kind === 'antechamberSeen' ||
+          fact.kind === 'treasureRoomSeen' ||
+          fact.kind === 'bossApproachKnown' ||
+          fact.kind === 'dangerousZoneSeen' ||
+          fact.kind === 'roomLockTrapSeen' ||
+          fact.kind === 'dangerousRoomSeen' ||
+          fact.kind === 'trappedRoomSurvived'),
+      )
+      .sort((a, b) => b.confidence - a.confidence);
+
+    if (zoneFacts.length > 0) {
+      const first = zoneFacts[0];
+      lines.push(`Zone rapportee: ${first.label} (${first.precision}, ${Math.round(first.confidence * 100)}%).`);
+    }
+
+    if (zoneFacts.some((fact) => fact.kind === 'antechamberSeen' || fact.kind === 'bossApproachKnown')) {
+      lines.push("Approche du boss identifiee: la prochaine expedition saura ou serrer les dents.");
+    }
+
+    return lines.slice(0, 2);
+  }
+
+  private buildGuardianReportLines(runtime: WaveRuntime, wave: number): string[] {
+    const lines: string[] = [];
+    const guardianFacts = this.state.world.kingdomFacts
+      .filter((fact) =>
+        fact.lastSeenWave === wave &&
+        (fact.kind === 'guardianSeen' || fact.kind === 'guardianFought' || fact.kind === 'guardianKilledAdventurer'),
+      )
+      .sort((a, b) => b.confidence - a.confidence);
+
+    if (guardianFacts.length > 0) {
+      const first = guardianFacts[0];
+      lines.push(`Gardien rapporte: ${first.label} (${first.precision}, ${Math.round(first.confidence * 100)}%).`);
+    } else {
+      return lines;
+    }
+
+    if (runtime.stats.guardianKills > 0) {
+      lines.push(`Gardien: ${runtime.stats.guardianKills} aventurier${runtime.stats.guardianKills > 1 ? 's' : ''} abattu${runtime.stats.guardianKills > 1 ? 's' : ''}.`);
+    } else if (runtime.stats.guardianDeaths > 0) {
+      lines.push('Gardien abattu: la Guilde sait qu il n etait pas le boss.');
+    } else if (runtime.stats.guardianFights > 0 && lines.length === 0) {
+      lines.push('Gardien engage, mais aucun survivant fiable ne detaille le duel.');
+    }
+
+    return lines.slice(0, 2);
+  }
+
+  private buildRemainsReportLines(runtime: WaveRuntime, wave: number): string[] {
+    const lines: string[] = [];
+    const transmittedRemainFacts = this.state.world.kingdomFacts
+      .filter((fact) =>
+        fact.lastSeenWave === wave &&
+        (fact.kind === 'remainsSeen' || fact.kind === 'deathSiteKnown' || fact.kind === 'relicRecognized'),
+      )
+      .sort((a, b) => b.confidence - a.confidence);
+
+    if (transmittedRemainFacts.length === 0) {
+      return lines;
+    }
+
+    const recognized = transmittedRemainFacts.find((fact) => fact.kind === 'relicRecognized');
+
+    if (recognized) {
+      lines.push(`Relique reconnue: ${recognized.label}.`);
+    } else {
+      const first = transmittedRemainFacts[0];
+      lines.push(`Site de mort rapporte: ${first.label} (${first.precision}, ${Math.round(first.confidence * 100)}%).`);
+    }
+
+    if (runtime.stats.remainsSeen > 0) {
+      lines.push(`${runtime.stats.remainsSeen} reaction${runtime.stats.remainsSeen > 1 ? 's' : ''} devant des restes persistants.`);
+    }
+
+    if (runtime.stats.relicsRecognized > 0) {
+      lines.push(`${runtime.stats.relicsRecognized} relique${runtime.stats.relicsRecognized > 1 ? 's' : ''} identifiee${runtime.stats.relicsRecognized > 1 ? 's' : ''} sans inventer de lien familial.`);
+    }
+
+    return lines.slice(0, 3);
   }
 
   private buildGainsLosses(
@@ -2846,6 +4175,16 @@ export class DungeonSimulation {
     }
 
     runtime.stats.specialTreasureLoots.slice(0, 2).forEach((line) => lines.push(line));
+
+    if (runtime.stats.cartographerSurvivors > 0) {
+      lines.push(`Cartographe revenu: ${runtime.stats.cartographerReports} observation${runtime.stats.cartographerReports > 1 ? 's' : ''} fiable${runtime.stats.cartographerReports > 1 ? 's' : ''}.`);
+    } else if (runtime.stats.cartographerDeaths > 0) {
+      lines.push("Cartographe mort: la Guilde perd ses notes les plus precises.");
+    }
+
+    if (runtime.stats.remainsSeen > 0) {
+      lines.push(`Restes observes: ${runtime.stats.remainsSeen} reaction${runtime.stats.remainsSeen > 1 ? 's' : ''}, ${runtime.stats.relicsRecognized} relique${runtime.stats.relicsRecognized > 1 ? 's' : ''} reconnue${runtime.stats.relicsRecognized > 1 ? 's' : ''}.`);
+    }
 
     return lines;
   }
@@ -2919,21 +4258,41 @@ export class DungeonSimulation {
   }
 
   private getTargetCell(adventurer: AdventurerEntity): GridCell {
+    const roomLockTarget = this.getRoomLockCombatTarget(adventurer);
+
+    if (roomLockTarget) {
+      return roomLockTarget;
+    }
+
+    const explorationTarget = this.getExplorationTargetCell(adventurer);
+
+    if (explorationTarget) {
+      return explorationTarget;
+    }
+
+    return this.getPrimaryTargetCell(adventurer);
+  }
+
+  private getPrimaryTargetCell(adventurer: AdventurerEntity): GridCell {
     if (adventurer.targetStage === 'treasure') {
       const treasure = this.getRuntimeTreasureTarget(adventurer);
 
       if (treasure?.status === 'dropped' && treasure.droppedCell) {
-        return treasure.droppedCell;
+        return this.targetThroughTransition(adventurer, treasure.mapId, treasure.droppedCell);
       }
 
-      return treasure?.cell ?? this.getBossCell();
+      return treasure ? this.targetThroughTransition(adventurer, treasure.mapId, treasure.cell) : this.targetThroughTransition(adventurer, this.state.boss.mapId, this.getBossCell());
     }
 
     if (adventurer.targetStage === 'exit') {
-      return ENTRY_CELL;
+      return this.targetThroughTransition(adventurer, ENTRANCE_MAP_ID, ENTRY_CELL);
     }
 
     const engagement = this.state.runtime?.bossEngagement;
+
+    if (adventurer.mapId !== this.state.boss.mapId) {
+      return this.targetThroughTransition(adventurer, this.state.boss.mapId, this.getBossCell());
+    }
 
     if (
       engagement?.lockedForFrontline &&
@@ -2943,7 +4302,143 @@ export class DungeonSimulation {
       return this.getBossStagingCell(adventurer);
     }
 
-    return { x: Math.round(this.state.boss.x), y: Math.round(this.state.boss.y) };
+    return this.targetThroughTransition(adventurer, this.state.boss.mapId, { x: Math.round(this.state.boss.x), y: Math.round(this.state.boss.y) });
+  }
+
+  private getRoomLockCombatTarget(adventurer: AdventurerEntity): GridCell | null {
+    if (!this.state.runtime || !adventurer.alive || adventurer.escaped) {
+      return null;
+    }
+
+    const lock = this.findActiveRoomLockContainingCell(adventurer.mapId, { x: Math.round(adventurer.x), y: Math.round(adventurer.y) });
+
+    if (!lock) {
+      return null;
+    }
+
+    const target = lock.trap.roomLockMinionIds
+      .map((id) => this.state.defenses.find((defense) => defense.id === id) ?? null)
+      .filter((defense): defense is DefenseEntity => Boolean(defense && defense.alive && defense.mapId === adventurer.mapId))
+      .map((defense) => ({
+        defense,
+        distance: distance(adventurer.x, adventurer.y, defense.x, defense.y),
+      }))
+      .sort((a, b) => a.distance - b.distance)[0]?.defense ?? null;
+
+    if (!target) {
+      return null;
+    }
+
+    adventurer.behaviorState = adventurer.role === 'warrior' ? 'securingArea' : 'evaluatingRoom';
+    return { x: Math.round(target.x), y: Math.round(target.y) };
+  }
+
+  private getExplorationTargetCell(adventurer: AdventurerEntity): GridCell | null {
+    const runtime = this.state.runtime;
+
+    if (
+      !runtime ||
+      adventurer.targetStage === 'exit' ||
+      adventurer.carryingTreasure ||
+      runtime.partyPlan.retreating ||
+      this.hasImmediateDangerNear(adventurer) ||
+      this.isBossDetectedByParty()
+    ) {
+      return null;
+    }
+
+    const currentZone = findZoneForCell(this.getMap(adventurer.mapId).zones, { x: Math.round(adventurer.x), y: Math.round(adventurer.y) });
+
+    if (currentZone && isExplorableZone(currentZone)) {
+      runtime.roomsEnteredThisExpedition.add(zoneMemoryKey(currentZone));
+      if (runtime.explorationTarget?.mapId === currentZone.mapId && runtime.explorationTarget.zoneId === currentZone.id) {
+        runtime.explorationTarget = null;
+      }
+    }
+
+    if (runtime.explorationTarget) {
+      const targetZone = this.getMap(runtime.explorationTarget.mapId).zones.find((zone) => zone.id === runtime.explorationTarget?.zoneId) ?? null;
+      const targetKey = targetZone ? zoneMemoryKey(targetZone) : `${runtime.explorationTarget.mapId}:${runtime.explorationTarget.zoneId}`;
+
+      if (!runtime.roomsEnteredThisExpedition.has(targetKey)) {
+        adventurer.behaviorState = adventurer.role === 'cartographer' ? 'mapping' : 'exploring';
+        return this.targetThroughTransition(adventurer, runtime.explorationTarget.mapId, runtime.explorationTarget.cell);
+      }
+
+      runtime.explorationTarget = null;
+    }
+
+    if (runtime.explorationChoicesRemaining <= 0 || adventurer.hp / adventurer.maxHp < 0.42) {
+      return null;
+    }
+
+    const target = this.chooseUnexploredRoomTarget(adventurer);
+
+    if (!target) {
+      return null;
+    }
+
+    runtime.explorationTarget = target;
+    runtime.explorationChoicesRemaining -= 1;
+    runtime.frontierRooms.add(`${target.mapId}:${target.zoneId}`);
+    runtime.stats.storyEvents.push(`${adventurer.name} propose d'explorer une salle inconnue proche.`);
+    adventurer.behaviorState = adventurer.role === 'cartographer' ? 'mapping' : 'exploring';
+    tryBark(adventurer, adventurer.role === 'cartographer' ? 'mapping' : 'secureArea', this.visibleBarkCount());
+    this.state.message = adventurer.role === 'cartographer'
+      ? `${adventurer.name}: On ne sait pas ce qu'il y a la-dedans. Je dois noter cette salle.`
+      : `${adventurer.name} ralentit pour verifier une salle inconnue proche.`;
+    return this.targetThroughTransition(adventurer, target.mapId, target.cell);
+  }
+
+  private chooseUnexploredRoomTarget(adventurer: AdventurerEntity): ExpeditionExplorationTarget | null {
+    const runtime = this.state.runtime;
+
+    if (!runtime) {
+      return null;
+    }
+
+    const map = this.getMap(adventurer.mapId);
+    const currentCell = { x: Math.round(adventurer.x), y: Math.round(adventurer.y) };
+    const primaryTarget = this.getPrimaryTargetCell(adventurer);
+    const blockedCellKeys = getBlockedCellKeys(map.tiles);
+    const primaryPathLength = findPath(currentCell, primaryTarget, {
+      role: adventurer.role,
+      trapAvoidance: this.state.memory.trapAvoidance * personalityTrapAvoidance(adventurer),
+      trapDangerByCell: this.state.memory.trapDangerByCell,
+      knownTrapCells: this.getKnownTrapCells(adventurer.mapId),
+      blockedCellKeys,
+    }).length || 99;
+    const hasCartographer = runtime.partyProfiles.some((profile) => profile.role === 'cartographer');
+    const maxPath = adventurer.role === 'cartographer' || hasCartographer ? 16 : 10;
+    const maxDetour = adventurer.role === 'cartographer' || hasCartographer ? 12 : 7;
+
+    const selected = map.zones
+      .filter(isExplorableZone)
+      .filter((zone) => !runtime.roomsEnteredThisExpedition.has(zoneMemoryKey(zone)))
+      .map((zone) => {
+        const path = findPath(currentCell, zone.center, {
+          role: adventurer.role,
+          trapAvoidance: this.state.memory.trapAvoidance * personalityTrapAvoidance(adventurer),
+          trapDangerByCell: this.state.memory.trapDangerByCell,
+          knownTrapCells: this.getKnownTrapCells(adventurer.mapId),
+          blockedCellKeys,
+        });
+        const pathLength = path.length;
+        const score =
+          zoneExplorationPriority(zone.type) +
+          (hasCartographer ? 8 : 0) +
+          (adventurer.role === 'cartographer' ? 8 : 0) -
+          pathLength * 1.15 -
+          Math.max(0, pathLength - primaryPathLength) * 0.9;
+
+        return { zone, pathLength, score };
+      })
+      .filter((entry) => entry.pathLength > 0 && entry.pathLength <= maxPath && entry.pathLength <= primaryPathLength + maxDetour)
+      .sort((a, b) => b.score - a.score || a.pathLength - b.pathLength)[0] ?? null;
+
+    return selected
+      ? { mapId: map.id, zoneId: selected.zone.id, cell: { ...selected.zone.center } }
+      : null;
   }
 
   private getBossStagingCell(adventurer: AdventurerEntity): GridCell {
@@ -2952,7 +4447,7 @@ export class DungeonSimulation {
     const sideY = Math.sign(ENTRY_CELL.y - bossCell.y) || 1;
     const offsets = bossStagingOffsets(adventurer.role);
     const currentCell = { x: Math.round(adventurer.x), y: Math.round(adventurer.y) };
-    const blockedCellKeys = getBlockedCellKeys(this.state.tiles);
+    const blockedCellKeys = getBlockedCellKeys(this.tilesForMap(adventurer.mapId));
 
     return offsets
       .map((offset) => ({
@@ -2964,7 +4459,7 @@ export class DungeonSimulation {
       }))
       .filter((entry) => isInsideGrid(entry.cell))
       .filter((entry) => !blockedCellKeys.has(cellKey(entry.cell)))
-      .filter((entry) => !this.state.doors.some((door) => !door.destroyed && !door.openedForExpedition && isSameCell(door.cell, entry.cell)))
+      .filter((entry) => !this.doorsForMap(adventurer.mapId).some((door) => !door.destroyed && !door.openedForExpedition && isSameCell(door.cell, entry.cell)))
       .map((entry) => ({
         cell: entry.cell,
         pathLength: isSameCell(currentCell, entry.cell)
@@ -2973,7 +4468,7 @@ export class DungeonSimulation {
             role: adventurer.role,
             trapAvoidance: this.state.memory.trapAvoidance * personalityTrapAvoidance(adventurer),
             trapDangerByCell: this.state.memory.trapDangerByCell,
-            knownTrapCells: this.getKnownTrapCells(),
+            knownTrapCells: this.getKnownTrapCells(adventurer.mapId),
             blockedCellKeys,
           }).length,
       }))
@@ -3128,6 +4623,7 @@ export class DungeonSimulation {
       (adventurer) =>
         adventurer.alive &&
         !adventurer.escaped &&
+        adventurer.mapId === this.state.boss.mapId &&
         (adventurer.targetStage === 'boss' ||
           distance(adventurer.x, adventurer.y, this.state.boss.x, this.state.boss.y) <= this.state.boss.detectionRange + 1.2),
     );
@@ -3135,7 +4631,7 @@ export class DungeonSimulation {
 
   private selectBossEngager(): AdventurerEntity | null {
     return this.state.adventurers
-      .filter((adventurer) => adventurer.alive && !adventurer.escaped && adventurer.targetStage !== 'exit')
+      .filter((adventurer) => adventurer.alive && !adventurer.escaped && adventurer.targetStage !== 'exit' && adventurer.mapId === this.state.boss.mapId)
       .filter((adventurer) => this.canReachBossForEngagement(adventurer))
       .map((adventurer) => ({
         adventurer,
@@ -3146,6 +4642,10 @@ export class DungeonSimulation {
   }
 
   private canReachBossForEngagement(adventurer: AdventurerEntity): boolean {
+    if (adventurer.mapId !== this.state.boss.mapId) {
+      return this.hasGlobalWalkablePath(adventurer.mapId, { x: Math.round(adventurer.x), y: Math.round(adventurer.y) }, this.state.boss.mapId, this.getBossCell());
+    }
+
     if (distance(adventurer.x, adventurer.y, this.state.boss.x, this.state.boss.y) <= adventurer.attackRange + 0.45) {
       return true;
     }
@@ -3156,14 +4656,14 @@ export class DungeonSimulation {
       trapAvoidance: 0,
       trapDangerByCell: {},
       knownTrapCells: new Set(),
-      blockedCellKeys: getBlockedCellKeys(this.state.tiles),
+      blockedCellKeys: getBlockedCellKeys(this.tilesForMap(adventurer.mapId)),
     }).length > 0;
   }
 
   private chooseBossTargetWithEngagementLock(): AdventurerEntity | null {
     const engagement = this.state.runtime?.bossEngagement;
     const frontline = engagement?.frontlineAdventurerId
-      ? this.state.adventurers.find((adventurer) => adventurer.id === engagement.frontlineAdventurerId && adventurer.alive && !adventurer.escaped) ?? null
+      ? this.state.adventurers.find((adventurer) => adventurer.id === engagement.frontlineAdventurerId && adventurer.alive && !adventurer.escaped && adventurer.mapId === this.state.boss.mapId) ?? null
       : null;
 
     if (
@@ -3174,11 +4674,11 @@ export class DungeonSimulation {
       return frontline;
     }
 
-    return chooseBossTarget(this.state.boss, this.state.adventurers);
+    return chooseBossTarget(this.state.boss, this.state.adventurers.filter((adventurer) => adventurer.mapId === this.state.boss.mapId));
   }
 
   private canAdventurerAttackBoss(adventurer: AdventurerEntity): boolean {
-    if (adventurer.targetStage !== 'boss') {
+    if (adventurer.targetStage !== 'boss' || adventurer.mapId !== this.state.boss.mapId) {
       return false;
     }
 
@@ -3253,10 +4753,11 @@ export class DungeonSimulation {
     }
 
     runtime.bossAutopilotTimerMs = 620;
+    const adventurersOnBossMap = this.state.adventurers.filter((adventurer) => adventurer.mapId === this.state.boss.mapId);
     const decision = chooseBossAutopilotAbility(this.state.boss, {
-      adventurers: this.state.adventurers,
-      defenses: this.state.defenses,
-      doors: this.state.doors,
+      adventurers: adventurersOnBossMap,
+      defenses: this.state.defenses.filter((defense) => defense.mapId === this.state.boss.mapId),
+      doors: this.doorsForMap(this.state.boss.mapId),
       stats: runtime.stats,
     });
     this.state.bossAutopilotIntent = decision.intent;
@@ -3276,7 +4777,7 @@ export class DungeonSimulation {
     getNextWaypoint: (fromX: number, fromY: number, targetX: number, targetY: number) => GridCell | null;
   } {
     return {
-      canMoveBetween: (fromX, fromY, toX, toY) => canEntityMoveBetween(this.state.tiles, fromX, fromY, toX, toY),
+      canMoveBetween: (fromX, fromY, toX, toY) => canEntityMoveBetween(this.tilesForMap(this.state.boss.mapId), fromX, fromY, toX, toY),
       getNextWaypoint: (fromX, fromY, targetX, targetY) => {
         const start = { x: Math.round(fromX), y: Math.round(fromY) };
         const goal = { x: Math.round(targetX), y: Math.round(targetY) };
@@ -3290,21 +4791,22 @@ export class DungeonSimulation {
           trapAvoidance: 0,
           trapDangerByCell: {},
           knownTrapCells: new Set(),
-          blockedCellKeys: getBlockedCellKeys(this.state.tiles),
+          blockedCellKeys: getBlockedCellKeys(this.tilesForMap(this.state.boss.mapId)),
         })[0] ?? null;
       },
     };
   }
 
   private monsterMovementGuard(): {
-    canMoveBetween: (fromX: number, fromY: number, toX: number, toY: number) => boolean;
-    getNextWaypoint: (fromX: number, fromY: number, targetX: number, targetY: number) => GridCell | null;
+    canMoveBetween: (defense: DefenseEntity, fromX: number, fromY: number, toX: number, toY: number) => boolean;
+    getNextWaypoint: (defense: DefenseEntity, fromX: number, fromY: number, targetX: number, targetY: number) => GridCell | null;
   } {
     return {
-      canMoveBetween: (fromX, fromY, toX, toY) =>
-        canEntityMoveBetween(this.state.tiles, fromX, fromY, toX, toY) &&
-        !this.closedDoorBlocksMovementBetween(fromX, fromY, toX, toY),
-      getNextWaypoint: (fromX, fromY, targetX, targetY) => {
+      canMoveBetween: (defense, fromX, fromY, toX, toY) =>
+        canEntityMoveBetween(this.tilesForMap(defense.mapId), fromX, fromY, toX, toY) &&
+        !this.closedDoorBlocksMovementBetween(defense.mapId, fromX, fromY, toX, toY) &&
+        !this.roomLockBlocksEntityStep(defense, { x: Math.round(fromX), y: Math.round(fromY) }, { x: Math.round(toX), y: Math.round(toY) }),
+      getNextWaypoint: (defense, fromX, fromY, targetX, targetY) => {
         const start = { x: Math.round(fromX), y: Math.round(fromY) };
         const goal = { x: Math.round(targetX), y: Math.round(targetY) };
 
@@ -3317,14 +4819,18 @@ export class DungeonSimulation {
           trapAvoidance: 0,
           trapDangerByCell: {},
           knownTrapCells: new Set(),
-          blockedCellKeys: new Set([...getBlockedCellKeys(this.state.tiles), ...this.getClosedDoorCellKeys()]),
+          blockedCellKeys: new Set([
+            ...getBlockedCellKeys(this.tilesForMap(defense.mapId)),
+            ...this.getClosedDoorCellKeys(defense.mapId),
+            ...this.getRoomLockBlockedExitKeys(defense),
+          ]),
         })[0] ?? null;
       },
     };
   }
 
-  private closedDoorBlocksMovementBetween(fromX: number, fromY: number, toX: number, toY: number): boolean {
-    const closedDoorKeys = this.getClosedDoorCellKeys();
+  private closedDoorBlocksMovementBetween(mapId: string, fromX: number, fromY: number, toX: number, toY: number): boolean {
+    const closedDoorKeys = this.getClosedDoorCellKeys(mapId);
     const travelDistance = Math.hypot(toX - fromX, toY - fromY);
     const steps = Math.max(1, Math.ceil(travelDistance / 0.2));
 
@@ -3343,10 +4849,68 @@ export class DungeonSimulation {
     return false;
   }
 
-  private getClosedDoorCellKeys(): Set<string> {
+  private roomLockBlocksStep(mapId: string, fromCell: GridCell, toCell: GridCell): boolean {
+    const lock = this.findActiveRoomLockContainingCell(mapId, fromCell);
+
+    if (!lock) {
+      return false;
+    }
+
+    return !lock.zone.cells.some((cell) => isSameCell(cell, toCell));
+  }
+
+  private roomLockBlocksEntityStep(entity: DefenseEntity, fromCell: GridCell, toCell: GridCell): boolean {
+    const lock = this.findActiveRoomLockContainingCell(entity.mapId, fromCell);
+
+    if (!lock || !lock.trap.roomLockMinionIds.includes(entity.id)) {
+      return false;
+    }
+
+    return !lock.zone.cells.some((cell) => isSameCell(cell, toCell));
+  }
+
+  private getRoomLockBlockedExitKeys(entity: DefenseEntity): Set<string> {
+    const lock = this.findActiveRoomLockContainingCell(entity.mapId, { x: Math.round(entity.x), y: Math.round(entity.y) });
+
+    if (!lock || !lock.trap.roomLockMinionIds.includes(entity.id)) {
+      return new Set();
+    }
+
+    const zoneKeys = new Set(lock.zone.cells.map((cell) => cellKey(cell)));
+    const blocked = new Set<string>();
+
+    lock.zone.cells.forEach((cell) => {
+      cardinalNeighbors(cell)
+        .filter((neighbor) => !zoneKeys.has(cellKey(neighbor)))
+        .forEach((neighbor) => blocked.add(cellKey(neighbor)));
+    });
+
+    return blocked;
+  }
+
+  private findActiveRoomLockContainingCell(mapId: string, cell: GridCell): { trap: DefenseEntity; zone: DungeonZone } | null {
+    const map = this.getMap(mapId);
+    const zone = findZoneForCell(map.zones, cell);
+
+    if (!zone) {
+      return null;
+    }
+
+    const trap = this.state.defenses.find(
+      (defense) =>
+        defense.mapId === mapId &&
+        defense.type === 'roomLockTrap' &&
+        defense.trapState === 'triggered' &&
+        defense.roomLockZoneId === zone.id,
+    ) ?? null;
+
+    return trap ? { trap, zone } : null;
+  }
+
+  private getClosedDoorCellKeys(mapId = this.state.currentMapId): Set<string> {
     return new Set(
       this.state.doors
-        .filter((door) => !door.destroyed && !door.openedForExpedition)
+        .filter((door) => door.mapId === mapId && !door.destroyed && !door.openedForExpedition)
         .map((door) => cellKey(door.cell)),
     );
   }
@@ -3371,10 +4935,10 @@ export class DungeonSimulation {
     }
 
     return tryUseAdventurerAbility(adventurer, {
-      adventurers: this.state.adventurers,
-      defenses: this.state.defenses,
+      adventurers: this.state.adventurers.filter((candidate) => candidate.mapId === adventurer.mapId),
+      defenses: this.state.defenses.filter((defense) => defense.mapId === adventurer.mapId),
       boss: this.state.boss,
-      doors: this.state.doors,
+      doors: this.doorsForMap(adventurer.mapId),
       stats: runtime.stats,
       elapsedMs: runtime.elapsedMs,
       damageMinion: (target, damage, attacker) => this.damageMinion(target, damage, attacker),
@@ -3411,6 +4975,7 @@ export class DungeonSimulation {
     if (healed > 0 && this.state.runtime) {
       this.queueCombatFeedback({
         kind: 'heal',
+        mapId: target.mapId,
         amount: healed,
         targetId: target.id,
         targetName: target.name,
@@ -3426,12 +4991,12 @@ export class DungeonSimulation {
 
       if (healer) {
         this.state.defenses.forEach((defense) => {
-          if (defense.alive && defense.kind === 'minion' && distance(defense.x, defense.y, healer.x, healer.y) <= 4.4) {
+          if (defense.mapId === healer.mapId && defense.alive && defense.kind === 'minion' && distance(defense.x, defense.y, healer.x, healer.y) <= 4.4) {
             addThreat(defense.threatByAdventurerId, healer, healed * 0.65);
           }
         });
 
-        if (distance(this.state.boss.x, this.state.boss.y, healer.x, healer.y) <= this.state.boss.detectionRange + 1.2) {
+        if (healer.mapId === this.state.boss.mapId && distance(this.state.boss.x, this.state.boss.y, healer.x, healer.y) <= this.state.boss.detectionRange + 1.2) {
           addThreat(this.state.boss.threatByAdventurerId, healer, healed * 0.55);
         }
       }
@@ -3441,7 +5006,7 @@ export class DungeonSimulation {
   }
 
   private queueCombatFeedback(
-    event: Omit<CombatFeedbackEvent, 'id' | 'ageMs' | 'boostedBySpecial'> & { boostedBySpecial?: boolean },
+    event: Omit<CombatFeedbackEvent, 'id' | 'ageMs' | 'boostedBySpecial' | 'mapId'> & { boostedBySpecial?: boolean; mapId?: string },
   ): void {
     if (!this.state.runtime || event.amount <= 0) {
       return;
@@ -3450,6 +5015,7 @@ export class DungeonSimulation {
     this.state.runtime.combatFeedbackEvents.push({
       boostedBySpecial: false,
       ...event,
+      mapId: event.mapId ?? this.state.currentMapId,
       id: `combat-feedback-${this.nextCombatFeedbackId}`,
       ageMs: 0,
     });
@@ -3461,6 +5027,10 @@ export class DungeonSimulation {
     }
   }
 
+  private eventVisibleOnCurrentMap(event: CombatFeedbackEvent): boolean {
+    return event.mapId === this.state.currentMapId;
+  }
+
   private applyLocalDecision(adventurer: AdventurerEntity): void {
     if (!this.state.runtime) {
       return;
@@ -3468,9 +5038,9 @@ export class DungeonSimulation {
 
     const decision = evaluateLocalAdventurerDecision(adventurer, {
       partyPlan: this.state.runtime.partyPlan,
-      adventurers: this.state.adventurers,
-      defenses: this.state.defenses,
-      doors: this.state.doors,
+      adventurers: this.state.adventurers.filter((candidate) => candidate.mapId === adventurer.mapId),
+      defenses: this.state.defenses.filter((defense) => defense.mapId === adventurer.mapId),
+      doors: this.doorsForMap(adventurer.mapId),
       targetCell: this.getTargetCell(adventurer),
     });
 
@@ -3622,11 +5192,13 @@ export class DungeonSimulation {
     });
 
     this.state.defenses = remaining;
+    this.recalculateZones();
     return refund;
   }
 
   private removeDeadMinions(): void {
     this.state.defenses = this.state.defenses.filter((defense) => defense.kind === 'trap' || defense.alive);
+    this.recalculateZones();
   }
 
   private findNearestAdventurer(
@@ -3635,14 +5207,15 @@ export class DungeonSimulation {
     maxRange: number,
     preferredId: string | null = null,
     threatByAdventurerId: Record<string, number> = {},
+    mapId: string | null = null,
   ): AdventurerEntity | null {
-    const alive = this.state.adventurers.filter((adventurer) => adventurer.alive && !adventurer.escaped);
+    const alive = this.state.adventurers.filter((adventurer) => adventurer.alive && !adventurer.escaped && (mapId === null || adventurer.mapId === mapId));
     return chooseThreatTarget(x, y, alive, maxRange, threatByAdventurerId, preferredId);
   }
 
   private findTargetMinion(adventurer: AdventurerEntity): DefenseEntity | null {
     return this.state.defenses
-      .filter((defense) => defense.alive && defense.kind === 'minion')
+      .filter((defense) => defense.mapId === adventurer.mapId && defense.alive && defense.kind === 'minion')
       .map((defense) => ({
         defense,
         distance: distance(adventurer.x, adventurer.y, defense.x, defense.y),
@@ -3653,10 +5226,10 @@ export class DungeonSimulation {
       .sort((a, b) => a.nemesisPriority - b.nemesisPriority || a.distance - b.distance)[0]?.defense ?? null;
   }
 
-  private getKnownTrapCells(): Set<string> {
+  private getKnownTrapCells(mapId = this.state.currentMapId): Set<string> {
     return new Set(
       this.state.defenses
-        .filter((defense) => defense.alive && defense.kind === 'trap')
+        .filter((defense) => defense.mapId === mapId && defense.alive && defense.kind === 'trap' && (defense.trapState === null || defense.trapState === 'armed'))
         .map((defense) => cellKey(defense.cell)),
     );
   }
@@ -3740,6 +5313,20 @@ function createEmptyWaveStats(): WaveStats {
     opportunisticLoots: 0,
     roomEvaluations: 0,
     backlineHolds: 0,
+    cartographyObservations: [],
+    cartographerObservedFacts: 0,
+    cartographerSurvivors: 0,
+    cartographerDeaths: 0,
+    cartographerReports: 0,
+    cartographerLostReports: 0,
+    zoneObservations: 0,
+    guardianSightings: 0,
+    guardianFights: 0,
+    guardianKills: 0,
+    guardianDeaths: 0,
+    remainsSeen: 0,
+    relicsRecognized: 0,
+    remainsReactionEvents: [],
   };
 }
 
@@ -3765,6 +5352,7 @@ function createSecureTreasure(): TreasureState {
 function createMainTreasure(): DungeonTreasure {
   return {
     id: 'main-treasure',
+    mapId: FINAL_MAP_ID,
     kind: 'main',
     cell: { ...TREASURE_CELL },
     value: 0,
@@ -3812,12 +5400,14 @@ function treasureAttraction(
           : role === 'mage'
             ? 20
             : 8
-        : treasure.kind === 'specialTechnique'
-          ? role === 'mage' || role === 'healer'
-            ? 34
+      : treasure.kind === 'specialTechnique'
+        ? role === 'mage' || role === 'healer'
+          ? 34
+          : role === 'cartographer'
+            ? 28
             : role === 'thief'
-              ? 24
-              : 12
+            ? 24
+            : 12
           : 0;
 
   return 62 + roleBonus - (alreadyHasBonus ? 42 : 0);
@@ -3852,8 +5442,10 @@ function bossEngagePriority(role: AdventurerRole): number {
       return 2;
     case 'mage':
       return 3;
-    case 'healer':
+    case 'cartographer':
       return 4;
+    case 'healer':
+      return 5;
     default:
       return 9;
   }
@@ -3873,6 +5465,13 @@ function bossStagingOffsets(role: AdventurerRole): Array<{ back: number; side: n
         { back: 2, side: -1 },
         { back: 3, side: -1 },
         { back: 2, side: 1 },
+        { back: 3, side: 1 },
+      ];
+    case 'cartographer':
+      return [
+        { back: 2, side: 0 },
+        { back: 2, side: -1 },
+        { back: 3, side: 0 },
         { back: 3, side: 1 },
       ];
     case 'healer':
@@ -3909,6 +5508,8 @@ function combatFeedbackStyleForRole(role: AdventurerRole): CombatFeedbackStyle {
       return 'caster';
     case 'healer':
       return 'healer';
+    case 'cartographer':
+      return 'cartographer';
     default:
       return 'monster';
   }
@@ -3955,6 +5556,41 @@ function sumStats(stats: DefenseStatsByType, field: keyof EffectStats): number {
 
 function distance(ax: number, ay: number, bx: number, by: number): number {
   return Math.hypot(ax - bx, ay - by);
+}
+
+function cardinalNeighbors(cell: GridCell): GridCell[] {
+  return [
+    { x: cell.x + 1, y: cell.y },
+    { x: cell.x - 1, y: cell.y },
+    { x: cell.x, y: cell.y + 1 },
+    { x: cell.x, y: cell.y - 1 },
+  ].filter(isInsideGrid);
+}
+
+function zoneMemoryKey(zone: DungeonZone): string {
+  return `${zone.mapId}:${zone.id}`;
+}
+
+function isExplorableZone(zone: DungeonZone): boolean {
+  return zone.type === 'secondary' ||
+    zone.type === 'defense' ||
+    zone.type === 'antechamber' ||
+    zone.type === 'treasure';
+}
+
+function zoneExplorationPriority(type: DungeonZone['type']): number {
+  switch (type) {
+    case 'defense':
+      return 34;
+    case 'secondary':
+      return 30;
+    case 'treasure':
+      return 24;
+    case 'antechamber':
+      return 18;
+    default:
+      return 0;
+  }
 }
 
 function personalityTrapAvoidance(adventurer: AdventurerEntity): number {

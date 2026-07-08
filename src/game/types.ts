@@ -5,9 +5,11 @@ export type DefenseKind = 'trap' | 'minion';
 export type DefenseType =
   | 'spikeTrap'
   | 'fireTrap'
+  | 'roomLockTrap'
   | 'slime'
   | 'skeleton'
-  | 'goblin';
+  | 'goblin'
+  | 'guardian';
 
 export type TileType = 'rock' | 'floor' | 'room' | 'entrance' | 'treasure' | 'throne';
 
@@ -15,6 +17,7 @@ export type RoomSpecialization = 'guardRoom' | 'crypt' | 'treasureRoom' | 'thron
 
 export type ConstructionTool =
   | 'dig'
+  | 'reseal'
   | 'guardRoom'
   | 'crypt'
   | 'door'
@@ -25,9 +28,10 @@ export type ConstructionTool =
   | 'addWeaponTreasure'
   | 'addArmorTreasure'
   | 'addTechniqueTreasure'
-  | 'removeTreasure';
+  | 'removeTreasure'
+  | 'collectRemainsLoot';
 
-export type AdventurerRole = 'warrior' | 'thief' | 'mage' | 'healer';
+export type AdventurerRole = 'warrior' | 'thief' | 'mage' | 'healer' | 'cartographer';
 
 export type AdventurerTargetStage = 'treasure' | 'boss' | 'exit';
 export type AdventurerRetreatIntent = 'none' | 'followRetreat' | 'coverRetreat' | 'panicRetreat' | 'disobey';
@@ -35,9 +39,11 @@ export type AdventurerBehaviorState =
   | 'advancing'
   | 'regrouping'
   | 'evaluatingRoom'
+  | 'exploring'
   | 'waitingForTank'
   | 'securingArea'
   | 'opportunisticLoot'
+  | 'mapping'
   | 'bossPreparation'
   | 'backlineHold'
   | 'flankAfterEngage'
@@ -114,6 +120,7 @@ export interface TreasureState {
 
 export interface DungeonTreasure {
   id: string;
+  mapId: string;
   kind: DungeonTreasureKind;
   cell: GridCell;
   value: number;
@@ -133,14 +140,169 @@ export interface GridCell {
   y: number;
 }
 
+export type KingdomMemoryFactKind =
+  | 'doorSeen'
+  | 'trapSeen'
+  | 'treasureSeen'
+  | 'specialTreasureSeen'
+  | 'defenderSeen'
+  | 'bossSeen'
+  | 'bossReached'
+  | 'dangerZone'
+  | 'routeBlocked'
+  | 'routeChangedSuspected'
+  | 'expeditionLost'
+  | 'remainsSeen'
+  | 'relicRecognized'
+  | 'deathSiteKnown'
+  | 'dangerousDeathSite'
+  | 'bossKilledAdventurerHere'
+  | 'trapKilledAdventurerHere'
+  | 'zoneReached'
+  | 'antechamberSeen'
+  | 'guardianSeen'
+  | 'guardianFought'
+  | 'guardianKilledAdventurer'
+  | 'roomLockTrapSeen'
+  | 'trappedRoomSurvived'
+  | 'dangerousRoomSeen'
+  | 'treasureRoomSeen'
+  | 'bossApproachKnown'
+  | 'dangerousZoneSeen'
+  | 'transitionSeen'
+  | 'floorReached';
+
+export type KingdomMemoryPrecision = 'vague' | 'room' | 'exact';
+
+export interface KingdomMemoryFact {
+  id: string;
+  kind: KingdomMemoryFactKind;
+  label: string;
+  mapId: string | null;
+  cell: GridCell | null;
+  precision: KingdomMemoryPrecision;
+  confidence: number;
+  confirmations: number;
+  firstSeenWave: number;
+  lastSeenWave: number;
+  age: number;
+  stale: boolean;
+  sourceSurvivorProfileId: string | null;
+  sourceRole: AdventurerRole | null;
+  confirmedByCartographer: boolean;
+}
+
+export interface KingdomMemoryObservation {
+  kind: KingdomMemoryFactKind;
+  label: string;
+  mapId?: string | null;
+  cell: GridCell | null;
+  precision: KingdomMemoryPrecision;
+  confidence: number;
+  observerProfileId: string;
+  observerName: string;
+  observerRole: AdventurerRole;
+  wave: number;
+}
+
 export interface DungeonTile {
   cell: GridCell;
   type: TileType;
   roomType: RoomSpecialization | null;
 }
 
+export interface DungeonTransition {
+  id: string;
+  fromMapId: string;
+  fromCell: GridCell;
+  toMapId: string;
+  toCell: GridCell;
+  label: string;
+  locked: boolean;
+  discoveredByKingdom: boolean;
+}
+
+export interface DungeonMap {
+  id: string;
+  label: string;
+  depth: number;
+  width: number;
+  height: number;
+  tiles: DungeonTile[];
+  zones: DungeonZone[];
+  transitions: DungeonTransition[];
+}
+
+export type DungeonZoneType = 'entrance' | 'defense' | 'secondary' | 'antechamber' | 'treasure' | 'boss' | 'corridor';
+
+export interface DungeonZone {
+  id: string;
+  mapId: string;
+  type: DungeonZoneType;
+  label: string;
+  cells: GridCell[];
+  center: GridCell;
+  dangerLevel: number;
+  optional: boolean;
+  required: boolean;
+  discoveredByKingdom: boolean;
+  guardianId: string | null;
+}
+
+export type RelicType =
+  | 'ring'
+  | 'medallion'
+  | 'letter'
+  | 'guildBadge'
+  | 'brokenWeapon'
+  | 'mapFragment'
+  | 'scarf'
+  | 'pendant'
+  | 'notebook'
+  | 'token';
+
+export type RelicEmotionalTone = 'fear' | 'revenge' | 'grief' | 'respect' | 'warning';
+
+export type RemainsVisualState = 'fresh' | 'bones' | 'old';
+
+export type RemainsLootKind = 'looseGold' | 'sellableGear' | 'guildSupplies' | 'mapScrap';
+
+export interface RemainsLoot {
+  kind: RemainsLootKind;
+  label: string;
+  description: string;
+  goldValue: number;
+  claimed: boolean;
+}
+
+export interface AdventurerRemains {
+  id: string;
+  mapId: string;
+  ownerProfileId: string;
+  ownerName: string;
+  ownerRole: AdventurerRole;
+  cell: GridCell;
+  x: number;
+  y: number;
+  deathWave: number;
+  deathDay: number;
+  causeKind: 'trap' | 'minion' | 'boss';
+  causeType: DefenseType | 'boss' | null;
+  causeLabel: string;
+  relicType: RelicType;
+  relicLabel: string;
+  relicDescription: string;
+  emotionalTone: RelicEmotionalTone;
+  visualState: RemainsVisualState;
+  loot: RemainsLoot;
+  discoveredByFutureParty: boolean;
+  recognizedByProfileIds: string[];
+  reactionCount: number;
+}
+
 export interface DungeonDoor {
   id: string;
+  mapId: string;
   cell: GridCell;
   locked: boolean;
   openedForExpedition: boolean;
@@ -168,6 +330,8 @@ export interface DefenseDefinition {
   trapDamage?: number;
   trapCooldownMs?: number;
 }
+
+export type DefenseTrapState = 'armed' | 'triggered' | 'disarmed' | 'cleared';
 
 export interface AdventurerDefinition {
   role: AdventurerRole;
@@ -296,10 +460,13 @@ export interface RunWorldMemory {
   nextProfileNumber: number;
   rumors: TavernRumor[];
   treasuresStolen: number;
+  kingdomFacts: KingdomMemoryFact[];
+  lostCartographerReports: number;
 }
 
 export interface DefenseEntity {
   id: string;
+  mapId: string;
   type: DefenseType;
   kind: DefenseKind;
   name: string;
@@ -327,10 +494,14 @@ export interface DefenseEntity {
   wavesSurvived: number;
   summoned: boolean;
   threatByAdventurerId: Record<string, number>;
+  trapState: DefenseTrapState | null;
+  roomLockZoneId: string | null;
+  roomLockMinionIds: string[];
 }
 
 export interface AdventurerEntity {
   id: string;
+  mapId: string;
   profileId: string;
   role: AdventurerRole;
   name: string;
@@ -352,6 +523,8 @@ export interface AdventurerEntity {
   abilityFxTimerMs: number;
   damageReductionTimerMs: number;
   thiefTrapInterventionsRemaining: number;
+  lockpicksUsedThisExpedition: number;
+  maxLockpicksPerExpedition: number;
   trapDamageMultiplier: number;
   injuryPerformanceMultiplier: number;
   speedMultiplier: number;
@@ -361,6 +534,8 @@ export interface AdventurerEntity {
   behaviorState: AdventurerBehaviorState;
   path: GridCell[];
   lastCellKey: string;
+  currentZoneId: string | null;
+  lastImportantZoneId: string | null;
   lastEvaluatedRoomKey: string | null;
   alive: boolean;
   escaped: boolean;
@@ -391,6 +566,7 @@ export interface BossAbilityState {
 }
 
 export interface BossEntity {
+  mapId: string;
   homeCell: GridCell;
   x: number;
   y: number;
@@ -482,14 +658,29 @@ export interface WaveStats {
   opportunisticLoots: number;
   roomEvaluations: number;
   backlineHolds: number;
+  cartographyObservations: KingdomMemoryObservation[];
+  cartographerObservedFacts: number;
+  cartographerSurvivors: number;
+  cartographerDeaths: number;
+  cartographerReports: number;
+  cartographerLostReports: number;
+  zoneObservations: number;
+  guardianSightings: number;
+  guardianFights: number;
+  guardianKills: number;
+  guardianDeaths: number;
+  remainsSeen: number;
+  relicsRecognized: number;
+  remainsReactionEvents: string[];
 }
 
 export type CombatFeedbackKind = 'damage' | 'heal';
 export type CombatFeedbackFaction = 'adventurer' | 'monster' | 'boss' | 'trap';
-export type CombatFeedbackStyle = 'tank' | 'rogue' | 'caster' | 'healer' | 'monster' | 'boss' | 'trap' | 'heal';
+export type CombatFeedbackStyle = 'tank' | 'rogue' | 'caster' | 'healer' | 'cartographer' | 'monster' | 'guardian' | 'boss' | 'trap' | 'heal';
 
 export interface CombatFeedbackEvent {
   id: string;
+  mapId: string;
   kind: CombatFeedbackKind;
   amount: number;
   x: number;
@@ -515,6 +706,12 @@ export interface BossEngagementState {
   fallbackReason: string | null;
 }
 
+export interface ExpeditionExplorationTarget {
+  mapId: string;
+  zoneId: string;
+  cell: GridCell;
+}
+
 export interface WaveRuntime {
   elapsedMs: number;
   spawnTimerMs: number;
@@ -528,6 +725,14 @@ export interface WaveRuntime {
   targetTreasureId: string | null;
   bossEngagement: BossEngagementState;
   combatFeedbackEvents: CombatFeedbackEvent[];
+  remainsReactedKeys: Set<string>;
+  remainsRecognizedKeys: Set<string>;
+  roomsSeenThisExpedition: Set<string>;
+  roomsEnteredThisExpedition: Set<string>;
+  unexploredRooms: Set<string>;
+  frontierRooms: Set<string>;
+  explorationTarget: ExpeditionExplorationTarget | null;
+  explorationChoicesRemaining: number;
 }
 
 export interface PartyPlan {
@@ -671,6 +876,21 @@ export interface WaveReport {
   disobeys: number;
   treasureStolen: boolean;
   specialTreasureLoots: string[];
+  cartographerSurvivors: number;
+  cartographerDeaths: number;
+  cartographerReports: number;
+  cartographerLostReports: number;
+  cartographerLines: string[];
+  zoneObservations: number;
+  guardianSightings: number;
+  guardianFights: number;
+  guardianKills: number;
+  guardianDeaths: number;
+  zoneLines: string[];
+  guardianLines: string[];
+  remainsSeen: number;
+  relicsRecognized: number;
+  remainsLines: string[];
   dungeonReputation: number;
   reputationDelta: number;
   trapHighlights: ReportEntry[];
@@ -700,12 +920,17 @@ export interface GameState {
   phase: GamePhase;
   wave: number;
   gold: number;
+  dungeonMaps: DungeonMap[];
+  currentMapId: string;
+  expeditionMapId: string;
   selectedDefense: DefenseType | null;
   selectedConstructionTool: ConstructionTool | null;
   tiles: DungeonTile[];
   doors: DungeonDoor[];
   defenses: DefenseEntity[];
   adventurers: AdventurerEntity[];
+  remains: AdventurerRemains[];
+  zones: DungeonZone[];
   boss: BossEntity;
   treasure: TreasureState;
   treasures: DungeonTreasure[];

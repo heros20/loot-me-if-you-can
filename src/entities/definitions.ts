@@ -5,9 +5,9 @@ import type {
   DefenseType,
 } from '../game/types';
 
-export const DEFENSE_ORDER: DefenseType[] = ['spikeTrap', 'fireTrap', 'slime', 'skeleton', 'goblin'];
+export const DEFENSE_ORDER: DefenseType[] = ['spikeTrap', 'fireTrap', 'roomLockTrap', 'slime', 'skeleton', 'goblin', 'guardian'];
 
-export const ADVENTURER_ORDER: AdventurerRole[] = ['warrior', 'thief', 'mage', 'healer'];
+export const ADVENTURER_ORDER: AdventurerRole[] = ['warrior', 'thief', 'mage', 'healer', 'cartographer'];
 
 export const DEFENSE_DEFINITIONS: Record<DefenseType, DefenseDefinition> = {
   spikeTrap: {
@@ -31,6 +31,17 @@ export const DEFENSE_DEFINITIONS: Record<DefenseType, DefenseDefinition> = {
     color: '#d85a32',
     trapDamage: 34,
     trapCooldownMs: 2100,
+  },
+  roomLockTrap: {
+    type: 'roomLockTrap',
+    kind: 'trap',
+    name: 'Piege de verrouillage',
+    shortName: 'Lock',
+    description: 'Ferme une salle occupee: les issues se rouvrent quand ses defenseurs tombent.',
+    cost: 10,
+    color: '#6f7f91',
+    trapDamage: 0,
+    trapCooldownMs: 0,
   },
   slime: {
     type: 'slime',
@@ -70,6 +81,19 @@ export const DEFENSE_DEFINITIONS: Record<DefenseType, DefenseDefinition> = {
     damage: 7,
     attackRange: 1.15,
     attackCooldownMs: 560,
+  },
+  guardian: {
+    type: 'guardian',
+    kind: 'minion',
+    name: 'Gardien de zone',
+    shortName: 'Gard',
+    description: "Elite unique: tient une salle importante sans remplacer le boss.",
+    cost: 18,
+    color: '#d65f5f',
+    hp: 112,
+    damage: 14,
+    attackRange: 1.25,
+    attackCooldownMs: 940,
   },
 };
 
@@ -124,6 +148,18 @@ export const ADVENTURER_DEFINITIONS: Record<AdventurerRole, AdventurerDefinition
     healAmount: 10,
     healRange: 2.4,
     healCooldownMs: 1200,
+  },
+  cartographer: {
+    role: 'cartographer',
+    name: 'Cartographe',
+    shortName: 'C',
+    color: '#d6b15f',
+    hp: 38,
+    damage: 4,
+    speed: 0.00166,
+    attackRange: 1.55,
+    attackCooldownMs: 1040,
+    trapDamageMultiplier: 1.02,
   },
 };
 

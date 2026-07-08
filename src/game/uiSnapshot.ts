@@ -47,6 +47,12 @@ export interface DoorSummary {
   beingPicked: number;
 }
 
+export interface DungeonFloorUiItem {
+  id: string;
+  label: string;
+  depth: number;
+}
+
 export interface BossAbilityUiItem {
   type: BossAbilityType;
   name: string;
@@ -100,6 +106,10 @@ export interface DungeonSnapshot {
   phase: Exclude<GamePhase, 'menu'>;
   wave: number;
   gold: number;
+  dungeonMaps: DungeonFloorUiItem[];
+  currentMapId: string;
+  currentMapLabel: string;
+  expeditionMapId: string;
   selectedDefense: DefenseType | null;
   selectedConstructionTool: ConstructionTool | null;
   bossHp: number;
@@ -149,6 +159,7 @@ export type UiSnapshot = MenuSnapshot | DungeonSnapshot;
 
 export type UiAction =
   | { type: 'start-game' }
+  | { type: 'select-map'; mapId: string }
   | { type: 'select-construction'; constructionType: ConstructionTool }
   | { type: 'select-defense'; defenseType: DefenseType }
   | { type: 'launch-wave' }

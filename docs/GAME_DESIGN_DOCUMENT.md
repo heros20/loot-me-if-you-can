@@ -5,7 +5,7 @@
 | **Statut** | Vivant — chaque section évolue indépendamment |
 | **Version du jeu documentée** | v0.5.0 |
 | **Propriétaire** | Game Design |
-| **Dernière mise à jour** | 2026-07-02 |
+| **Dernière mise à jour** | 2026-07-08 |
 | **Documents liés** | [GAME_VISION.md](./GAME_VISION.md) · [DESIGN_PRINCIPLES.md](./DESIGN_PRINCIPLES.md) · [ROADMAP.md](./ROADMAP.md) · [LORE.md](./LORE.md) |
 
 ---
@@ -87,17 +87,21 @@ Il n'existe pas de victoire permanente : survivre à une expédition ne fait que
 
 ## 4. Donjon creusé 🟡
 
+**Etat code actuel (2026-07-08)** - le donjon jouable est maintenant une structure Multi-map / Etages V1. La simulation possede plusieurs `DungeonMap` generes au lancement d'une nouvelle partie, avec `currentMapId`, `expeditionMapId`, transitions d'escalier, tiles/zones par etage, et `mapId` sur les entites importantes. La V1 utilise au moins trois etages : `floor-1` pour l'entree, `floor-2` comme etage intermediaire, et `floor-3` pour le tresor principal et le boss final unique. La construction s'applique a l'etage affiche, les aventuriers traversent les escaliers pendant l'expedition avec un routage par profondeur, et l'affichage suit automatiquement la map atteinte. Les restes/reliques, fouille de butin, tresors speciaux, gardien, faits Kingdom/Cartographe et feedback de combat sont attaches a leur etage.
+
+**Rebouchage actuel** - `Reboucher` est un outil de preparation actif : il remet une case creusee (`floor`/`room`) en roche pour 2 or, refuse les transitions, ancres, cases occupees, restes persistants visibles, et toute modification qui casserait le chemin global entree -> tresors actifs -> boss final a travers les etages.
+
 **Vision (D-009)** — le joueur ne construit pas son donjon en posant des murs sur une grille vide : il **creuse** son donjon dans la roche. La carte démarre principalement comme une masse rocheuse ; creuser un couloir, une salle, une intersection ou un accès étend le territoire exploitable du joueur. Les murs ne sont plus des objets que l'on pose : ils **sont** la roche qui n'a pas encore été creusée. Voir [DECISIONS.md](./DECISIONS.md) D-009.
 
 🟢 **IMPLÉMENTÉ (état du code, v0.5.0)** — le modèle actuel, que D-009 remplace progressivement :
 
 | Élément | Valeur |
 |---|---|
-| Grille | 18 × 12 cases, 36 px/case |
-| Cellules fixes protégées | Entrée (0,5) · Trésor (14,3) · Boss (17,9) — non constructibles |
-| Or de départ | 30 |
-| Outils actuels | **Mur** (bloque le passage), **Sol** (retire un mur), **Salle** (dégage un carré 3×3 de murs) |
-| Contrainte de validation | Toute modification qui casserait le chemin entrée → trésor → boss est refusée |
+| Grille | 23 x 16 cases par etage |
+| Cellules fixes protegees | Entree (0,7) ; tresor principal (16,4) ; boss final (22,12) ; transitions d'escalier |
+| Or de depart | 120 |
+| Outils actuels | **Creuser**, **Reboucher**, **Porte**, **Retirer porte**, marquage **Salle de garde/Crypte**, deplacement boss/tresor, tresors secondaires |
+| Contrainte de validation | Toute modification qui casserait le chemin global entree -> tresors actifs -> boss final a travers les transitions est refusee |
 
 Le donjon démarre aujourd'hui avec un tracé de murs prédéfini (`WALL_CELLS`) qui impose un premier couloir logique ; le joueur densifie ou simplifie ce tracé, tant qu'un chemin reste possible.
 
@@ -309,7 +313,7 @@ rolePressure       : { rôle → pression }, pousse vers plus/moins de tel rôle
 
 Ces valeurs modifient directement le **pathfinding** (une case qui a déjà tué coûte plus cher à traverser, avec un multiplicateur plus fort pour les voleurs) et la **composition des futures escouades**.
 
-**`RunWorldMemory`** (mémoire narrative persistante) : profils d'aventuriers individuels, morts/survies enregistrées, chroniques, réputation, guilde et royaume associés.
+**`RunWorldMemory`** (mémoire narrative persistante) : profils d'aventuriers individuels, morts/survies enregistrées, chroniques, réputation, guilde et royaume associés. Cartographer V1 et Remains & Relics V1 ajoutent aussi des `kingdomFacts` modestes (type de fait, cellule éventuelle, précision, confiance, confirmations, âge/stale, source survivante, confirmation par cartographe).
 
 **Déclencheurs d'adaptation post-expédition** (`applyAdaptation`) :
 
@@ -325,7 +329,7 @@ Ces valeurs modifient directement le **pathfinding** (une case qui a déjà tué
 
 ⚠️ **Important** — Cette mémoire est **entièrement réinitialisée** à chaque nouvelle partie (`startNewGame()` appelle `createInitialWorldMemory()`). Le royaume apprend *à l'intérieur* d'une partie continue, mais pas encore *entre* deux parties distinctes après une Defeat. Voir [§18 Royaume](#18-royaume-) pour la cible d'une mémoire trans-parties.
 
-Cette mémoire tactique est aujourd'hui alimentée par une observation directe et complète de la simulation — elle ne simule pas encore la guerre de l'information décrite par [DECISIONS.md](./DECISIONS.md) D-010 (le royaume connaît tout ce qui s'est passé, pas seulement ce que des survivants auraient pu rapporter). Voir [§21](#21-exploration-des-aventuriers-) à [§24](#24-cartographe-) pour la cible d'une mémoire construite à partir d'informations imparfaites.
+🟡 **PARTIEL (Cartographer V1 + Remains & Relics V1)** — une partie de la connaissance du Royaume passe désormais par des observations plausibles d'aventuriers survivants. Un cartographe survivant améliore la confiance et la précision des faits qu'il a vus ; un cartographe mort ne transmet pas magiquement ses notes. Les sites de mort et reliques ne deviennent des faits du Royaume que si un survivant les rapporte. La mémoire tactique globale (`trapDangerByCell`, pathfinding réel, adaptations de rôle) reste encore plus omnisciente que la cible Milestone 3 : pas de carte visuelle, pas de fog of war, pas de planification complète sur carte imparfaite.
 
 ---
 
@@ -335,6 +339,7 @@ Après chaque expédition, un rapport (`WaveReport`) est généré et contient :
 - un résumé économique (or gagné, remboursements, pénalités) ;
 - un ou plusieurs **fils narratifs** générés (`narrativeReports.ts`) décrivant les faits marquants ;
 - les **chroniques des monstres vétérans** (kills cumulés, surnoms) ;
+- les **mentions de restes/reliques** uniquement si un survivant a réellement transmis ce fait ;
 - des **crochets de legs** (`legacyHooks`) sur les profils d'aventuriers, base des futures histoires d'héritiers.
 
 Ces chroniques sont la matière première de la mémorabilité recherchée par le principe *« une bonne partie doit raconter une histoire »* (voir [DESIGN_PRINCIPLES.md](./DESIGN_PRINCIPLES.md)).
@@ -410,9 +415,14 @@ Cette piste n'est pas encore rattachée à un milestone précis ; elle dépend d
 
 ---
 
-## 22. Cartographie progressive 🔵
+## 22. Cartographie progressive 🟡
 
 Conséquence directe de D-010 (voir [DECISIONS.md](./DECISIONS.md)) : le Royaume ne connaît pas le donjon par magie. Il apprend uniquement via les survivants, les cartographes, les rumeurs, les rapports d'expédition et des fragments de carte.
+
+🟡 **PARTIEL (Cartographer V1 + Remains & Relics V1 + Zones/Guardian V1)** :
+- Les aventuriers produisent maintenant des observations limitées aux portes, pièges, trésors, trésors spéciaux, défenseurs, gardien, boss, zones importantes/dangereuses, routes bloquées/changées, restes et sites de mort qu'ils ont plausiblement vus.
+- Seuls les survivants transmettent leurs observations. Un cartographe survivant augmente la confiance, la précision et la correction de faits périmés ; un cartographe mort perd ses notes personnelles.
+- Les rumeurs/taverne peuvent afficher "Croquis fiable", "Carte perdue" ou une relique/site de mort reconnu sans créer de carte visuelle.
 
 🔵 **CIBLE (Milestone 3 — The Kingdom Remembers)** :
 - Chaque expédition ne rapporte, au mieux, que ce qu'elle a effectivement traversé ou observé — pas une carte complète du donjon.
@@ -442,17 +452,50 @@ Toute information qui remonte au Royaume via une expédition (voir [§22](#22-ca
 
 ---
 
-## 24. Cartographe ⚪
+## 24. Cartographe 🟡
 
-Le **Cartographe** est une future classe stratégique, préparée dès maintenant dans la vision du jeu mais **non implémentée**. Il n'est pas nécessairement prioritaire à construire immédiatement — cette section documente son rôle pressenti pour que toute mécanique liée à la guerre de l'information (D-010) reste cohérente avec son existence future.
+Le **Cartographe** est une classe stratégique V1 implémentée. Son rôle est utilitaire : améliorer la qualité des informations transmises au Royaume s'il survit, pas remplacer un combattant, un voleur ou un soigneur.
 
-⚪ **EXPLORATOIRE** — intentions pressenties, aucune n'est tranchée :
-- Le Cartographe est le rôle d'aventurier qui **produit** l'information la plus fiable pour le Royaume : il cartographie activement le donjon pendant l'expédition plutôt que de se contenter de le traverser.
-- Un Cartographe qui survit et s'échappe fait progresser la connaissance du Royaume plus vite qu'un survivant ordinaire (voir [§22 Cartographie progressive](#22-cartographie-progressive-)).
-- Un Cartographe tué ou capturé **ralentit** délibérément l'apprentissage du Royaume — ce qui en fait une cible tactique prioritaire pour le joueur, symétrique au soigneur qui est une cible prioritaire pour l'IA défensive actuelle.
-- Sa présence dans une expédition pourrait elle-même être une information que le joueur peut détecter, ouvrant une décision : le laisser cartographier pour désinformer plus tard (voir [§23 Informations imparfaites](#23-informations-imparfaites-)), ou l'éliminer en priorité.
+🟡 **V1 implémentée** :
+- rôle `cartographer`, fragile, faible en dégâts, placé milieu/arrière ;
+- ne crochette pas les portes et ne désamorce pas les pièges ;
+- observe autour de lui avec un rayon supérieur à un survivant ordinaire, mais seulement ce que l'expédition traverse ou approche ;
+- s'il survit, les faits observés gagnent en confiance/précision et peuvent corriger du stale ;
+- s'il meurt, ses notes personnelles sont perdues sauf si d'autres survivants ont observé les mêmes éléments ;
+- la Guilde peut en recruter un quand la mémoire est faible, périmée ou contradictoire, sans supplanter un voleur obligatoire.
 
-**Ne pas implémenter avant que [§22 Cartographie progressive](#22-cartographie-progressive-) et [§23 Informations imparfaites](#23-informations-imparfaites-) aient une première version fonctionnelle** — le Cartographe n'a de sens mécanique que si le Royaume peut effectivement avoir une carte incomplète à améliorer.
+### Zones et gardien V1 🟢
+
+Le donjon actuel reste une seule carte, mais la simulation dérive maintenant des `DungeonZone` depuis le layout existant, les ancres, les trésors et les défenses. Ces zones sont des couches de lecture (`entrance`, `defense`, `secondary`, `antechamber`, `treasure`, `boss`, `corridor`) : elles ne remplacent pas les tuiles, ne créent pas de carte visuelle, et ne changent pas le pathfinding de base.
+
+V1 implémentée :
+- zones calculées automatiquement, sans éditeur manuel ;
+- les aventuriers suivent leur zone courante et leur dernière zone importante ;
+- l'antichambre peut provoquer une courte préparation avant boss ;
+- les faits `zoneReached`, `antechamberSeen`, `treasureRoomSeen`, `bossApproachKnown`, `dangerousZoneSeen`, `guardianSeen`, `guardianFought` et `guardianKilledAdventurer` ne rejoignent Kingdom Remembers que par survivant ;
+- un cartographe survivant améliore précision/confiance sur ces faits ;
+- un `guardian` unique peut être placé en zone de défense, salle secondaire ou antichambre, jamais sur entrée, trésor, boss, porte, roche, case invalide ou restes d'aventurier ;
+- le gardien utilise l'aggro/combat existants et se lit comme une défense élite (`GUARD`), pas comme un boss.
+
+Non-objectifs V1 : multi-map, étages, génération procédurale, minimap/fog of war, sous-boss complet avec arène dédiée, loot de gardien, ou cadavres persistants de monstres.
+
+### Restes et reliques V1 🟢
+
+Quand un aventurier meurt, le donjon conserve des `AdventurerRemains` à l'endroit de la mort. La trace contient le nom, le rôle, la vague/jour, la cause, un état visuel simple, une relique personnelle déterministe (bague, médaillon, lettre, écusson, arme brisée, fragment de carte, foulard, pendentif, carnet, jeton) et un petit butin de fouille.
+
+V1 reste volontairement sobre :
+- seuls les aventuriers morts laissent ce type de restes persistants ; les monstres/défenses morts ne deviennent pas des cadavres persistants ;
+- les restes sont visibles en jeu, non bloquants pour le pathfinding et compressés visuellement par case ;
+- la relique personnelle n'est pas ramassable, vendable ou craftable ;
+- le butin de fouille est récupérable une seule fois pendant la préparation via `Fouiller restes` et donne un petit montant d'or ;
+- les futurs aventuriers peuvent rarement réagir ou reconnaître une relique si la situation est assez sûre ;
+- les faits `remainsSeen`, `relicRecognized`, `deathSiteKnown`, `dangerousDeathSite`, `bossKilledAdventurerHere` et `trapKilledAdventurerHere` ne rejoignent Kingdom Remembers que par survivant ;
+- un cartographe survivant améliore précision/confiance sur ces sites de mort ;
+- la taverne et la chronique ne mentionnent ces traces que depuis un fait réel transmis.
+
+Non-objectifs V1 : généalogie, famille automatique, inventaire de cadavre, équipement récupérable complexe, nécromancie, squelettes ennemis, écran dédié aux morts ou Kingdom Remembers V2.
+
+🔵 **CIBLE future** — carte visuelle progressive, fragments récupérables, fausses cartes, relation plus profonde avec [§23 Informations imparfaites](#23-informations-imparfaites-), et traitement plus riche des carnets/reliques laissés dans le donjon.
 
 ---
 

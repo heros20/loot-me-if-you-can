@@ -2,13 +2,17 @@
 import {
   DIG_COST,
   DOOR_COST,
+  ENTRANCE_MAP_ID,
+  FINAL_MAP_ID,
   GOLD_TREASURE_DEFAULT_VALUE,
+  INTERMEDIATE_MAP_ID,
   BOSS_CELL,
   ENTRY_CELL,
   GRID_COLS,
   GRID_ROWS,
   MAX_TREASURES_V1,
   PARTY_SIZE,
+  RESEAL_TILE_COST,
   SAFE_ZONE_RADIUS,
   STARTING_GOLD,
   TREASURE_CELL,
@@ -19,6 +23,7 @@ import {
   createInitialDungeonTiles,
   getBlockedCellKeys,
   getInitialDungeonZones,
+  getTileAt,
   summarizeTiles,
 } from '../src/game/dungeonTiles';
 import {
@@ -28,6 +33,7 @@ import {
   tryUseDefenseAbility,
 } from '../src/systems/combatAbilitySystem';
 import { computeDoorRemovalRefund } from '../src/systems/economyBalance';
+import { canPlaceDoorAt } from '../src/systems/doorSystem';
 import { updateMonsterAI } from '../src/systems/monsterAISystem';
 import { evaluateLocalAdventurerDecision } from '../src/systems/adventurerDecisionSystem';
 import { choosePostTreasureGoal, chooseTreasureGroupObjective, createPartyPlan } from '../src/systems/partyAISystem';
@@ -51,16 +57,27 @@ import {
   computeSpecialTreasureModifiers,
   grantSpecialTreasureBonus,
 } from '../src/systems/specialTreasuresSystem';
+import { commitSurvivorObservations } from '../src/systems/kingdomMemorySystem';
+import {
+  createAdventurerRemains,
+  deathSiteFactKinds,
+  describeRemains,
+  hasVisibleRemainsAt,
+  shouldRecognizeRelic,
+} from '../src/systems/remainsRelicsSystem';
 import { findPath, hasWalkablePath } from '../src/systems/pathfinding';
 import { buildGuildTavernScene } from '../src/systems/guildTavernSceneSystem';
+import { buildSurvivorChronicle } from '../src/systems/survivorChronicleSystem';
 import type {
   AdventurerEntity,
+  AdventurerRemains,
   AdventurerRole,
   AdaptationMemory,
   BossEngagementState,
   BossEntity,
   DefenseEntity,
   DefenseType,
+  DungeonDoor,
   DungeonTreasure,
   ExpeditionParticipantReport,
   GameState,
@@ -110,6 +127,20 @@ function createSmokeStats(): WaveStats {
     opportunisticLoots: 0,
     roomEvaluations: 0,
     backlineHolds: 0,
+    cartographyObservations: [],
+    cartographerObservedFacts: 0,
+    cartographerSurvivors: 0,
+    cartographerDeaths: 0,
+    cartographerReports: 0,
+    cartographerLostReports: 0,
+    zoneObservations: 0,
+    guardianSightings: 0,
+    guardianFights: 0,
+    guardianKills: 0,
+    guardianDeaths: 0,
+    remainsSeen: 0,
+    relicsRecognized: 0,
+    remainsReactionEvents: [],
   };
 }
 
@@ -137,6 +168,7 @@ function createSmokeMemory(overrides: Partial<AdaptationMemory> = {}): Adaptatio
       thief: 0,
       mage: 0,
       healer: 0,
+      cartographer: 0,
     },
     doorBlockedWithoutThief: false,
     ...overrides,
@@ -159,6 +191,7 @@ function createCompositionContext(
 function createSmokeAdventurer(role: AdventurerRole, id: string, x: number, y: number): AdventurerEntity {
   return {
     id,
+    mapId: ENTRANCE_MAP_ID,
     profileId: `${id}-profile`,
     role,
     name: id,
@@ -180,6 +213,8 @@ function createSmokeAdventurer(role: AdventurerRole, id: string, x: number, y: n
     abilityFxTimerMs: 0,
     damageReductionTimerMs: 0,
     thiefTrapInterventionsRemaining: role === 'thief' ? COMBAT_ABILITY_BALANCE.thiefTrapInterventionsPerExpedition : 0,
+    lockpicksUsedThisExpedition: 0,
+    maxLockpicksPerExpedition: role === 'thief' ? 2 : 0,
     trapDamageMultiplier: role === 'thief' ? 0.48 : 1,
     injuryPerformanceMultiplier: 1,
     speedMultiplier: 1,
@@ -189,6 +224,8 @@ function createSmokeAdventurer(role: AdventurerRole, id: string, x: number, y: n
     behaviorState: 'advancing',
     path: [],
     lastCellKey: '0,0',
+    currentZoneId: null,
+    lastImportantZoneId: null,
     lastEvaluatedRoomKey: null,
     alive: true,
     escaped: false,
@@ -214,9 +251,10 @@ function createSmokeAdventurer(role: AdventurerRole, id: string, x: number, y: n
 }
 
 function createSmokeDefense(type: DefenseType, id: string, x: number, y: number): DefenseEntity {
-  const kind = type === 'spikeTrap' || type === 'fireTrap' ? 'trap' : 'minion';
+  const kind = type === 'spikeTrap' || type === 'fireTrap' || type === 'roomLockTrap' ? 'trap' : 'minion';
   return {
     id,
+    mapId: ENTRANCE_MAP_ID,
     type,
     kind,
     name: id,
@@ -244,6 +282,9 @@ function createSmokeDefense(type: DefenseType, id: string, x: number, y: number)
     wavesSurvived: 0,
     summoned: false,
     threatByAdventurerId: {},
+    trapState: kind === 'trap' ? 'armed' : null,
+    roomLockZoneId: null,
+    roomLockMinionIds: [],
   };
 }
 
@@ -353,6 +394,7 @@ function validateInitialDungeonLayoutRules(): void {
 
 function createSmokeBoss(): BossEntity {
   return {
+    mapId: ENTRANCE_MAP_ID,
     homeCell: { x: 20, y: 8 },
     x: 20,
     y: 8,
@@ -416,6 +458,90 @@ function validateDiggingRules(): void {
   }
 }
 
+function validateResealRules(): void {
+  const resealSim = new DungeonSimulation();
+  resealSim.startNewGame();
+  const toolTypes = resealSim.getSnapshot().constructionTools.map((tool) => tool.type);
+
+  if (!toolTypes.includes('reseal')) {
+    console.error('ECHEC: l outil Reboucher devrait etre visible en preparation.');
+    process.exit(1);
+  }
+
+  const startGold = resealSim.getSnapshot().gold;
+  resealSim.selectConstructionTool('reseal');
+  resealSim.placeSelectedDefense({ x: 5, y: 14 });
+  const afterValid = resealSim.getSnapshot();
+
+  if (afterValid.gold !== startGold - RESEAL_TILE_COST || getTileAt(resealSim.getRenderState().tiles, { x: 5, y: 14 })?.type !== 'rock') {
+    console.error('ECHEC: reboucher une case non critique devrait couter 2 or et remettre la roche.');
+    process.exit(1);
+  }
+
+  const beforeTransitionGold = afterValid.gold;
+  resealSim.placeSelectedDefense(BOSS_CELL);
+
+  if (resealSim.getSnapshot().gold !== beforeTransitionGold) {
+    console.error('ECHEC: reboucher une transition critique ne devrait pas couter d or.');
+    process.exit(1);
+  }
+
+  const remainsSim = new DungeonSimulation();
+  remainsSim.startNewGame();
+  const remainsState = (remainsSim as unknown as { state: GameState }).state;
+  const remainsCell = { x: 6, y: 14 };
+  const fakeRemains: AdventurerRemains = {
+    id: 'reseal-remains',
+    mapId: ENTRANCE_MAP_ID,
+    ownerProfileId: 'fallen-profile',
+    ownerName: 'Fallen Test',
+    ownerRole: 'warrior',
+    cell: remainsCell,
+    x: remainsCell.x,
+    y: remainsCell.y,
+    deathWave: 1,
+    deathDay: 1,
+    causeKind: 'trap',
+    causeType: 'spikeTrap',
+    causeLabel: 'Piege a pics',
+    relicType: 'ring',
+    relicLabel: 'Anneau de test',
+    relicDescription: 'Relique de smoke.',
+    emotionalTone: 'warning',
+    visualState: 'fresh',
+    loot: {
+      kind: 'looseGold',
+      label: 'Pieces de test',
+      description: 'Quelques pieces.',
+      goldValue: 3,
+      claimed: false,
+    },
+    discoveredByFutureParty: false,
+    recognizedByProfileIds: [],
+    reactionCount: 0,
+  };
+  remainsState.remains = [fakeRemains];
+  remainsSim.selectConstructionTool('reseal');
+  const beforeRemainsGold = remainsSim.getSnapshot().gold;
+  remainsSim.placeSelectedDefense(remainsCell);
+
+  if (remainsSim.getSnapshot().gold !== beforeRemainsGold || getTileAt(remainsSim.getRenderState().tiles, remainsCell)?.type === 'rock') {
+    console.error('ECHEC: reboucher une case contenant des restes persistants devrait etre refuse sans cout.');
+    process.exit(1);
+  }
+
+  const criticalSim = new DungeonSimulation();
+  criticalSim.startNewGame();
+  criticalSim.selectConstructionTool('reseal');
+  const beforeCriticalGold = criticalSim.getSnapshot().gold;
+  criticalSim.placeSelectedDefense({ x: 13, y: 6 });
+
+  if (criticalSim.getSnapshot().gold !== beforeCriticalGold || !criticalSim.getSnapshot().dungeonValidation.valid) {
+    console.error('ECHEC: reboucher un chemin critique global devrait etre refuse sans casser le donjon.');
+    process.exit(1);
+  }
+}
+
 function validateSpecialRoomBuildRules(): void {
   const buildSim = new DungeonSimulation();
   buildSim.startNewGame();
@@ -436,6 +562,7 @@ function validateSpecialRoomBuildRules(): void {
     process.exit(1);
   }
 
+  buildSim.selectMap(FINAL_MAP_ID);
   buildSim.placeSelectedDefense({ x: 16, y: 4 });
 
   if (buildSim.getSnapshot().gold !== startingGold) {
@@ -471,6 +598,7 @@ function validateSpecialRoomBuildRules(): void {
 function validateDoorRules(): void {
   const rejectSim = new DungeonSimulation();
   rejectSim.startNewGame();
+  rejectSim.selectMap(FINAL_MAP_ID);
   const startGold = rejectSim.getSnapshot().gold;
   rejectSim.selectConstructionTool('door');
 
@@ -554,6 +682,104 @@ function validateDoorRules(): void {
   }
 }
 
+function validateMultiMapRules(): void {
+  const buildSim = new DungeonSimulation();
+  buildSim.startNewGame();
+  const initialSnapshot = buildSim.getSnapshot();
+  const state = (buildSim as unknown as { state: GameState }).state;
+
+  if (initialSnapshot.dungeonMaps.length < 3 || initialSnapshot.currentMapId !== ENTRANCE_MAP_ID) {
+    console.error('ECHEC: le snapshot devrait exposer au moins trois etages et demarrer sur l etage d entree.');
+    process.exit(1);
+  }
+
+  if (state.boss.mapId !== FINAL_MAP_ID || !state.treasures.some((treasure) => treasure.kind === 'main' && treasure.mapId === FINAL_MAP_ID)) {
+    console.error('ECHEC: boss final et tresor principal devraient etre attaches a l etage final.');
+    process.exit(1);
+  }
+
+  const generationSignatures = new Set(
+    Array.from({ length: 4 }, () => {
+      const sample = new DungeonSimulation();
+      sample.startNewGame();
+      const sampleState = (sample as unknown as { state: GameState }).state;
+      return sampleState.dungeonMaps
+        .map((map) => `${map.id}:${map.tiles.map((tile) => `${tile.cell.x},${tile.cell.y},${tile.type},${tile.roomType ?? '-'}`).join('|')}`)
+        .join('||');
+    }),
+  );
+
+  if (generationSignatures.size < 2) {
+    console.error('ECHEC: la generation multi-map devrait varier entre deux nouvelles parties.');
+    process.exit(1);
+  }
+
+  const entranceTransition = buildSim.getRenderState().transitions[0];
+
+  if (!entranceTransition || entranceTransition.fromMapId !== ENTRANCE_MAP_ID || entranceTransition.toMapId !== INTERMEDIATE_MAP_ID) {
+    console.error('ECHEC: l etage d entree devrait exposer une transition vers l etage intermediaire.');
+    process.exit(1);
+  }
+
+  buildSim.selectMap(INTERMEDIATE_MAP_ID);
+  const intermediateForward = buildSim.getRenderState().transitions.find((transition) => transition.toMapId === FINAL_MAP_ID);
+
+  if (!intermediateForward) {
+    console.error('ECHEC: l etage intermediaire devrait exposer une transition vers l etage final.');
+    process.exit(1);
+  }
+
+  buildSim.selectMap(ENTRANCE_MAP_ID);
+  buildSim.selectDefense('spikeTrap');
+  buildSim.placeSelectedDefense({ x: 15, y: 4 });
+  const entranceTrap = state.defenses.find((defense) => defense.type === 'spikeTrap' && defense.cell.x === 15 && defense.cell.y === 4);
+
+  if (!entranceTrap || entranceTrap.mapId !== ENTRANCE_MAP_ID) {
+    console.error('ECHEC: une defense posee sur l etage 1 devrait garder mapId etage 1.');
+    process.exit(1);
+  }
+
+  buildSim.selectMap(FINAL_MAP_ID);
+
+  if (buildSim.getRenderState().defenses.some((defense) => defense.id === entranceTrap.id)) {
+    console.error('ECHEC: une defense de l etage 1 ne devrait pas etre visible sur l etage final.');
+    process.exit(1);
+  }
+
+  buildSim.selectDefense('skeleton');
+  buildSim.placeSelectedDefense({ x: 21, y: 12 });
+  const finalSkeleton = state.defenses.find((defense) => defense.type === 'skeleton' && defense.cell.x === 21 && defense.cell.y === 12);
+
+  if (!finalSkeleton || finalSkeleton.mapId !== FINAL_MAP_ID) {
+    console.error('ECHEC: une defense posee sur l etage final devrait garder mapId etage final.');
+    process.exit(1);
+  }
+
+  const travelSim = new DungeonSimulation();
+  travelSim.startNewGame();
+  travelSim.launchWave();
+  const travelState = (travelSim as unknown as { state: GameState }).state;
+  let reachedFinalMap = false;
+
+  for (let elapsed = 0; elapsed < 100000; elapsed += 80) {
+    travelSim.update(80);
+
+    if (travelState.adventurers.some((adventurer) => adventurer.mapId === FINAL_MAP_ID)) {
+      reachedFinalMap = true;
+      break;
+    }
+  }
+
+  const adventurerIds = travelState.adventurers.map((adventurer) => adventurer.id);
+
+  if (!reachedFinalMap || travelState.currentMapId !== FINAL_MAP_ID || new Set(adventurerIds).size !== adventurerIds.length) {
+    console.error('ECHEC: les aventuriers devraient traverser vers l etage final sans duplication.');
+    process.exit(1);
+  }
+
+  console.log('Multi-map V1: snapshot, construction par etage, transition et affichage auto OK.');
+}
+
 function validateDungeonAnchorRules(): void {
   const safeSim = new DungeonSimulation();
   safeSim.startNewGame();
@@ -577,6 +803,7 @@ function validateDungeonAnchorRules(): void {
 
   const anchorSim = new DungeonSimulation();
   anchorSim.startNewGame();
+  anchorSim.selectMap(FINAL_MAP_ID);
   anchorSim.selectConstructionTool('moveBoss');
   anchorSim.placeSelectedDefense({ x: 20, y: 11 });
 
@@ -668,6 +895,14 @@ function validateDungeonAnchorRules(): void {
     targetTreasureId: 'gold-test',
     bossEngagement: createSmokeBossEngagement(),
     combatFeedbackEvents: [],
+    remainsReactedKeys: new Set<string>(),
+    remainsRecognizedKeys: new Set<string>(),
+    roomsSeenThisExpedition: new Set<string>(),
+    roomsEnteredThisExpedition: new Set<string>(),
+    unexploredRooms: new Set<string>(),
+    frontierRooms: new Set<string>(),
+    explorationTarget: null,
+    explorationChoicesRemaining: 2,
   };
 
   (economySim as unknown as { finishWaveVictory(): void }).finishWaveVictory();
@@ -778,7 +1013,7 @@ function validateSurvivorContinuityRules(): void {
   }
 
   const fiveSurvivorWorld = createInitialWorldMemory();
-  const fiveSurvivorMemory = createSmokeMemory({ doorBlockedWithoutThief: true, rolePressure: { warrior: 0, thief: 3, mage: 0, healer: 0 } });
+  const fiveSurvivorMemory = createSmokeMemory({ doorBlockedWithoutThief: true, rolePressure: { warrior: 0, thief: 3, mage: 0, healer: 0, cartographer: 0 } });
   const fiveNoThiefRoles: AdventurerRole[] = ['warrior', 'mage', 'healer', 'warrior', 'mage'];
   const { profiles: fiveFirstProfiles } = selectProfilesForWave(
     fiveNoThiefRoles,
@@ -841,7 +1076,7 @@ function validateSurvivorContinuityRules(): void {
   }
 
   const thiefSurvivorWorld = createInitialWorldMemory();
-  const thiefSurvivorMemory = createSmokeMemory({ doorBlockedWithoutThief: true, rolePressure: { warrior: 0, thief: 3, mage: 0, healer: 0 } });
+  const thiefSurvivorMemory = createSmokeMemory({ doorBlockedWithoutThief: true, rolePressure: { warrior: 0, thief: 3, mage: 0, healer: 0, cartographer: 0 } });
   const withThiefRoles: AdventurerRole[] = ['warrior', 'thief', 'mage', 'healer', 'warrior'];
   const { profiles: thiefFirstProfiles } = selectProfilesForWave(
     withThiefRoles,
@@ -1009,6 +1244,721 @@ function validateSurvivorContinuityRules(): void {
   );
 }
 
+function validateCartographerRules(): void {
+  const cartographerMemory = createSmokeMemory({
+    rolePressure: { warrior: 0, thief: 0, mage: 0, healer: 0, cartographer: 2.2 },
+  });
+  const cartographerRoster = buildWaveRoster(3, cartographerMemory, false);
+
+  if (!cartographerRoster.includes('cartographer')) {
+    console.error('ECHEC: une memoire faible devrait pouvoir prioriser un cartographe volontaire.');
+    process.exit(1);
+  }
+
+  const doorRoster = buildWaveRoster(3, cartographerMemory, true);
+  const doorWorld = createInitialWorldMemory();
+  const { profiles: doorProfiles } = selectProfilesForWave(
+    doorRoster,
+    doorWorld,
+    3,
+    createCompositionContext(cartographerMemory, 3, true),
+  );
+
+  if (doorProfiles.length !== PARTY_SIZE || !doorProfiles.some((profile) => profile.role === 'thief')) {
+    console.error('ECHEC: le cartographe ne doit pas remplacer un voleur impose par une porte verrouillee.');
+    process.exit(1);
+  }
+
+  const memoryWorld = createInitialWorldMemory();
+  const cartographer = createAdventurerProfile('cartographer', memoryWorld, 2, 0);
+  const scout = createAdventurerProfile('warrior', memoryWorld, 2, 1);
+  memoryWorld.profiles[cartographer.id] = cartographer;
+  memoryWorld.profiles[scout.id] = scout;
+  const trapResult = commitSurvivorObservations(
+    memoryWorld,
+    [
+      {
+        kind: 'trapSeen',
+        label: 'Piege a pics',
+        cell: { x: 4, y: 7 },
+        precision: 'room',
+        confidence: 0.46,
+        observerProfileId: cartographer.id,
+        observerName: cartographer.name,
+        observerRole: 'cartographer',
+        wave: 2,
+      },
+      {
+        kind: 'trapSeen',
+        label: 'Piege de feu',
+        cell: { x: 5, y: 7 },
+        precision: 'vague',
+        confidence: 0.46,
+        observerProfileId: scout.id,
+        observerName: scout.name,
+        observerRole: 'warrior',
+        wave: 2,
+      },
+    ],
+    [cartographer.id, scout.id],
+    2,
+  );
+  const cartographerTrap = memoryWorld.kingdomFacts.find((fact) => fact.label === 'Piege a pics');
+  const normalTrap = memoryWorld.kingdomFacts.find((fact) => fact.label === 'Piege de feu');
+
+  if (
+    trapResult.cartographerReports !== 1 ||
+    !cartographerTrap?.confirmedByCartographer ||
+    !normalTrap ||
+    cartographerTrap.confidence <= normalTrap.confidence ||
+    cartographerTrap.precision !== 'exact'
+  ) {
+    console.error('ECHEC: un cartographe survivant devrait produire un fait de piege plus fiable et plus precis.');
+    process.exit(1);
+  }
+
+  const specialResult = commitSurvivorObservations(
+    memoryWorld,
+    [
+      {
+        kind: 'specialTreasureSeen',
+        label: 'Technique interdite',
+        cell: { x: 20, y: 6 },
+        precision: 'room',
+        confidence: 0.48,
+        observerProfileId: cartographer.id,
+        observerName: cartographer.name,
+        observerRole: 'cartographer',
+        wave: 2,
+      },
+      {
+        kind: 'bossSeen',
+        label: 'Boss du donjon',
+        cell: { x: 22, y: 12 },
+        precision: 'room',
+        confidence: 0.5,
+        observerProfileId: cartographer.id,
+        observerName: cartographer.name,
+        observerRole: 'cartographer',
+        wave: 2,
+      },
+    ],
+    [cartographer.id],
+    2,
+  );
+
+  if (
+    specialResult.cartographerReports !== 2 ||
+    !memoryWorld.kingdomFacts.some((fact) => fact.kind === 'specialTreasureSeen' && fact.confidence >= 0.85) ||
+    !memoryWorld.kingdomFacts.some((fact) => fact.kind === 'bossSeen' && fact.confirmedByCartographer)
+  ) {
+    console.error('ECHEC: tresor special et boss vus par cartographe survivant devraient gagner un bonus de confiance.');
+    process.exit(1);
+  }
+
+  const lostWorld = createInitialWorldMemory();
+  const lostCartographer = createAdventurerProfile('cartographer', lostWorld, 2, 0);
+  lostWorld.profiles[lostCartographer.id] = lostCartographer;
+  const lostResult = commitSurvivorObservations(
+    lostWorld,
+    [
+      {
+        kind: 'trapSeen',
+        label: 'Piege perdu',
+        cell: { x: 6, y: 7 },
+        precision: 'exact',
+        confidence: 0.6,
+        observerProfileId: lostCartographer.id,
+        observerName: lostCartographer.name,
+        observerRole: 'cartographer',
+        wave: 2,
+      },
+    ],
+    [],
+    2,
+  );
+
+  if (lostResult.lostCartographerReports !== 1 || lostWorld.kingdomFacts.length !== 0) {
+    console.error('ECHEC: un cartographe mort ne doit pas transmettre magiquement ses observations.');
+    process.exit(1);
+  }
+
+  const staleWorld = createInitialWorldMemory();
+  const staleCartographer = createAdventurerProfile('cartographer', staleWorld, 5, 0);
+  const staleScout = createAdventurerProfile('warrior', staleWorld, 1, 1);
+  staleWorld.profiles[staleCartographer.id] = staleCartographer;
+  staleWorld.profiles[staleScout.id] = staleScout;
+  commitSurvivorObservations(
+    staleWorld,
+    [
+      {
+        kind: 'routeChangedSuspected',
+        label: 'Passage est suspect',
+        cell: { x: 12, y: 11 },
+        precision: 'vague',
+        confidence: 0.42,
+        observerProfileId: staleScout.id,
+        observerName: staleScout.name,
+        observerRole: 'warrior',
+        wave: 1,
+      },
+    ],
+    [staleScout.id],
+    1,
+  );
+  commitSurvivorObservations(
+    staleWorld,
+    [
+      {
+        kind: 'routeChangedSuspected',
+        label: 'Passage est suspect',
+        cell: { x: 12, y: 11 },
+        precision: 'room',
+        confidence: 0.52,
+        observerProfileId: staleCartographer.id,
+        observerName: staleCartographer.name,
+        observerRole: 'cartographer',
+        wave: 5,
+      },
+    ],
+    [staleCartographer.id],
+    5,
+  );
+  const correctedRoute = staleWorld.kingdomFacts.find((fact) => fact.kind === 'routeChangedSuspected');
+
+  if (!correctedRoute || correctedRoute.stale || correctedRoute.confidence < 0.8 || !correctedRoute.confirmedByCartographer) {
+    console.error('ECHEC: un cartographe survivant devrait corriger un fait de route perime avec plus de confiance.');
+    process.exit(1);
+  }
+
+  const injuredWorld = createInitialWorldMemory();
+  const injuredCartographer = createAdventurerProfile('cartographer', injuredWorld, 3, 0);
+  injuredWorld.profiles[injuredCartographer.id] = injuredCartographer;
+  recordProfileSurvival(
+    injuredWorld,
+    injuredCartographer.id,
+    3,
+    `${injuredCartographer.name} survit blesse avec ses notes.`,
+    {
+      name: 'Blessure legere',
+      severity: 'minor',
+      performanceMultiplier: 0.94,
+      recoveryDays: 4,
+      causedBy: 'test cartographe',
+    },
+  );
+  commitSurvivorObservations(
+    injuredWorld,
+    [
+      {
+        kind: 'doorSeen',
+        label: 'Porte verrouillee',
+        cell: { x: 10, y: 11 },
+        precision: 'room',
+        confidence: 0.5,
+        observerProfileId: injuredCartographer.id,
+        observerName: injuredCartographer.name,
+        observerRole: 'cartographer',
+        wave: 3,
+      },
+    ],
+    [injuredCartographer.id],
+    3,
+  );
+
+  if (injuredWorld.profiles[injuredCartographer.id]?.lifeStatus !== 'injured' || injuredWorld.kingdomFacts.length !== 1) {
+    console.error('ECHEC: un cartographe survivant blesse doit transmettre ses infos sans etre marque mort.');
+    process.exit(1);
+  }
+
+  const cartographerReport = buildFakeReport({
+    adventurersEscaped: 1,
+    cartographerSurvivors: 1,
+    cartographerReports: 2,
+    cartographerLines: ['Cartographe: croquis fiable sur Piege a pics (93%, exact).'],
+    participants: [
+      buildFakeParticipant({ name: 'Atlasin', role: 'cartographer', status: 'survivant' }),
+    ],
+  });
+  const cartographerScene = buildGuildTavernScene(cartographerReport);
+
+  if (
+    !cartographerScene.beats.some((beat) => beat.text.includes('croquis fiable')) ||
+    !cartographerScene.summaryFacts.some((fact) => fact.label === 'Carte' && fact.value === 'Croquis fiable')
+  ) {
+    console.error('ECHEC: la taverne devrait mentionner le croquis seulement quand un cartographe rapporte des infos.');
+    process.exit(1);
+  }
+
+  const noCartographerScene = buildGuildTavernScene(buildFakeReport({ participants: [buildFakeParticipant({ name: 'Bravus' })] }));
+
+  if (noCartographerScene.summaryFacts.some((fact) => fact.label === 'Carte')) {
+    console.error('ECHEC: la taverne ne doit pas afficher de ligne cartographe sans cartographe implique.');
+    process.exit(1);
+  }
+
+  console.log('Cartographe V1: recrutement, observations, mort, stale, repos et taverne OK.');
+}
+
+function validateRemainsRelicsRules(): void {
+  const deathSim = new DungeonSimulation();
+  deathSim.startNewGame();
+  deathSim.launchWave();
+  deathSim.update(1000);
+  const deathState = (deathSim as unknown as { state: GameState }).state;
+  const firstAdventurer = deathState.adventurers[0];
+
+  if (!firstAdventurer || !deathState.runtime) {
+    console.error('ECHEC: le test Remains devrait avoir au moins un aventurier actif.');
+    process.exit(1);
+  }
+
+  (deathSim as unknown as {
+    damageAdventurer: (
+      adventurer: AdventurerEntity,
+      damage: number,
+      source: 'trap' | 'minion' | 'boss',
+      sourceType: DefenseType | null,
+      sourceCell: GridCell,
+    ) => number;
+  }).damageAdventurer(firstAdventurer, 999, 'boss', null, deathState.boss.homeCell);
+
+  const createdRemains = deathSim.getRenderState().remains[0];
+
+  if (
+    !createdRemains ||
+    createdRemains.ownerName !== firstAdventurer.name ||
+    createdRemains.ownerRole !== firstAdventurer.role ||
+    !isCell(createdRemains.cell, { x: Math.round(firstAdventurer.x), y: Math.round(firstAdventurer.y) }) ||
+    createdRemains.deathWave !== deathState.wave ||
+    !createdRemains.relicLabel.includes(firstAdventurer.name) ||
+    createdRemains.relicDescription.length < 20 ||
+    createdRemains.loot.claimed ||
+    createdRemains.loot.goldValue <= 0
+  ) {
+    console.error('ECHEC: une mort devrait creer des restes persistants complets avec relique et butin de fouille.');
+    process.exit(1);
+  }
+
+  if (!describeRemains(createdRemains).includes(createdRemains.relicLabel)) {
+    console.error('ECHEC: les restes devraient fournir une description exploitable par UI/taverne.');
+    process.exit(1);
+  }
+
+  const pathBefore = findPath(ENTRY_CELL, TREASURE_CELL, {
+    role: 'warrior',
+    trapAvoidance: 0,
+    trapDangerByCell: {},
+    knownTrapCells: new Set<string>(),
+    blockedCellKeys: getBlockedCellKeys(deathSim.getRenderState().tiles),
+  });
+
+  if (pathBefore.length === 0) {
+    console.error('ECHEC: les restes ne devraient pas bloquer le pathfinding entree -> tresor.');
+    process.exit(1);
+  }
+
+  deathState.runtime.spawnQueue = [];
+  deathState.adventurers
+    .filter((adventurer) => adventurer.alive)
+    .forEach((adventurer) => {
+      (deathSim as unknown as {
+        damageAdventurer: (
+          target: AdventurerEntity,
+          damage: number,
+          source: 'trap' | 'minion' | 'boss',
+          sourceType: DefenseType | null,
+          sourceCell: GridCell,
+        ) => number;
+      }).damageAdventurer(adventurer, 999, 'boss', null, deathState.boss.homeCell);
+    });
+  deathSim.update(50);
+
+  if (!deathSim.getSnapshot().report || deathSim.getRenderState().remains.length === 0) {
+    console.error('ECHEC: les restes devraient persister apres la fin de l expedition.');
+    process.exit(1);
+  }
+
+  deathSim.continueBuild();
+
+  if (!deathSim.getRenderState().remains.some((remains) => remains.id === createdRemains.id)) {
+    console.error('ECHEC: les restes devraient rester visibles lors de la preparation suivante.');
+    process.exit(1);
+  }
+
+  const goldBeforeLoot = deathSim.getSnapshot().gold;
+  const expectedLootRemains = [...deathSim.getRenderState().remains]
+    .filter((remainsEntry) => isCell(remainsEntry.cell, createdRemains.cell) && !remainsEntry.loot.claimed)
+    .reverse()[0];
+
+  if (!expectedLootRemains) {
+    console.error('ECHEC: la case de restes devrait contenir un butin non fouille.');
+    process.exit(1);
+  }
+
+  deathSim.selectConstructionTool('collectRemainsLoot');
+  deathSim.placeSelectedDefense(createdRemains.cell);
+  const lootedRemains = deathSim.getRenderState().remains.find((remainsEntry) => remainsEntry.id === expectedLootRemains.id);
+
+  if (!lootedRemains?.loot.claimed || deathSim.getSnapshot().gold !== goldBeforeLoot + expectedLootRemains.loot.goldValue) {
+    console.error('ECHEC: Fouiller restes devrait recuperer le butin une seule fois en preparation.');
+    process.exit(1);
+  }
+
+  const secondExpectedLoot = [...deathSim.getRenderState().remains]
+    .filter((remainsEntry) => isCell(remainsEntry.cell, createdRemains.cell) && !remainsEntry.loot.claimed)
+    .reverse()[0];
+  const expectedGoldAfterSecondClick = secondExpectedLoot
+    ? goldBeforeLoot + expectedLootRemains.loot.goldValue + secondExpectedLoot.loot.goldValue
+    : goldBeforeLoot + expectedLootRemains.loot.goldValue;
+
+  deathSim.placeSelectedDefense(createdRemains.cell);
+
+  if (deathSim.getSnapshot().gold !== expectedGoldAfterSecondClick) {
+    console.error('ECHEC: Fouiller deux fois le meme reste ne devrait pas redonner de l or.');
+    process.exit(1);
+  }
+
+  if (!deathSim.getRenderState().remains.some((remainsEntry) => remainsEntry.id === createdRemains.id)) {
+    console.error('ECHEC: fouiller le butin ne doit pas supprimer le marqueur narratif de restes.');
+    process.exit(1);
+  }
+
+  const memoryWorld = createInitialWorldMemory();
+  const deadProfile = createAdventurerProfile('warrior', memoryWorld, 1, 0);
+  const scoutProfile = createAdventurerProfile('warrior', memoryWorld, 3, 1);
+  const cartographerProfile = createAdventurerProfile('cartographer', memoryWorld, 3, 2);
+  memoryWorld.profiles[deadProfile.id] = deadProfile;
+  memoryWorld.profiles[scoutProfile.id] = scoutProfile;
+  memoryWorld.profiles[cartographerProfile.id] = cartographerProfile;
+  scoutProfile.survivedExpeditions = 3;
+  const deadAdventurer = createAdventurer(deadProfile, 'dead-test', 1, 0);
+  const scout = createAdventurer(scoutProfile, 'scout-test', 2, 0);
+  const remains = createAdventurerRemains({
+    id: 'remains-test',
+    adventurer: deadAdventurer,
+    profile: deadProfile,
+    cell: { x: 8, y: 8 },
+    wave: 1,
+    day: 4,
+    cause: { kind: 'trap', type: 'spikeTrap', label: 'Piege a pics' },
+  });
+
+  if (!hasVisibleRemainsAt([remains], { x: 8, y: 8 }) || !deathSiteFactKinds(remains, true).includes('trapKilledAdventurerHere')) {
+    console.error('ECHEC: les restes devraient etre detectables par case et produire un fait de site de mort par piege.');
+    process.exit(1);
+  }
+
+  const recognized = shouldRecognizeRelic({
+    adventurer: scout,
+    profile: scoutProfile,
+    remains,
+    kingdomAlreadyKnows: true,
+    cartographerInParty: true,
+    alreadyRecognized: false,
+  });
+  const label = recognized ? `${remains.ownerName}: ${remains.relicLabel}` : `Site de mort: ${remains.ownerName}`;
+  const noSurvivorResult = commitSurvivorObservations(
+    memoryWorld,
+    [
+      {
+        kind: 'remainsSeen',
+        label: `Site de mort: ${remains.ownerName}`,
+        cell: remains.cell,
+        precision: 'room',
+        confidence: 0.46,
+        observerProfileId: scoutProfile.id,
+        observerName: scoutProfile.name,
+        observerRole: scoutProfile.role,
+        wave: 2,
+      },
+    ],
+    [],
+    2,
+  );
+
+  if (noSurvivorResult.committedObservations !== 0 || memoryWorld.kingdomFacts.length !== 0) {
+    console.error('ECHEC: Kingdom Remembers ne doit pas apprendre les restes sans survivant.');
+    process.exit(1);
+  }
+
+  const survivorResult = commitSurvivorObservations(
+    memoryWorld,
+    [
+      {
+        kind: recognized ? 'relicRecognized' : 'remainsSeen',
+        label,
+        cell: remains.cell,
+        precision: 'room',
+        confidence: recognized ? 0.56 : 0.46,
+        observerProfileId: scoutProfile.id,
+        observerName: scoutProfile.name,
+        observerRole: scoutProfile.role,
+        wave: 2,
+      },
+      {
+        kind: 'deathSiteKnown',
+        label: `Site de mort: ${remains.ownerName}`,
+        cell: remains.cell,
+        precision: 'room',
+        confidence: 0.46,
+        observerProfileId: scoutProfile.id,
+        observerName: scoutProfile.name,
+        observerRole: scoutProfile.role,
+        wave: 2,
+      },
+    ],
+    [scoutProfile.id],
+    2,
+  );
+
+  if (survivorResult.committedObservations < 2 || !memoryWorld.kingdomFacts.some((fact) => fact.kind === 'deathSiteKnown')) {
+    console.error('ECHEC: un survivant devrait transmettre remainsSeen/deathSiteKnown au Royaume.');
+    process.exit(1);
+  }
+
+  const cartographerResult = commitSurvivorObservations(
+    memoryWorld,
+    [
+      {
+        kind: 'deathSiteKnown',
+        label: `Site de mort: ${remains.ownerName}`,
+        cell: remains.cell,
+        precision: 'room',
+        confidence: 0.62,
+        observerProfileId: cartographerProfile.id,
+        observerName: cartographerProfile.name,
+        observerRole: cartographerProfile.role,
+        wave: 3,
+      },
+    ],
+    [cartographerProfile.id],
+    3,
+  );
+  const preciseFact = memoryWorld.kingdomFacts.find((fact) => fact.kind === 'deathSiteKnown');
+
+  if (cartographerResult.cartographerReports !== 1 || !preciseFact?.confirmedByCartographer || preciseFact.precision !== 'exact') {
+    console.error('ECHEC: un cartographe survivant devrait rendre le site de mort plus precis et plus fiable.');
+    process.exit(1);
+  }
+
+  const remainsReport = buildFakeReport({
+    adventurersEscaped: 1,
+    remainsSeen: 1,
+    relicsRecognized: recognized ? 1 : 0,
+    remainsLines: [recognized ? `Relique reconnue: ${label}.` : `Site de mort rapporte: ${label}.`],
+    participants: [buildFakeParticipant({ name: scoutProfile.name, role: scoutProfile.role, status: 'survivant' })],
+  });
+  const remainsScene = buildGuildTavernScene(remainsReport);
+  const noRemainsScene = buildGuildTavernScene(buildFakeReport({ participants: [buildFakeParticipant({ name: 'Bravus' })] }));
+
+  if (!remainsScene.beats.some((beat) => beat.text.includes('mort') || beat.text.includes('Relique')) || !remainsScene.summaryFacts.some((fact) => fact.label === 'Restes')) {
+    console.error('ECHEC: la taverne devrait mentionner les restes uniquement quand le rapport contient un fait reel.');
+    process.exit(1);
+  }
+
+  if (noRemainsScene.summaryFacts.some((fact) => fact.label === 'Restes')) {
+    console.error('ECHEC: la taverne ne doit pas afficher de restes sans rapport transmis.');
+    process.exit(1);
+  }
+
+  const familyWords = /\b(frere|soeur|pere|mere|fils|fille|parent)\b/i;
+  const narrativeText = `${remains.relicLabel} ${remains.relicDescription} ${remainsReport.remainsLines.join(' ')}`;
+
+  if (familyWords.test(narrativeText)) {
+    console.error('ECHEC: Remains V1 ne doit pas inventer de relations familiales.');
+    process.exit(1);
+  }
+
+  console.log('Remains & Relics V1: creation, persistance, reliques, Kingdom, taverne et non-spam narratif OK.');
+}
+
+function validateZonesGuardianRules(): void {
+  const sim = new DungeonSimulation();
+  sim.startNewGame();
+  const entranceZones = sim.getRenderState().zones;
+  const entranceRequiredTypes = ['entrance', 'defense', 'secondary', 'antechamber'] as const;
+
+  entranceRequiredTypes.forEach((type) => {
+    if (!entranceZones.some((zone) => zone.type === type && zone.cells.length > 0)) {
+      console.error(`ECHEC: le zonage de l'etage 1 devrait contenir une zone ${type}.`);
+      process.exit(1);
+    }
+  });
+
+  if (entranceZones.some((zone) => zone.type === 'treasure' || zone.type === 'boss')) {
+    console.error("ECHEC: l'etage 1 ne devrait pas exposer les zones tresor principal/boss final.");
+    process.exit(1);
+  }
+
+  sim.selectMap(FINAL_MAP_ID);
+  const finalZones = sim.getRenderState().zones;
+  const finalRequiredTypes = ['entrance', 'antechamber', 'treasure', 'boss'] as const;
+
+  finalRequiredTypes.forEach((type) => {
+    if (!finalZones.some((zone) => zone.type === type && zone.cells.length > 0)) {
+      console.error(`ECHEC: le zonage de l'etage final devrait contenir une zone ${type}.`);
+      process.exit(1);
+    }
+  });
+
+  const antechamber = finalZones.find((zone) => zone.type === 'antechamber');
+  const guardianCell = antechamber?.center ?? null;
+
+  if (!guardianCell) {
+    console.error('ECHEC: le test gardien devrait trouver une antichambre.');
+    process.exit(1);
+  }
+
+  sim.selectDefense('guardian');
+  sim.placeSelectedDefense(ENTRY_CELL);
+
+  if (sim.getRenderState().defenses.some((defense) => defense.type === 'guardian')) {
+    console.error("ECHEC: le gardien ne devrait pas pouvoir etre pose a l'entree.");
+    process.exit(1);
+  }
+
+  sim.placeSelectedDefense(TREASURE_CELL);
+
+  if (sim.getRenderState().defenses.some((defense) => defense.type === 'guardian')) {
+    console.error('ECHEC: le gardien ne devrait pas pouvoir etre pose sur le tresor.');
+    process.exit(1);
+  }
+
+  const state = (sim as unknown as { state: GameState }).state;
+  const remainsCell = guardianCell;
+  const fallen = createSmokeAdventurer('warrior', 'fallen-guardian-test', remainsCell.x, remainsCell.y);
+  fallen.mapId = FINAL_MAP_ID;
+  state.remains.push(createAdventurerRemains({
+    id: 'guardian-blocking-remains',
+    adventurer: fallen,
+    profile: null,
+    cell: remainsCell,
+    wave: 1,
+    day: 1,
+    cause: { kind: 'minion', type: 'skeleton', label: 'Squelette' },
+  }));
+
+  sim.placeSelectedDefense(remainsCell);
+
+  if (sim.getRenderState().defenses.some((defense) => defense.type === 'guardian')) {
+    console.error('ECHEC: le gardien ne devrait pas pouvoir etre pose sur des restes aventuriers.');
+    process.exit(1);
+  }
+
+  state.remains = [];
+  sim.placeSelectedDefense(guardianCell);
+  const guardian = sim.getRenderState().defenses.find((defense) => defense.type === 'guardian') ?? null;
+
+  if (!guardian || sim.getSnapshot().gold !== STARTING_GOLD - 18) {
+    console.error('ECHEC: le gardien devrait etre pose dans une zone avancee et couter 18 or.');
+    process.exit(1);
+  }
+
+  const guardianZone = sim.getRenderState().zones.find((zone) => zone.guardianId === guardian.id);
+
+  if (!guardianZone || guardianZone.type !== 'antechamber') {
+    console.error("ECHEC: le zonage devrait rattacher le gardien a l'antichambre.");
+    process.exit(1);
+  }
+
+  sim.placeSelectedDefense({ x: guardianCell.x + 1, y: guardianCell.y });
+
+  if (sim.getRenderState().defenses.filter((defense) => defense.type === 'guardian').length !== 1) {
+    console.error('ECHEC: le gardien devrait etre unique en V1.');
+    process.exit(1);
+  }
+
+  const world = createInitialWorldMemory();
+  const scout = createAdventurerProfile('warrior', world, 2, 0);
+  const mapper = createAdventurerProfile('cartographer', world, 2, 1);
+  world.profiles[scout.id] = scout;
+  world.profiles[mapper.id] = mapper;
+  const noSurvivor = commitSurvivorObservations(
+    world,
+    [{
+      kind: 'guardianSeen',
+      label: 'Gardien de zone',
+      cell: guardianCell,
+      precision: 'room',
+      confidence: 0.5,
+      observerProfileId: scout.id,
+      observerName: scout.name,
+      observerRole: scout.role,
+      wave: 1,
+    }],
+    [],
+    1,
+  );
+
+  if (noSurvivor.committedObservations !== 0 || world.kingdomFacts.length !== 0) {
+    console.error('ECHEC: le Royaume ne devrait pas apprendre le gardien sans survivant.');
+    process.exit(1);
+  }
+
+  const survivor = commitSurvivorObservations(
+    world,
+    [
+      {
+        kind: 'antechamberSeen',
+        label: 'Antichambre du boss',
+        cell: guardianCell,
+        precision: 'room',
+        confidence: 0.5,
+        observerProfileId: scout.id,
+        observerName: scout.name,
+        observerRole: scout.role,
+        wave: 1,
+      },
+      {
+        kind: 'guardianSeen',
+        label: 'Gardien de zone',
+        cell: guardianCell,
+        precision: 'room',
+        confidence: 0.58,
+        observerProfileId: mapper.id,
+        observerName: mapper.name,
+        observerRole: mapper.role,
+        wave: 1,
+      },
+    ],
+    [scout.id, mapper.id],
+    1,
+  );
+  const guardianFact = world.kingdomFacts.find((fact) => fact.kind === 'guardianSeen');
+
+  if (survivor.committedObservations !== 2 || !guardianFact?.confirmedByCartographer || guardianFact.precision !== 'exact') {
+    console.error('ECHEC: survivant/cartographe devraient transmettre zone et gardien avec meilleure precision.');
+    process.exit(1);
+  }
+
+  const report = buildFakeReport({
+    adventurersEscaped: 1,
+    zoneObservations: 1,
+    guardianSightings: 1,
+    guardianFights: 1,
+    guardianKills: 1,
+    zoneLines: ['Zone rapportee: Antichambre du boss (exact, 80%).'],
+    guardianLines: ['Gardien rapporte: Gardien de zone (exact, 84%).'],
+    participants: [buildFakeParticipant({ name: scout.name, role: scout.role, status: 'survivant' })],
+  });
+  const scene = buildGuildTavernScene(report);
+
+  if (!scene.summaryFacts.some((fact) => fact.label === 'Zone') || !scene.summaryFacts.some((fact) => fact.label === 'Gardien')) {
+    console.error('ECHEC: la taverne devrait resumer les zones/gardien quand le rapport les contient.');
+    process.exit(1);
+  }
+
+  const chronicle = buildSurvivorChronicle(report);
+
+  if (!chronicle.badges.some((badge) => badge.label === 'Zone') || !chronicle.badges.some((badge) => badge.label === 'Gardien')) {
+    console.error('ECHEC: la chronique devrait exposer les badges Zone/Gardien quand le rapport les contient.');
+    process.exit(1);
+  }
+
+  console.log('Zones/Gardien V1: zones derivees, placement, unicite, Kingdom et taverne OK.');
+}
+
 function validateDoorLockRules(): void {
   const lockSim = new DungeonSimulation();
   lockSim.startNewGame();
@@ -1018,6 +1968,199 @@ function validateDoorLockRules(): void {
 
   if (!door?.locked || door.openedForExpedition || door.pickProgressMs !== 0 || door.destroyed) {
     console.error('ECHEC: une porte devrait demarrer verrouillee, fermee et intacte.');
+    process.exit(1);
+  }
+
+  const limitSim = new DungeonSimulation();
+  limitSim.startNewGame();
+  limitSim.selectConstructionTool('door');
+  const candidateDoorCells = limitSim.getRenderState().tiles
+    .filter((tile) =>
+      canPlaceDoorAt(limitSim.getRenderState().tiles, tile.cell) &&
+      !limitSim.getRenderState().transitions.some((transition) => isCell(transition.fromCell, tile.cell)) &&
+      !limitSim.getRenderState().treasures.some((treasure) => isCell(treasure.cell, tile.cell)) &&
+      !isCell(tile.cell, BOSS_CELL),
+    )
+    .map((tile) => tile.cell);
+
+  for (const cell of candidateDoorCells) {
+    limitSim.placeSelectedDefense(cell);
+
+    if (limitSim.getRenderState().doors.length >= 3) {
+      break;
+    }
+  }
+
+  if (limitSim.getRenderState().doors.length < 3) {
+    console.error('ECHEC: impossible de preparer trois portes valides pour tester la limite du voleur.');
+    process.exit(1);
+  }
+  const limitState = (limitSim as unknown as { state: GameState }).state;
+  const thief = createSmokeAdventurer('thief', 'lockpick-thief', 9, 11);
+  limitState.phase = 'wave';
+  limitState.adventurers = [thief];
+  limitState.runtime = {
+    elapsedMs: 0,
+    spawnTimerMs: 0,
+    spawnQueue: [],
+    partyProfiles: [],
+    spawned: 1,
+    partyPlan: createPartyPlan(1, limitState.world.dungeonReputation.value, null),
+    stats: createSmokeStats(),
+    doorsEngagedIds: new Set<string>(),
+    bossAutopilotTimerMs: 0,
+    targetTreasureId: null,
+    bossEngagement: createSmokeBossEngagement(),
+    combatFeedbackEvents: [],
+    remainsReactedKeys: new Set<string>(),
+    remainsRecognizedKeys: new Set<string>(),
+    roomsSeenThisExpedition: new Set<string>(),
+    roomsEnteredThisExpedition: new Set<string>(),
+    unexploredRooms: new Set<string>(),
+    frontierRooms: new Set<string>(),
+    explorationTarget: null,
+    explorationChoicesRemaining: 2,
+  };
+
+  const doors = limitState.doors.slice(0, 3);
+  doors.slice(0, 2).forEach((candidate) => {
+    (limitSim as unknown as { engageDoor(adventurer: AdventurerEntity, door: DungeonDoor, deltaMs: number): void })
+      .engageDoor(thief, candidate, candidate.pickRequiredMs);
+  });
+  (limitSim as unknown as { engageDoor(adventurer: AdventurerEntity, door: DungeonDoor, deltaMs: number): void })
+    .engageDoor(thief, doors[2], doors[2].pickRequiredMs);
+
+  if (
+    thief.lockpicksUsedThisExpedition !== 2 ||
+    limitState.runtime.stats.doorsPicked !== 2 ||
+    doors[2].openedForExpedition ||
+    doors[2].pickProgressMs > 0
+  ) {
+    console.error('ECHEC: un voleur devrait crocheter deux portes maximum par expedition.');
+    process.exit(1);
+  }
+}
+
+function validateOpaqueExplorationRules(): void {
+  const exploreSim = new DungeonSimulation();
+  exploreSim.startNewGame();
+  const state = (exploreSim as unknown as { state: GameState }).state;
+  const scout = createSmokeAdventurer('warrior', 'explore-scout', 4, 7);
+  state.phase = 'wave';
+  state.adventurers = [scout];
+  state.runtime = {
+    elapsedMs: 0,
+    spawnTimerMs: 0,
+    spawnQueue: [],
+    partyProfiles: [],
+    spawned: 1,
+    partyPlan: createPartyPlan(1, state.world.dungeonReputation.value, null),
+    stats: createSmokeStats(),
+    doorsEngagedIds: new Set<string>(),
+    bossAutopilotTimerMs: 0,
+    targetTreasureId: null,
+    bossEngagement: createSmokeBossEngagement(),
+    combatFeedbackEvents: [],
+    remainsReactedKeys: new Set<string>(),
+    remainsRecognizedKeys: new Set<string>(),
+    roomsSeenThisExpedition: new Set<string>(),
+    roomsEnteredThisExpedition: new Set<string>(),
+    unexploredRooms: new Set<string>(),
+    frontierRooms: new Set<string>(),
+    explorationTarget: null,
+    explorationChoicesRemaining: 2,
+  };
+
+  const target = (exploreSim as unknown as { getExplorationTargetCell(adventurer: AdventurerEntity): GridCell | null })
+    .getExplorationTargetCell(scout);
+
+  if (!target || state.runtime.explorationChoicesRemaining !== 1 || scout.behaviorState !== 'exploring') {
+    console.error('ECHEC: un aventurier devrait pouvoir choisir une salle inconnue proche sans connaissance omnisciente.');
+    process.exit(1);
+  }
+
+  const beforeEvaluations = state.runtime.stats.roomEvaluations;
+  (exploreSim as unknown as { maybeEvaluateRoom(adventurer: AdventurerEntity, cell: GridCell): void })
+    .maybeEvaluateRoom(scout, { x: 7, y: 10 });
+
+  if (state.runtime.stats.roomEvaluations !== beforeEvaluations + 1) {
+    console.error('ECHEC: une salle vide exploree devrait etre evaluee comme observation d expedition.');
+    process.exit(1);
+  }
+}
+
+function validateRoomLockTrapRules(): void {
+  const rejectSim = new DungeonSimulation();
+  rejectSim.startNewGame();
+  rejectSim.selectDefense('roomLockTrap');
+  rejectSim.placeSelectedDefense({ x: 8, y: 10 });
+
+  if (rejectSim.getRenderState().defenses.some((defense) => defense.type === 'roomLockTrap')) {
+    console.error('ECHEC: le piege de verrouillage devrait etre refuse dans une salle sans monstre.');
+    process.exit(1);
+  }
+
+  const lockSim = new DungeonSimulation();
+  lockSim.startNewGame();
+  lockSim.selectDefense('skeleton');
+  lockSim.placeSelectedDefense({ x: 7, y: 10 });
+  lockSim.selectDefense('roomLockTrap');
+  lockSim.placeSelectedDefense({ x: 8, y: 10 });
+  const lockState = (lockSim as unknown as { state: GameState }).state;
+  const skeleton = lockState.defenses.find((defense) => defense.type === 'skeleton') ?? null;
+  const roomLock = lockState.defenses.find((defense) => defense.type === 'roomLockTrap') ?? null;
+
+  if (!skeleton || !roomLock || roomLock.trapState !== 'armed') {
+    console.error('ECHEC: le piege de verrouillage devrait etre pose arme dans une salle defendue.');
+    process.exit(1);
+  }
+
+  const intruder = createSmokeAdventurer('warrior', 'room-lock-intruder', 8, 10);
+  lockState.phase = 'wave';
+  lockState.adventurers = [intruder];
+  lockState.runtime = {
+    elapsedMs: 0,
+    spawnTimerMs: 0,
+    spawnQueue: [],
+    partyProfiles: [],
+    spawned: 1,
+    partyPlan: createPartyPlan(1, lockState.world.dungeonReputation.value, null),
+    stats: createSmokeStats(),
+    doorsEngagedIds: new Set<string>(),
+    bossAutopilotTimerMs: 0,
+    targetTreasureId: null,
+    bossEngagement: createSmokeBossEngagement(),
+    combatFeedbackEvents: [],
+    remainsReactedKeys: new Set<string>(),
+    remainsRecognizedKeys: new Set<string>(),
+    roomsSeenThisExpedition: new Set<string>(),
+    roomsEnteredThisExpedition: new Set<string>(),
+    unexploredRooms: new Set<string>(),
+    frontierRooms: new Set<string>(),
+    explorationTarget: null,
+    explorationChoicesRemaining: 2,
+  };
+
+  (lockSim as unknown as { handleCellEntered(adventurer: AdventurerEntity, cell: GridCell): void })
+    .handleCellEntered(intruder, { x: 8, y: 10 });
+
+  if (
+    roomLock.trapState !== 'triggered' ||
+    roomLock.roomLockMinionIds[0] !== skeleton.id ||
+    !(lockSim as unknown as { roomLockBlocksStep(mapId: string, fromCell: GridCell, toCell: GridCell): boolean })
+      .roomLockBlocksStep(ENTRANCE_MAP_ID, { x: 8, y: 10 }, { x: 11, y: 10 })
+  ) {
+    console.error('ECHEC: le room lock devrait verrouiller les sorties de la salle declenchee.');
+    process.exit(1);
+  }
+
+  (lockSim as unknown as { damageMinion(target: DefenseEntity, damage: number, attacker: AdventurerEntity): void })
+    .damageMinion(skeleton, 999, intruder);
+  (lockSim as unknown as { removeDeadMinions(): void; updateRoomLocks(): void }).removeDeadMinions();
+  (lockSim as unknown as { updateRoomLocks(): void }).updateRoomLocks();
+
+  if (roomLock.trapState !== 'cleared') {
+    console.error('ECHEC: le room lock devrait se rouvrir apres la mort des defenseurs lies.');
     process.exit(1);
   }
 }
@@ -1112,7 +2255,7 @@ function validateDefensiveUnitsRespectClosedDoors(): void {
   const closedDoorCell = { x: 10, y: 4 };
   const closedDoorKey = `${closedDoorCell.x},${closedDoorCell.y}`;
   const closedMovement = {
-    canMoveBetween: (_fromX: number, _fromY: number, toX: number, toY: number) =>
+    canMoveBetween: (_entity: DefenseEntity, _fromX: number, _fromY: number, toX: number, toY: number) =>
       `${Math.round(toX)},${Math.round(toY)}` !== closedDoorKey,
     getNextWaypoint: () => null,
   };
@@ -1129,7 +2272,7 @@ function validateDefensiveUnitsRespectClosedDoors(): void {
   const openedDoorGoblin = createSmokeDefense('goblin', 'open-door-goblin', 9, 4);
   const openMovement = {
     canMoveBetween: () => true,
-    getNextWaypoint: (_fromX: number, _fromY: number, targetX: number, targetY: number) => ({ x: targetX, y: targetY }),
+    getNextWaypoint: (_entity: DefenseEntity, _fromX: number, _fromY: number, targetX: number, targetY: number) => ({ x: targetX, y: targetY }),
   };
 
   for (let elapsed = 0; elapsed < 1500; elapsed += 100) {
@@ -1197,6 +2340,7 @@ function validateSpecialTreasureRules(): void {
 
   const weaponTreasure: DungeonTreasure = {
     id: 'weapon-test',
+    mapId: ENTRANCE_MAP_ID,
     kind: 'specialWeapon',
     cell: { x: 8, y: 8 },
     value: 18,
@@ -1206,6 +2350,7 @@ function validateSpecialTreasureRules(): void {
   };
   const techniqueTreasure: DungeonTreasure = {
     id: 'technique-test',
+    mapId: ENTRANCE_MAP_ID,
     kind: 'specialTechnique',
     cell: { x: 9, y: 8 },
     value: 20,
@@ -1260,8 +2405,9 @@ function validateSpecialTreasureRules(): void {
   targetingState.treasures = [
     {
       id: 'gold-target',
+      mapId: FINAL_MAP_ID,
       kind: 'gold',
-      cell: { x: 20, y: 5 },
+      cell: { x: 14, y: 4 },
       value: GOLD_TREASURE_DEFAULT_VALUE,
       status: 'secure',
       holderAdventurerId: null,
@@ -1269,8 +2415,9 @@ function validateSpecialTreasureRules(): void {
     },
     {
       id: 'armor-target',
+      mapId: FINAL_MAP_ID,
       kind: 'specialArmor',
-      cell: { x: 21, y: 5 },
+      cell: { x: 15, y: 4 },
       value: 18,
       status: 'secure',
       holderAdventurerId: null,
@@ -1278,8 +2425,9 @@ function validateSpecialTreasureRules(): void {
     },
     {
       id: 'weapon-target',
+      mapId: FINAL_MAP_ID,
       kind: 'specialWeapon',
-      cell: { x: 20, y: 6 },
+      cell: { x: 14, y: 5 },
       value: 18,
       status: 'secure',
       holderAdventurerId: null,
@@ -1287,8 +2435,9 @@ function validateSpecialTreasureRules(): void {
     },
     {
       id: 'technique-target',
+      mapId: FINAL_MAP_ID,
       kind: 'specialTechnique',
-      cell: { x: 21, y: 6 },
+      cell: { x: 15, y: 5 },
       value: 20,
       status: 'secure',
       holderAdventurerId: null,
@@ -1354,6 +2503,14 @@ function validateCombatFeedbackRules(): void {
     targetTreasureId: null,
     bossEngagement: createSmokeBossEngagement(),
     combatFeedbackEvents: [],
+    remainsReactedKeys: new Set<string>(),
+    remainsRecognizedKeys: new Set<string>(),
+    roomsSeenThisExpedition: new Set<string>(),
+    roomsEnteredThisExpedition: new Set<string>(),
+    unexploredRooms: new Set<string>(),
+    frontierRooms: new Set<string>(),
+    explorationTarget: null,
+    explorationChoicesRemaining: 2,
   };
 
   (feedbackSim as unknown as { damageMinion(target: DefenseEntity, damage: number, attacker: AdventurerEntity): void })
@@ -1463,16 +2620,16 @@ function validateCombatAbilityRules(): void {
     rememberTrap: () => undefined,
   });
 
-  if (!thiefUsed || thiefStats.abilityStats.thiefTrapMitigations !== 1 || trap.cooldownRemainingMs < COMBAT_ABILITY_BALANCE.thiefTrapSuppressionMs) {
-    console.error('ECHEC: le voleur devrait conserver son role de mitigation de piege.');
+  if (!thiefUsed || thiefStats.abilityStats.thiefTrapMitigations !== 1 || trap.trapState !== 'disarmed') {
+    console.error('ECHEC: le voleur devrait desamorcer clairement un piege visible.');
     process.exit(1);
   }
 
   thief.abilityCooldowns.thiefTrapMitigation = 0;
-  trap.cooldownRemainingMs = 0;
+  const trapSecond = createSmokeDefense('spikeTrap', 'trap-visible-2', 3, 2);
   const thiefSecondUse = tryUseAdventurerAbility(thief, {
     adventurers: [thief],
-    defenses: [trap],
+    defenses: [trapSecond],
     boss: createSmokeBoss(),
     doors: [],
     stats: thiefStats,
@@ -1488,10 +2645,10 @@ function validateCombatAbilityRules(): void {
     rememberTrap: () => undefined,
   });
   thief.abilityCooldowns.thiefTrapMitigation = 0;
-  trap.cooldownRemainingMs = 0;
+  const trapThird = createSmokeDefense('spikeTrap', 'trap-visible-3', 3, 2);
   const thiefThirdUse = tryUseAdventurerAbility(thief, {
     adventurers: [thief],
-    defenses: [trap],
+    defenses: [trapThird],
     boss: createSmokeBoss(),
     doors: [],
     stats: thiefStats,
@@ -1507,8 +2664,54 @@ function validateCombatAbilityRules(): void {
     rememberTrap: () => undefined,
   });
 
-  if (!thiefSecondUse || thiefThirdUse || thiefStats.abilityStats.thiefTrapMitigations !== 2 || thiefStats.abilityStats.thiefTrapOverwhelmed !== 1) {
-    console.error('ECHEC: le voleur devrait etre limite a deux mitigations de piege par expedition.');
+  if (
+    !thiefSecondUse ||
+    trapSecond.trapState !== 'disarmed' ||
+    thiefThirdUse ||
+    trapThird.trapState === 'disarmed' ||
+    thiefStats.abilityStats.thiefTrapMitigations !== 2 ||
+    thiefStats.abilityStats.thiefTrapOverwhelmed !== 1
+  ) {
+    console.error('ECHEC: le voleur devrait etre limite a deux desamorcages de piege par expedition.');
+    process.exit(1);
+  }
+
+  const disarmedSim = new DungeonSimulation();
+  disarmedSim.startNewGame();
+  const disarmedState = (disarmedSim as unknown as { state: GameState }).state;
+  const trapDisarmed = createSmokeDefense('spikeTrap', 'trap-disarmed-runtime', 3, 7);
+  trapDisarmed.trapState = 'disarmed';
+  const trapWalker = createSmokeAdventurer('warrior', 'trap-walker', 3, 7);
+  disarmedState.phase = 'wave';
+  disarmedState.adventurers = [trapWalker];
+  disarmedState.defenses = [trapDisarmed];
+  disarmedState.runtime = {
+    elapsedMs: 0,
+    spawnTimerMs: 0,
+    spawnQueue: [],
+    partyProfiles: [],
+    spawned: 1,
+    partyPlan: createPartyPlan(1, disarmedState.world.dungeonReputation.value, null),
+    stats: createSmokeStats(),
+    doorsEngagedIds: new Set<string>(),
+    bossAutopilotTimerMs: 0,
+    targetTreasureId: null,
+    bossEngagement: createSmokeBossEngagement(),
+    combatFeedbackEvents: [],
+    remainsReactedKeys: new Set<string>(),
+    remainsRecognizedKeys: new Set<string>(),
+    roomsSeenThisExpedition: new Set<string>(),
+    roomsEnteredThisExpedition: new Set<string>(),
+    unexploredRooms: new Set<string>(),
+    frontierRooms: new Set<string>(),
+    explorationTarget: null,
+    explorationChoicesRemaining: 2,
+  };
+  (disarmedSim as unknown as { handleCellEntered(adventurer: AdventurerEntity, cell: GridCell): void })
+    .handleCellEntered(trapWalker, { x: 3, y: 7 });
+
+  if (trapWalker.hp !== trapWalker.maxHp || disarmedState.runtime.stats.trapStats.spikeTrap?.damage) {
+    console.error('ECHEC: un piege desarme ne devrait plus se declencher.');
     process.exit(1);
   }
 
@@ -1805,6 +3008,7 @@ function validateHumanAdventurerBehaviorRules(): void {
   const rogue = createSmokeAdventurer('thief', 'boss-rogue', 22, 12);
   const healer = createSmokeAdventurer('healer', 'boss-healer', 21, 13);
   [tank, rogue, healer].forEach((adventurer) => {
+    adventurer.mapId = FINAL_MAP_ID;
     adventurer.targetStage = 'boss';
     adventurer.hasEnteredDungeon = true;
   });
@@ -1828,6 +3032,14 @@ function validateHumanAdventurerBehaviorRules(): void {
     targetTreasureId: null,
     bossEngagement: createSmokeBossEngagement(),
     combatFeedbackEvents: [],
+    remainsReactedKeys: new Set<string>(),
+    remainsRecognizedKeys: new Set<string>(),
+    roomsSeenThisExpedition: new Set<string>(),
+    roomsEnteredThisExpedition: new Set<string>(),
+    unexploredRooms: new Set<string>(),
+    frontierRooms: new Set<string>(),
+    explorationTarget: null,
+    explorationChoicesRemaining: 2,
   };
 
   (bossLockSim as unknown as { updateBossEngagementLock(): void }).updateBossEngagementLock();
@@ -1863,6 +3075,7 @@ function validateHumanAdventurerBehaviorRules(): void {
   const fallbackRogue = createSmokeAdventurer('thief', 'fallback-rogue', 21, 12);
   const fallbackMage = createSmokeAdventurer('mage', 'fallback-mage', 20, 12);
   [fallbackRogue, fallbackMage].forEach((adventurer) => {
+    adventurer.mapId = FINAL_MAP_ID;
     adventurer.targetStage = 'boss';
     adventurer.hasEnteredDungeon = true;
   });
@@ -1886,6 +3099,14 @@ function validateHumanAdventurerBehaviorRules(): void {
     targetTreasureId: null,
     bossEngagement: createSmokeBossEngagement(),
     combatFeedbackEvents: [],
+    remainsReactedKeys: new Set<string>(),
+    remainsRecognizedKeys: new Set<string>(),
+    roomsSeenThisExpedition: new Set<string>(),
+    roomsEnteredThisExpedition: new Set<string>(),
+    unexploredRooms: new Set<string>(),
+    frontierRooms: new Set<string>(),
+    explorationTarget: null,
+    explorationChoicesRemaining: 2,
   };
 
   (fallbackSim as unknown as { updateBossEngagementLock(): void }).updateBossEngagementLock();
@@ -1909,6 +3130,7 @@ function validateHumanAdventurerBehaviorRules(): void {
   lootState.treasures = [
     {
       id: 'opportunistic-weapon',
+      mapId: ENTRANCE_MAP_ID,
       kind: 'specialWeapon',
       cell: { x: 20, y: 5 },
       value: 18,
@@ -1930,6 +3152,14 @@ function validateHumanAdventurerBehaviorRules(): void {
     targetTreasureId: null,
     bossEngagement: createSmokeBossEngagement(),
     combatFeedbackEvents: [],
+    remainsReactedKeys: new Set<string>(),
+    remainsRecognizedKeys: new Set<string>(),
+    roomsSeenThisExpedition: new Set<string>(),
+    roomsEnteredThisExpedition: new Set<string>(),
+    unexploredRooms: new Set<string>(),
+    frontierRooms: new Set<string>(),
+    explorationTarget: null,
+    explorationChoicesRemaining: 2,
   };
   const previousDamage = looter.damage;
 
@@ -1954,6 +3184,7 @@ function validateHumanAdventurerBehaviorRules(): void {
   dangerState.treasures = [
     {
       id: 'danger-gold',
+      mapId: ENTRANCE_MAP_ID,
       kind: 'gold',
       cell: { x: 12, y: 10 },
       value: GOLD_TREASURE_DEFAULT_VALUE,
@@ -1975,6 +3206,14 @@ function validateHumanAdventurerBehaviorRules(): void {
     targetTreasureId: null,
     bossEngagement: createSmokeBossEngagement(),
     combatFeedbackEvents: [],
+    remainsReactedKeys: new Set<string>(),
+    remainsRecognizedKeys: new Set<string>(),
+    roomsSeenThisExpedition: new Set<string>(),
+    roomsEnteredThisExpedition: new Set<string>(),
+    unexploredRooms: new Set<string>(),
+    frontierRooms: new Set<string>(),
+    explorationTarget: null,
+    explorationChoicesRemaining: 2,
   };
 
   if ((dangerSim as unknown as { tryStartOpportunisticLoot(adventurer: AdventurerEntity): boolean }).tryStartOpportunisticLoot(dangerHealer)) {
@@ -2062,6 +3301,21 @@ function buildFakeReport(overrides: Partial<Omit<WaveReport, 'guildTavernScene'>
     guildChanges: [],
     economyLines: [],
     specialTreasureLoots: [],
+    cartographerSurvivors: 0,
+    cartographerDeaths: 0,
+    cartographerReports: 0,
+    cartographerLostReports: 0,
+    cartographerLines: [],
+    zoneObservations: 0,
+    guardianSightings: 0,
+    guardianFights: 0,
+    guardianKills: 0,
+    guardianDeaths: 0,
+    zoneLines: [],
+    guardianLines: [],
+    remainsSeen: 0,
+    relicsRecognized: 0,
+    remainsLines: [],
     participants: [],
     chronicle: {
       title: 'Test',
@@ -2257,12 +3511,19 @@ function validateGuildTavernSceneRules(): void {
 }
 
 validateDiggingRules();
+validateResealRules();
 validateInitialDungeonLayoutRules();
 validateSpecialRoomBuildRules();
 validateDoorRules();
+validateMultiMapRules();
 validateDungeonAnchorRules();
 validateSurvivorContinuityRules();
+validateCartographerRules();
+validateRemainsRelicsRules();
+validateZonesGuardianRules();
 validateDoorLockRules();
+validateOpaqueExplorationRules();
+validateRoomLockTrapRules();
 validateDoorRemovalRules();
 validateDoorNoThiefRetreat();
 validateDefensiveUnitsRespectClosedDoors();

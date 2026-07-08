@@ -204,6 +204,18 @@ function buildSurvivorBeats(report: SceneSource, layout: TavernSceneLayout, ctx:
     usedIds.add(hazardLine.id);
   }
 
+  const cartographerSpeaker = speakers.find((actor) => actor.role === 'cartographer');
+
+  if (cartographerSpeaker && report.cartographerReports > 0) {
+    beats.push({
+      id: 'cartographer-report',
+      actorId: cartographerSpeaker.id,
+      speakerName: cartographerSpeaker.name,
+      role: cartographerSpeaker.role,
+      text: report.cartographerLines[0] ?? 'Cette fois, la Guilde a une carte un peu moins fausse.',
+    });
+  }
+
   const outcomeLine = pickOutcomeLine(secondSpeaker, ctx, usedIds);
 
   if (outcomeLine) {
@@ -257,6 +269,46 @@ function buildSurvivorBeats(report: SceneSource, layout: TavernSceneLayout, ctx:
       speakerName: archivist.name,
       role: archivist.role,
       text: report.specialTreasureLoots[0],
+    });
+  }
+
+  if (archivist && report.remainsLines.length > 0) {
+    beats.push({
+      id: 'remains-reported',
+      actorId: archivist.id,
+      speakerName: archivist.name,
+      role: archivist.role,
+      text: report.remainsLines[0],
+    });
+  }
+
+  if (archivist && report.zoneLines.length > 0) {
+    beats.push({
+      id: 'zone-reported',
+      actorId: archivist.id,
+      speakerName: archivist.name,
+      role: archivist.role,
+      text: report.zoneLines[0],
+    });
+  }
+
+  if (archivist && report.guardianLines.length > 0) {
+    beats.push({
+      id: 'guardian-reported',
+      actorId: archivist.id,
+      speakerName: archivist.name,
+      role: archivist.role,
+      text: report.guardianLines[0],
+    });
+  }
+
+  if (archivist && report.cartographerDeaths > 0 && report.cartographerReports === 0) {
+    beats.push({
+      id: 'cartographer-lost',
+      actorId: archivist.id,
+      speakerName: archivist.name,
+      role: archivist.role,
+      text: report.cartographerLines[0] ?? "Le cartographe n'est pas revenu. La carte non plus.",
     });
   }
 
@@ -364,6 +416,16 @@ function buildNoSurvivorBeats(report: SceneSource, layout: TavernSceneLayout, ct
     });
   }
 
+  if (report.cartographerDeaths > 0) {
+    beats.push({
+      id: 'cartographer-no-survivor',
+      actorId: archivist.id,
+      speakerName: archivist.name,
+      role: archivist.role,
+      text: report.cartographerLines[0] ?? "Le cartographe n'est pas revenu. La carte non plus.",
+    });
+  }
+
   const recruitLine = pickDialogueLine(RECRUITER_LINES, { ...ctx, speakerName: recruiter.name }, usedIds);
 
   if (recruitLine) {
@@ -467,6 +529,34 @@ function buildSummaryFacts(report: SceneSource): GuildTavernSummaryFact[] {
     { label: 'Tresor', value: report.treasureStolen ? 'Vole' : 'Protege', tone: report.treasureStolen ? 'bad' : 'good' },
     { label: 'Boss', value: report.cleared ? 'Toujours debout' : 'Vaincu', tone: report.cleared ? 'good' : 'bad' },
     { label: 'Or perdu', value: report.treasurePenaltyGold > 0 ? `${report.treasurePenaltyGold} or` : 'Aucun', tone: report.treasurePenaltyGold > 0 ? 'bad' : 'neutral' },
+    ...(report.cartographerReports > 0 || report.cartographerDeaths > 0
+      ? [{
+          label: 'Carte',
+          value: report.cartographerReports > 0 ? 'Croquis fiable' : 'Perdue',
+          tone: report.cartographerReports > 0 ? 'warning' as const : 'neutral' as const,
+        }]
+      : []),
+    ...(report.remainsSeen > 0 || report.relicsRecognized > 0
+      ? [{
+          label: 'Restes',
+          value: report.relicsRecognized > 0 ? 'Relique reconnue' : 'Signales',
+          tone: 'warning' as const,
+        }]
+      : []),
+    ...(report.zoneLines.length > 0
+      ? [{
+          label: 'Zone',
+          value: report.zoneLines[0].includes('boss') ? 'Approche' : 'Rapportee',
+          tone: 'warning' as const,
+        }]
+      : []),
+    ...(report.guardianLines.length > 0
+      ? [{
+          label: 'Gardien',
+          value: report.guardianDeaths > 0 ? 'Abattu' : report.guardianKills > 0 ? `${report.guardianKills} mort${report.guardianKills > 1 ? 's' : ''}` : 'Vu',
+          tone: report.guardianDeaths > 0 ? 'bad' as const : 'warning' as const,
+        }]
+      : []),
     { label: 'Prochaine expedition', value: nextExpeditionValue, tone: 'neutral' },
   ];
 }

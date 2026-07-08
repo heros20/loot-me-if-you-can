@@ -214,6 +214,7 @@ export class GameDomUi {
         <aside class="side-panel">
           ${this.renderControlHeader(snapshot)}
           ${this.renderContextMessage(snapshot)}
+          ${this.renderFloorSelector(snapshot)}
           ${snapshot.phase === 'build' ? this.renderBuildControls(snapshot) : ''}
           ${snapshot.phase === 'wave' ? this.renderWavePanel(snapshot) : ''}
         </aside>
@@ -234,8 +235,35 @@ export class GameDomUi {
           <p class="control-header__eyebrow">Salle de controle</p>
           <span class="phase-pill phase-pill--${phase.tone}">${phase.label}</span>
         </div>
-        <p class="control-header__meta"><strong>${snapshot.gold} or</strong> &middot; Expedition ${snapshot.wave}</p>
+        <p class="control-header__meta"><strong>${snapshot.gold} or</strong> &middot; Expedition ${snapshot.wave} &middot; ${escapeHtml(snapshot.currentMapLabel)}</p>
       </header>
+    `;
+  }
+
+  private renderFloorSelector(snapshot: DungeonSnapshot): string {
+    if (snapshot.dungeonMaps.length <= 1) {
+      return '';
+    }
+
+    return `
+      <div class="floor-selector" aria-label="Etages du donjon">
+        ${snapshot.dungeonMaps
+          .map((map) => {
+            const active = map.id === snapshot.currentMapId;
+            const expedition = map.id === snapshot.expeditionMapId && snapshot.phase === 'wave';
+            return `
+              <button
+                class="floor-selector__button${active ? ' is-selected' : ''}${expedition ? ' has-expedition' : ''}"
+                type="button"
+                data-map="${escapeHtml(map.id)}"
+                ${snapshot.phase === 'build' ? '' : 'disabled'}
+              >
+                <span>${escapeHtml(map.label)}</span>
+              </button>
+            `;
+          })
+          .join('')}
+      </div>
     `;
   }
 
@@ -279,14 +307,6 @@ export class GameDomUi {
 
       <div class="primary-actions">
         ${constructionTools.map((item) => this.renderToolCard(item, snapshot)).join('')}
-      </div>
-
-      <div class="primary-actions primary-actions--soon">
-        <button class="tool-card tool-card--soon" type="button" disabled
-          title="Bientot disponible : reboucher ou rediriger un couloir pour pas cher.">
-          <strong>Mur</strong>
-          <span class="tool-card__cost">Bientot</span>
-        </button>
       </div>
 
       ${this.renderSelectedToolDetail(snapshot)}
@@ -836,6 +856,16 @@ export class GameDomUi {
       });
     });
 
+    this.root.querySelectorAll<HTMLButtonElement>('[data-map]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const mapId = button.dataset.map;
+
+        if (mapId) {
+          emitUiAction({ type: 'select-map', mapId });
+        }
+      });
+    });
+
     this.root.querySelectorAll<HTMLButtonElement>('[data-ability]').forEach((button) => {
       button.addEventListener('click', () => {
         const abilityType = button.dataset.ability as BossAbilityType | undefined;
@@ -938,6 +968,8 @@ function placementHintFor(type: ConstructionTool): string {
   switch (type) {
     case 'dig':
       return 'Placement : case de roche adjacente a une zone deja creusee.';
+    case 'reseal':
+      return 'Placement : sol ou salle non critique, hors entree, transition, objectif, defense, porte ou restes.';
     case 'door':
       return 'Placement : couloir creuse, sans piege ni monstre sur la case.';
     case 'removeDoor':
@@ -954,6 +986,8 @@ function placementHintFor(type: ConstructionTool): string {
       return 'Placement : sol ou salle creusee accessible. Si le porteur survit, le bonus reste sur son profil.';
     case 'removeTreasure':
       return 'Placement : clique sur un tresor secondaire non vole pour recuperer sa valeur.';
+    case 'collectRemainsLoot':
+      return 'Placement : clique sur des restes aventuriers avec butin non fouille pendant la preparation.';
     case 'guardRoom':
     case 'crypt':
       return 'Placement : case deja creusee.';

@@ -150,6 +150,13 @@ export const ROLE_LINES: Record<AdventurerRole, DialogueLine[]> = {
     line('mag-04', "Le boss n'a presque pas reagi a mon sort."),
     line('mag-05', 'Mes sorts ont tenu le temps d un souffle.'),
   ],
+  cartographer: [
+    line('map-01', 'Le couloir est moins droit que dans les recits.'),
+    line('map-02', 'J ai marque la porte et les dalles dangereuses.'),
+    line('map-03', 'La carte de la Guilde etait fausse. Elle l est un peu moins.'),
+    line('map-04', 'Si je repars, je marche derriere ceux qui saignent le mieux.'),
+    line('map-05', 'Le boss est note. Pas dessine avec flatterie.'),
+  ],
 };
 
 export const TAVERNKEEPER_LINES: DialogueLine[] = [

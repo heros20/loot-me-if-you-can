@@ -30,6 +30,7 @@ export interface LocalDecisionResult {
     | 'stayTogether'
     | 'backlineHold'
     | 'secureArea'
+    | 'mapping'
     | null;
   forceExit: boolean;
   clearPath: boolean;
@@ -139,12 +140,15 @@ export function evaluateLocalAdventurerDecision(
   if (
     livingWarrior &&
     warriorCloserToTarget &&
-    (adventurer.role === 'mage' || adventurer.role === 'healer') &&
+    (adventurer.role === 'mage' || adventurer.role === 'healer' || adventurer.role === 'cartographer') &&
     (visibleTrap || dangerousMinionNear)
   ) {
     return {
-      hesitateMs: adventurer.role === 'healer' ? 320 : 220,
-      speedMultiplier: Math.min(formationSpeed, adventurer.role === 'healer' ? 0.58 : 0.68),
+      hesitateMs: adventurer.role === 'healer' || adventurer.role === 'cartographer' ? 320 : 220,
+      speedMultiplier: Math.min(
+        formationSpeed,
+        adventurer.role === 'healer' ? 0.58 : adventurer.role === 'cartographer' ? 0.62 : 0.68,
+      ),
       bark: visibleTrap ? 'trapSeen' : null,
       forceExit: false,
       clearPath: false,
@@ -181,7 +185,7 @@ export function findVisibleTrap(adventurer: AdventurerEntity, defenses: DefenseE
   const nextPathKeys = new Set(adventurer.path.slice(0, 3).map((cell) => cellKey(cell)));
 
   return defenses
-    .filter((defense) => defense.alive && defense.kind === 'trap')
+    .filter((defense) => defense.alive && defense.kind === 'trap' && (defense.trapState === null || defense.trapState === 'armed'))
     .map((defense) => ({
       defense,
       distance: distance(adventurer.x, adventurer.y, defense.cell.x, defense.cell.y),
@@ -215,10 +219,27 @@ function computeFormationSpeed(adventurer: AdventurerEntity, adventurers: Advent
     return 1;
   }
 
-  const desiredRank = adventurer.role === 'warrior' ? 0 : adventurer.role === 'thief' ? 1 : adventurer.role === 'mage' ? 3 : 4;
+  const desiredRank =
+    adventurer.role === 'warrior'
+      ? 0
+      : adventurer.role === 'thief'
+        ? 1
+        : adventurer.role === 'cartographer'
+          ? 3
+          : adventurer.role === 'mage'
+            ? 3
+            : 4;
 
   if (rank < desiredRank - 1) {
-    return adventurer.role === 'healer' ? 0.62 : adventurer.role === 'mage' ? 0.7 : adventurer.role === 'thief' ? 0.86 : 0.82;
+    return adventurer.role === 'healer'
+      ? 0.62
+      : adventurer.role === 'cartographer'
+        ? 0.66
+        : adventurer.role === 'mage'
+          ? 0.7
+          : adventurer.role === 'thief'
+            ? 0.86
+            : 0.82;
   }
 
   if (rank > desiredRank + 1) {
@@ -236,7 +257,7 @@ function computeLeadResponse(
 ): {
   speedMultiplier: number;
   hesitateMs: number;
-  bark: 'stayTogether' | 'backlineHold' | 'secureArea' | null;
+  bark: 'stayTogether' | 'backlineHold' | 'secureArea' | 'mapping' | null;
   behaviorState: AdventurerBehaviorState;
 } | null {
   if (adventurer.targetStage === 'exit') {
@@ -260,13 +281,22 @@ function computeLeadResponse(
     warrior &&
     adventurer.id !== warrior.id &&
     distance(warrior.x, warrior.y, targetCell.x, targetCell.y) > ownDistanceToGoal + 1.35;
-  const roleLeadLimit = adventurer.role === 'warrior' ? 4.2 : adventurer.role === 'thief' && hasUtilityReason ? 3.4 : adventurer.role === 'thief' ? 2.25 : 2.55;
+  const roleLeadLimit =
+    adventurer.role === 'warrior'
+      ? 4.2
+      : adventurer.role === 'thief' && hasUtilityReason
+        ? 3.4
+        : adventurer.role === 'thief'
+          ? 2.25
+          : adventurer.role === 'cartographer'
+            ? 2.35
+            : 2.55;
 
-  if ((adventurer.role === 'mage' || adventurer.role === 'healer') && warriorBehind) {
+  if ((adventurer.role === 'mage' || adventurer.role === 'healer' || adventurer.role === 'cartographer') && warriorBehind) {
     return {
-      speedMultiplier: adventurer.role === 'healer' ? 0.46 : 0.58,
-      hesitateMs: adventurer.role === 'healer' ? 260 : 180,
-      bark: 'backlineHold',
+      speedMultiplier: adventurer.role === 'healer' ? 0.46 : adventurer.role === 'cartographer' ? 0.52 : 0.58,
+      hesitateMs: adventurer.role === 'healer' || adventurer.role === 'cartographer' ? 260 : 180,
+      bark: adventurer.role === 'cartographer' ? 'mapping' : 'backlineHold',
       behaviorState: 'backlineHold',
     };
   }
@@ -280,9 +310,9 @@ function computeLeadResponse(
   }
 
   return {
-    speedMultiplier: adventurer.role === 'warrior' ? 0.72 : adventurer.role === 'thief' ? 0.58 : 0.5,
+    speedMultiplier: adventurer.role === 'warrior' ? 0.72 : adventurer.role === 'thief' ? 0.58 : adventurer.role === 'cartographer' ? 0.52 : 0.5,
     hesitateMs: adventurer.role === 'warrior' ? 120 : 240,
-    bark: adventurer.role === 'thief' ? 'stayTogether' : adventurer.role === 'warrior' ? 'secureArea' : 'backlineHold',
+    bark: adventurer.role === 'thief' ? 'stayTogether' : adventurer.role === 'warrior' ? 'secureArea' : adventurer.role === 'cartographer' ? 'mapping' : 'backlineHold',
     behaviorState: adventurer.role === 'warrior' ? 'securingArea' : adventurer.role === 'thief' ? 'regrouping' : 'backlineHold',
   };
 }

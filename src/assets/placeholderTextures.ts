@@ -132,6 +132,19 @@ export function createPlaceholderTextures(scene: Phaser.Scene): void {
     graphics.fillTriangle(14, 25, 19, 13, 23, 25);
   });
 
+  makeTexture(scene, TEXTURE_KEYS.defense.roomLockTrap, 34, (graphics) => {
+    graphics.fillStyle(0x27313a, 1);
+    graphics.fillCircle(17, 17, 15);
+    graphics.lineStyle(3, 0x9fb0c0, 1);
+    graphics.strokeRoundedRect(8, 11, 18, 15, 3);
+    graphics.fillStyle(0xe1b35a, 1);
+    graphics.fillCircle(17, 20, 3);
+    graphics.lineStyle(2, 0x9fb0c0, 1);
+    graphics.beginPath();
+    graphics.arc(17, 13, 6, Math.PI, 0, false);
+    graphics.strokePath();
+  });
+
   makeTexture(scene, TEXTURE_KEYS.defense.slime, 34, (graphics) => {
     graphics.fillStyle(0x6dbb5d, 0.95);
     graphics.fillCircle(17, 19, 14);
@@ -154,6 +167,17 @@ export function createPlaceholderTextures(scene: Phaser.Scene): void {
     graphics.fillStyle(0x5d782f, 1);
     graphics.fillTriangle(5, 15, 0, 10, 9, 11);
     graphics.fillTriangle(29, 15, 34, 10, 25, 11);
+  });
+
+  makeTexture(scene, TEXTURE_KEYS.defense.guardian, 38, (graphics) => {
+    graphics.fillStyle(0x5a1f2a, 1);
+    graphics.fillCircle(19, 19, 16);
+    graphics.lineStyle(3, 0xd65f5f, 1);
+    graphics.strokeCircle(19, 19, 15);
+    graphics.fillStyle(0xf6d88a, 0.95);
+    graphics.fillTriangle(11, 20, 19, 6, 27, 20);
+    graphics.fillStyle(0x211318, 0.92);
+    graphics.fillRect(11, 21, 16, 8);
   });
 
   makeTexture(scene, TEXTURE_KEYS.adventurer.warrior, 32, (graphics) => {
@@ -183,6 +207,18 @@ export function createPlaceholderTextures(scene: Phaser.Scene): void {
     graphics.fillStyle(0xf4ead2, 1);
     graphics.fillRect(14, 8, 4, 16);
     graphics.fillRect(8, 14, 16, 4);
+  });
+
+  makeTexture(scene, TEXTURE_KEYS.adventurer.cartographer, 32, (graphics) => {
+    graphics.fillStyle(0xd6b15f, 1);
+    graphics.fillCircle(16, 16, 13);
+    graphics.fillStyle(0x3b2b18, 0.75);
+    graphics.fillRect(8, 10, 16, 11);
+    graphics.fillStyle(0xf4ead2, 0.95);
+    graphics.fillRect(10, 12, 12, 7);
+    graphics.lineStyle(1, 0x3b2b18, 1);
+    graphics.lineBetween(12, 13, 20, 13);
+    graphics.lineBetween(12, 16, 19, 16);
   });
 }
 

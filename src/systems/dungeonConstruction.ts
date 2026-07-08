@@ -1,4 +1,4 @@
-import { DIG_COST, cellKey, isInEntrySafeZone, isInsideGrid, isSameCell } from '../game/constants';
+import { DIG_COST, RESEAL_TILE_COST, cellKey, isInEntrySafeZone, isInsideGrid, isSameCell } from '../game/constants';
 import {
   getTileAt,
   hasAdjacentDugTile,
@@ -36,6 +36,30 @@ export function digRockTile(tiles: DungeonTile[], cell: GridCell, gold: number):
     cost: DIG_COST,
     changed: 1,
     message: `Roche creusee pour ${DIG_COST} or. Le territoire du donjon gagne une dent.`,
+  };
+}
+
+export function resealDugTile(tiles: DungeonTile[], cell: GridCell, gold: number): ConstructionResult {
+  const tile = getTileAt(tiles, cell);
+
+  if (!tile || (tile.type !== 'floor' && tile.type !== 'room')) {
+    return blocked(tiles, 'Rebouchage refuse: choisis un sol ou une salle creusee simple.');
+  }
+
+  if (isInEntrySafeZone(cell)) {
+    return blocked(tiles, "Zone de surete : l'entree doit rester lisible.");
+  }
+
+  if (gold < RESEAL_TILE_COST) {
+    return blocked(tiles, `Il faut ${RESEAL_TILE_COST} or pour reboucher cette case.`);
+  }
+
+  return {
+    ok: true,
+    tiles: setDungeonTile(tiles, cell, 'rock'),
+    cost: RESEAL_TILE_COST,
+    changed: 1,
+    message: `Case rebouchee pour ${RESEAL_TILE_COST} or. Le donjon reprend un morceau de roche.`,
   };
 }
 

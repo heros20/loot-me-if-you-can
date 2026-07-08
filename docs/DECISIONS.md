@@ -4,7 +4,7 @@
 |---|---|
 | **Statut** | Vivant — journal append-only, on n'édite jamais une décision passée |
 | **Propriétaire** | Game Design |
-| **Dernière mise à jour** | 2026-07-07 (D-022) |
+| **Dernière mise à jour** | 2026-07-08 (D-027) |
 | **Documents liés** | [DESIGN_PRINCIPLES.md](./DESIGN_PRINCIPLES.md) · [GAME_DESIGN_DOCUMENT.md](./GAME_DESIGN_DOCUMENT.md) |
 
 ---
@@ -26,6 +26,66 @@ Chaque décision structurante obtient une entrée, numérotée dans l'ordre chro
 **Conséquences** : impact sur le design, le code ou la production
 **Remplace / Remplacé par** : lien vers une autre entrée le cas échéant
 ```
+
+---
+
+## D-027 - Etages generes, rebouchage et exploration locale revisent Multi-map V1
+
+**Date** : 2026-07-08
+**Statut** : Actif
+**Contexte** : la premiere passe Multi-map V1 prouvait les `DungeonMap`, mais elle restait trop plate : seulement deux etages fixes, pas de rebouchage actif, et des aventuriers capables de traverser la structure sans vraie incertitude de salle. Le studio voulait restaurer le rebouchage, garantir au moins trois maps avec un etage final boss, garder Remains & Relics intact, et clarifier les limites du voleur.
+**Decision** : chaque nouvelle partie genere une chaine d'au moins trois etages (`floor-1`, `floor-2`, `floor-3` boss) avec variations de salles/topologie a partir du layout V1.1. Les escaliers restent des transitions concretes, mais le routage choisit en priorite une transition qui avance vers la profondeur de la cible pour eviter le ping-pong sur les escaliers retour. `Reboucher` devient un outil de preparation : il remet une case creusee en roche pour 2 or, refuse les restes persistants visibles, transitions, ancres, occupations, et tout edit qui casse la route globale entree -> tresors actifs -> boss. Les aventuriers explorent de facon locale et opaque : ils peuvent choisir quelques salles inconnues proches avant de poursuivre, les cartographes augmentent cette curiosite, et une salle vide reste une observation. Un voleur ne crochète plus que deux portes par expedition. Les pieges ont des etats explicites (`armed`, `disarmed`, `triggered`, `cleared`) et le `roomLockTrap` verrouille une salle defendue jusqu'a la mort des defenseurs lies.
+**Alternatives envisagees** : garder deux etages fixes (rejete : ne satisfait pas le besoin de profondeur minimale) ; reboucher sans validation multi-map (rejete : trop facile de casser une partie) ; rendre l'exploration omnisciente via la carte complete (rejete : contredit D-010/D-023) ; donner des crochets illimites au voleur (rejete : annule la valeur tactique des portes multiples) ; etendre les cadavres persistants aux monstres (rejete : Remains & Relics reste adventurier-only).
+**Consequences** : la structure devient plus rejouable sans lancer une generation procedurale complete. Le joueur peut corriger son creusement, mais pas effacer les morts ni bloquer la route critique. Les portes multiples peuvent epuiser le voleur. Les pieges desarmes/verrouilles restent lisibles sur la map et detailles en inspection. Kingdom facts, tavern/chronicle, guardian, zones, remains/relics et loot fouillable gardent leurs contrats existants.
+**Remplace / Remplace par** : revise D-026 et etend D-009, D-010, D-011, D-023, D-024, D-025.
+
+---
+
+## D-026 - Multi-map V1 adds fixed dungeon depth before procedural floors
+
+**Date** : 2026-07-08
+**Statut** : Actif
+**Contexte** : Zones, guardian, cartographer, Kingdom memory, and remains now need to survive a deeper dungeon structure. The studio wanted the dungeon to feel less like one flat board, without starting procedural generation, infinite floors, a world map, multiple bosses, or a full map-selection screen.
+**Decision** : represent the dungeon as multiple `DungeonMap` records and keep a legacy active-map facade for systems that still consume `tiles`/`zones`. V1 ships with exactly two fixed floors: `floor-1` contains the entrance and early construction space; `floor-2` contains the main treasure and the unique final boss. Floors are connected by simple bidirectional stair `DungeonTransition` records. Important runtime objects carry `mapId`: defenses, doors, treasures, adventurers, boss, remains, combat feedback, zones, and Kingdom facts. Build actions apply to the displayed floor. During expeditions, adventurers route locally to stairs, transfer to the linked floor, regroup briefly, and the view follows the expedition map. Global route validation checks paths through transitions so entry, active treasures, and final boss remain reachable.
+**Alternatives envisagees** : procedural floor generation now (rejected: too much surface area for V1) ; three or more floors immediately (rejected: two floors prove the architecture with less tuning risk) ; free teleport/portal selection (rejected: stairs keep pathing concrete) ; several final bosses (rejected: the boss remains unique) ; a full minimap/spectator UI (rejected: preparation selector plus wave auto-follow is enough for V1).
+**Consequences** : systems must stop assuming that same `(x,y)` means same place globally; map identity is part of facts, loot, remains, combat feedback, and construction. Zones are recalculated per floor; guardian remains unique but floor-aware; remains/relics and fouille loot stay on their death floor; special treasures can be selected across floors when reachable; cartographer and Kingdom memory facts can report transitions/floors without becoming omniscient. The current branch still has no implemented mur/rebouchage tool, only a disabled placeholder, so no wall/backfill gameplay was modified by this decision.
+**Remplace / Remplace par** : extends D-009, D-010, D-023, D-024, and D-025.
+
+---
+
+## D-025 - Zones and the guardian are derived V1 structure, not a new dungeon layer
+
+**Date** : 2026-07-08
+**Statut** : Actif
+**Contexte** : The initial dungeon now has real rooms, remains can persist between expeditions, and cartographers can report observed facts. The studio wanted adventurers to read the dungeon as a sequence of meaningful areas, and wanted one sub-boss-like defender, without starting multi-floor dungeons, procedural generation, a minimap, a manual zone editor, or a new boss system.
+**Decision** : derive `DungeonZone` records automatically from the current single-map layout, anchors, treasures, and defenses. Zones are data overlays (`entrance`, `defense`, `secondary`, `antechamber`, `treasure`, `boss`, `corridor`) with cells, center, danger, optional/required flags, and optional `guardianId`; they do not replace tiles, pathfinding, or rooms. Add one unique `guardian` defense: an elite minion that uses existing aggro/combat, has distinct feedback, and can only be placed in defense/secondary/antechamber zones on valid accessible cells. It cannot be placed on entrance, treasure, boss, door, remains, rock, or invalid terrain. Adventurers may pause briefly in important zones, especially the antechamber, and observations become Kingdom facts only through surviving observers. Cartographers improve zone/guardian precision and confidence.
+**Alternatives envisagees** : manual zone painting (rejected: too much editor work) ; procedural zone generation (rejected: future map-generation chantier) ; full sub-boss encounter with bespoke AI/arena/rewards (rejected: too large for V1) ; let the Kingdom know zone structure automatically (rejected: violates D-010/D-023/D-024) ; make guardian corpses/remains persistent (rejected: persistent remains are adventurer history only).
+**Consequences** : the current single map reads more like a dungeon progression without changing its topology. The guardian gives the player a stronger mid-dungeon defender but remains a defense, not a second boss. Reports/tavern/chronicle can mention zones and guardians only when survivor transmission produced facts. The build still has no implemented wall/backfill tool; this decision only preserves compatibility with future rebouchage by refusing guardian placement on visible remains and by not claiming wall behavior exists.
+**Remplace / Remplace par** : extends D-010, D-021, D-023, and D-024.
+
+---
+
+## D-024 - Remains & Relics V1 makes deaths persist without becoming loot
+
+**Date** : 2026-07-08
+**Statut** : Actif
+**Contexte** : Deaths were already recorded in profiles, reports, and tavern scenes, but the dungeon itself still erased bodies immediately. The studio wanted dead adventurers to leave visible history in place without starting a genealogy system, corpse inventory, necromancy, new monsters, or Kingdom Remembers V2.
+**Decision** : every adventurer death creates persistent `AdventurerRemains` on the death cell. Persistent corpse markers are adventurer-only; dead minions/defenses do not leave this kind of trace. The marker stores identity, role, death wave/day, cause, visual age, one deterministic personal relic for narrative/recognition, and one small salvage loot claimable during the next preparation phase with `Fouiller restes`. Salvage converts to a small gold payout and is single-use; the remains marker persists after looting. Future expeditions may rarely react or recognize a relic when safe; reactions are short barks/hesitations, not a morale simulation. Observations enter `KingdomMemoryObservation` as remains/death-site facts and are committed to `RunWorldMemory.kingdomFacts` only if the observer survives. Cartographers improve precision/confidence but do not transmit anything if they die. Tavern and chronicle mentions use only report facts produced by that survivor transmission.
+**Alternatives envisagees** : make corpse loot a real inventory/equipment/crafting system (rejected: too large for V1) ; make monster corpses persistent too (rejected: the feature is about dead adventurers and dungeon history) ; invent family ties on recognition (rejected: no relationship simulation V1) ; let the Kingdom know every death site automatically (rejected: violates D-010 and D-023) ; allow silent burial under future walls (rejected for V1; visible remains should block any future backfill unless that tool explicitly handles removal).
+**Consequences** : the dungeon now accumulates readable history while pathfinding and combat stay unchanged, and preparation gets a small tactile reward for cleaning up after adventurers. Remains are non-blocking for movement and defenses, visually compressed per cell, and capped for long runs. The current build has no implemented wall/backfill construction tool, so the strict "Impossible : des restes reposent ici." rule is a documented requirement for the future mur/rebouchage tool rather than new wall gameplay.
+**Remplace / Remplace par** : extends D-010, D-021, and D-023.
+
+---
+
+## D-023 - Cartographer V1 improves memory only if the mapmaker survives
+
+**Date** : 2026-07-08
+**Statut** : Actif
+**Contexte** : Kingdom Remembers V1 made survivors strategically dangerous, but all survivors still improved knowledge in roughly the same way. The studio wanted the cartographer to become a distinct target without starting a visual map, fog of war, Kingdom Remembers V2, Remains & Relics, or a pathfinding rewrite.
+**Decision** : add `cartographer` as a fragile utility role. A cartographer stays mid/backline, avoids opening fights, pauses briefly to map readable rooms, and observes only plausible nearby facts. Observations are stored during the expedition but are committed to `RunWorldMemory.kingdomFacts` only through surviving observers. A surviving cartographer gives higher confidence, better precision, stronger stale correction, and visible "Croquis fiable" feedback in reports, rumors, chronicle, and tavern. A dead cartographer does not magically transmit personal notes; other survivors can still report their own observations at normal quality. Recruitment treats the cartographer as useful/adaptive, not mandatory: stale/weak facts and lost maps raise pressure, while locked-door thief requirements remain higher priority.
+**Alternatives envisagees** : build a real map/minimap/fog-of-war now (rejected: too large for V1) ; make cartographers required whenever memory is weak (rejected: would repeat the old mandatory-role slot bug) ; let dead cartographers leave notebooks (rejected: belongs to future Remains & Relics) ; give the cartographer trap disarm/lockpick powers (rejected: would replace the thief).
+**Consequences** : information quality is now a gameplay lever. Letting a cartographer escape makes the next expeditions better informed, but killing one slows learning without erasing reports from other survivors. The current implementation remains a V1 fact/confidence layer, not a complete Kingdom memory UI or map renderer.
+**Remplace / Remplace par** : extends D-010 and D-022.
 
 ---
 
