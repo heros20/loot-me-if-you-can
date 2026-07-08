@@ -1,11 +1,11 @@
-import { DIG_COST, cellKey, isInEntrySafeZone, isInsideGrid, isSameCell } from '../game/constants';
+import { DIG_COST, RESEAL_TILE_COST, cellKey, isInEntrySafeZone, isInsideGrid, isSameCell } from '../game/constants';
 import {
   getTileAt,
   hasAdjacentDugTile,
   markSpecializedRoom,
   setDungeonTile,
 } from '../game/dungeonTiles';
-import type { DungeonTile, GridCell, RoomSpecialization } from '../game/types';
+import type { AdventurerEntity, DefenseEntity, DungeonDoor, DungeonTile, DungeonTreasure, DungeonValidation, GridCell, RoomSpecialization } from '../game/types';
 
 export interface ConstructionResult {
   ok: boolean;
@@ -74,6 +74,102 @@ export function canBuildDefenseOnTile(tile: DungeonTile | null): boolean {
 
 export function canBuildDefenseAt(tiles: DungeonTile[], cell: GridCell): boolean {
   return isInsideGrid(cell) && !isInEntrySafeZone(cell) && canBuildDefenseOnTile(getTileAt(tiles, cell));
+}
+
+export interface ResealTileContext {
+  tiles: DungeonTile[];
+  cell: GridCell;
+  gold: number;
+  doors: DungeonDoor[];
+  defenses: DefenseEntity[];
+  adventurers: AdventurerEntity[];
+  treasures: DungeonTreasure[];
+  bossCell: GridCell;
+  validateLayout: (tiles: DungeonTile[]) => DungeonValidation;
+}
+
+export function resealDugTile(context: ResealTileContext): ConstructionResult {
+  const rejection = describeResealTileRejection(context);
+
+  if (rejection) {
+    return blocked(context.tiles, rejection);
+  }
+
+  if (context.gold < RESEAL_TILE_COST) {
+    return blocked(context.tiles, `Il faut ${RESEAL_TILE_COST} or pour reboucher cette case.`);
+  }
+
+  const nextTiles = setDungeonTile(context.tiles, context.cell, 'rock');
+  const validation = context.validateLayout(nextTiles);
+
+  if (!validation.valid) {
+    return blocked(context.tiles, validation.reason ?? 'Impossible : cela bloque le chemin.');
+  }
+
+  return {
+    ok: true,
+    tiles: nextTiles,
+    cost: RESEAL_TILE_COST,
+    changed: 1,
+    message: `Case rebouchee pour ${RESEAL_TILE_COST} or. Le donjon reprend une mauvaise forme.`,
+  };
+}
+
+export function describeResealTileRejection(context: Omit<ResealTileContext, 'validateLayout'>): string | null {
+  const tile = getTileAt(context.tiles, context.cell);
+
+  if (!tile || tile.type === 'rock') {
+    return 'Impossible : il faut une case deja creusee a reboucher.';
+  }
+
+  if (tile.type === 'entrance') {
+    return "Impossible : l'entree doit rester ouverte.";
+  }
+
+  if (tile.type === 'treasure') {
+    return 'Impossible : le tresor doit rester accessible.';
+  }
+
+  if (tile.type === 'throne') {
+    return 'Impossible : le boss doit rester accessible.';
+  }
+
+  if (tile.type !== 'floor' && tile.type !== 'room') {
+    return 'Cette case est critique.';
+  }
+
+  if (isSameCell(context.cell, context.bossCell)) {
+    return 'Impossible : le boss occupe cette case.';
+  }
+
+  if (context.doors.some((door) => !door.destroyed && isSameCell(door.cell, context.cell))) {
+    return 'Impossible : retire la porte avant de reboucher.';
+  }
+
+  if (context.defenses.some((defense) => defense.alive && isSameCell(defense.cell, context.cell))) {
+    return 'Impossible : une defense occupe cette case.';
+  }
+
+  if (
+    context.adventurers.some((adventurer) => (
+      adventurer.alive &&
+      !adventurer.escaped &&
+      isSameCell({ x: Math.round(adventurer.x), y: Math.round(adventurer.y) }, context.cell)
+    ))
+  ) {
+    return 'Impossible : un aventurier occupe cette case.';
+  }
+
+  if (
+    context.treasures.some((treasure) => (
+      treasure.status !== 'stolen' &&
+      (isSameCell(treasure.cell, context.cell) || (treasure.droppedCell !== null && isSameCell(treasure.droppedCell, context.cell)))
+    ))
+  ) {
+    return 'Impossible : un tresor occupe cette case.';
+  }
+
+  return null;
 }
 
 export function canMarkRoomTile(tile: DungeonTile | null): boolean {

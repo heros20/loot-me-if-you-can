@@ -9,6 +9,7 @@ import {
   GRID_ROWS,
   MAX_TREASURES_V1,
   PARTY_SIZE,
+  RESEAL_TILE_COST,
   SAFE_ZONE_RADIUS,
   STARTING_GOLD,
   TREASURE_CELL,
@@ -19,6 +20,7 @@ import {
   createInitialDungeonTiles,
   getBlockedCellKeys,
   getInitialDungeonZones,
+  getTileAt,
   summarizeTiles,
 } from '../src/game/dungeonTiles';
 import {
@@ -53,6 +55,15 @@ import {
 } from '../src/systems/specialTreasuresSystem';
 import { findPath, hasWalkablePath } from '../src/systems/pathfinding';
 import { buildGuildTavernScene } from '../src/systems/guildTavernSceneSystem';
+import { buildSurvivorChronicle } from '../src/systems/survivorChronicleSystem';
+import {
+  kingdomMemoryRolePressure,
+  kingdomMemorySuggestsLockedDoor,
+  kingdomTreasureAttractionBonus,
+  knownTrapCellsFromKingdomMemory,
+  rememberExpeditionFromSurvivors,
+  summarizeKingdomMemory,
+} from '../src/systems/kingdomMemorySystem';
 import type {
   AdventurerEntity,
   AdventurerRole,
@@ -65,6 +76,7 @@ import type {
   ExpeditionParticipantReport,
   GameState,
   GridCell,
+  KingdomMemoryFactType,
   WaveReport,
   WaveStats,
 } from '../src/game/types';
@@ -105,6 +117,13 @@ function createSmokeStats(): WaveStats {
     treasureValueStolen: 0,
     goldTreasureValueStolen: 0,
     specialTreasureLoots: [],
+    observedDoorCells: [],
+    observedTrapCells: [],
+    observedDefenderCells: [],
+    observedSpecialTreasures: [],
+    observedBoss: false,
+    observedRouteChanges: [],
+    heavyDamageCells: {},
     combatFeedbackEvents: 0,
     bossEngagementLocks: 0,
     opportunisticLoots: 0,
@@ -414,6 +433,133 @@ function validateDiggingRules(): void {
     console.error('ECHEC: une defense a ete posee sur la roche.');
     process.exit(1);
   }
+}
+
+function validateResealRules(): void {
+  const validCell = { x: 22, y: 4 };
+  const chokeCell = { x: 12, y: 11 };
+  const resealSim = new DungeonSimulation();
+  resealSim.startNewGame();
+  const startingGold = resealSim.getSnapshot().gold;
+
+  resealSim.selectConstructionTool('reseal');
+  resealSim.placeSelectedDefense(validCell);
+  const afterReseal = resealSim.getSnapshot();
+  const resealedTile = getTileAt(resealSim.getRenderState().tiles, validCell);
+  const blockedAfterReseal = getBlockedCellKeys(resealSim.getRenderState().tiles);
+  const pathAfterReseal = findPath(ENTRY_CELL, BOSS_CELL, {
+    role: 'warrior',
+    trapAvoidance: 0,
+    trapDangerByCell: {},
+    knownTrapCells: new Set<string>(),
+    blockedCellKeys: blockedAfterReseal,
+  });
+
+  if (afterReseal.gold !== startingGold - RESEAL_TILE_COST || resealedTile?.type !== 'rock') {
+    console.error('ECHEC: un rebouchage valide devrait couter peu et transformer la case en roche.');
+    process.exit(1);
+  }
+
+  if (!afterReseal.dungeonValidation.valid || !blockedAfterReseal.has(`${validCell.x},${validCell.y}`)) {
+    console.error('ECHEC: le rebouchage valide devrait garder un donjon valide et mettre a jour les cases bloquees.');
+    process.exit(1);
+  }
+
+  if (pathAfterReseal.some((cell) => isCell(cell, validCell))) {
+    console.error('ECHEC: le pathfinding traverse encore une case rebouchee.');
+    process.exit(1);
+  }
+
+  const costOnFailureSim = new DungeonSimulation();
+  costOnFailureSim.startNewGame();
+  costOnFailureSim.selectConstructionTool('reseal');
+  costOnFailureSim.placeSelectedDefense(chokeCell);
+  const afterBlockedPath = costOnFailureSim.getSnapshot();
+
+  if (afterBlockedPath.gold !== STARTING_GOLD || getTileAt(costOnFailureSim.getRenderState().tiles, chokeCell)?.type === 'rock') {
+    console.error('ECHEC: un rebouchage qui coupe le chemin devrait etre refuse sans cout.');
+    process.exit(1);
+  }
+
+  if (!afterBlockedPath.message.toLowerCase().includes('chemin bloque')) {
+    console.error('ECHEC: le refus de rebouchage critique devrait expliquer le chemin bloque.');
+    process.exit(1);
+  }
+
+  const protectedCells: Array<{ label: string; cell: GridCell; expected: string }> = [
+    { label: 'entree', cell: ENTRY_CELL, expected: 'entree' },
+    { label: 'boss', cell: BOSS_CELL, expected: 'boss' },
+    { label: 'tresor principal', cell: TREASURE_CELL, expected: 'tresor' },
+  ];
+
+  protectedCells.forEach(({ label, cell, expected }) => {
+    const sim = new DungeonSimulation();
+    sim.startNewGame();
+    sim.selectConstructionTool('reseal');
+    sim.placeSelectedDefense(cell);
+    const snapshot = sim.getSnapshot();
+
+    if (snapshot.gold !== STARTING_GOLD || !snapshot.message.toLowerCase().includes(expected)) {
+      console.error(`ECHEC: le rebouchage de ${label} devrait etre refuse sans cout.`);
+      process.exit(1);
+    }
+  });
+
+  const defenseSim = new DungeonSimulation();
+  defenseSim.startNewGame();
+  defenseSim.selectDefense('spikeTrap');
+  defenseSim.placeSelectedDefense(validCell);
+  const afterTrapGold = defenseSim.getSnapshot().gold;
+  defenseSim.selectConstructionTool('reseal');
+  defenseSim.placeSelectedDefense(validCell);
+
+  if (defenseSim.getSnapshot().gold !== afterTrapGold || !defenseSim.getSnapshot().message.includes('defense')) {
+    console.error('ECHEC: une case avec defense devrait refuser le rebouchage sans cout supplementaire.');
+    process.exit(1);
+  }
+
+  const doorSim = new DungeonSimulation();
+  doorSim.startNewGame();
+  doorSim.selectConstructionTool('door');
+  doorSim.placeSelectedDefense(validCell);
+  const afterDoorGold = doorSim.getSnapshot().gold;
+  doorSim.selectConstructionTool('reseal');
+  doorSim.placeSelectedDefense(validCell);
+
+  if (doorSim.getSnapshot().gold !== afterDoorGold || !doorSim.getSnapshot().message.includes('porte')) {
+    console.error('ECHEC: une case avec porte devrait refuser le rebouchage sans cout supplementaire.');
+    process.exit(1);
+  }
+
+  const specialTreasureSim = new DungeonSimulation();
+  specialTreasureSim.startNewGame();
+  specialTreasureSim.selectConstructionTool('addWeaponTreasure');
+  specialTreasureSim.placeSelectedDefense(validCell);
+  const afterTreasureGold = specialTreasureSim.getSnapshot().gold;
+  specialTreasureSim.selectConstructionTool('reseal');
+  specialTreasureSim.placeSelectedDefense(validCell);
+
+  if (specialTreasureSim.getSnapshot().gold !== afterTreasureGold || !specialTreasureSim.getSnapshot().message.includes('tresor')) {
+    console.error('ECHEC: une case avec tresor special devrait refuser le rebouchage sans cout supplementaire.');
+    process.exit(1);
+  }
+
+  (resealSim as unknown as { state: { gold: number } }).state.gold = RESEAL_TILE_COST - 1;
+  resealSim.placeSelectedDefense({ x: 20, y: 4 });
+
+  if (resealSim.getSnapshot().gold !== RESEAL_TILE_COST - 1 || !resealSim.getSnapshot().message.includes('Il faut')) {
+    console.error('ECHEC: le rebouchage sans or devrait etre refuse sans changer le sol.');
+    process.exit(1);
+  }
+
+  const resealTool = resealSim.getSnapshot().constructionTools.find((tool) => tool.type === 'reseal');
+
+  if (!resealTool?.disabled) {
+    console.error('ECHEC: le bouton Reboucher devrait etre desactive quand l or est insuffisant.');
+    process.exit(1);
+  }
+
+  console.log('Rebouchage V1: cout, refus critiques, entites et pathfinding valides.');
 }
 
 function validateSpecialRoomBuildRules(): void {
@@ -1007,6 +1153,458 @@ function validateSurvivorContinuityRules(): void {
   console.log(
     `Continuite survivants: arbitrage voleur OK (4+1 sur 5 sans voleur, 5/5 avec voleur, 3+2 avec porte, 0+5 avec porte, 1 retenu au rapport: ${fiveComposition.benchedProfiles[0]?.name ?? 'n/a'}).`,
   );
+}
+
+function validateKingdomMemoryRules(): void {
+  const tiles = createInitialDungeonTiles();
+  const survivor = createAdventurerProfile('warrior', createInitialWorldMemory(), 1, 0);
+  const thieflessSurvivor = createAdventurerProfile('mage', createInitialWorldMemory(), 1, 1);
+  const doorCell = { x: 8, y: 10 };
+  const trapCell = { x: 9, y: 10 };
+  const defenderCell = { x: 10, y: 10 };
+  const specialCell = { x: 11, y: 10 };
+
+  const doorWorld = createInitialWorldMemory();
+  const doorStats = {
+    ...createSmokeStats(),
+    observedDoorCells: [doorCell],
+    doorEncounters: 1,
+    doorNoThiefRetreats: 1,
+  };
+  const firstDoorLines = rememberExpeditionFromSurvivors({
+    world: doorWorld,
+    stats: doorStats,
+    wave: 1,
+    tiles,
+    survivors: [survivor],
+  });
+  rememberExpeditionFromSurvivors({
+    world: doorWorld,
+    stats: doorStats,
+    wave: 2,
+    tiles,
+    survivors: [survivor],
+  });
+
+  const doorFact = doorWorld.kingdomMemory.facts.find((fact) => fact.type === 'lockedDoorSeen');
+  if (!doorFact || doorFact.confirmations < 2 || doorFact.confidence <= 0.7 || !firstDoorLines.some((line) => line.includes('porte'))) {
+    console.error('ECHEC: une porte vue par un survivant devrait devenir une rumeur confirmee.');
+    process.exit(1);
+  }
+
+  if (!kingdomMemorySuggestsLockedDoor(doorWorld.kingdomMemory, 2)) {
+    console.error('ECHEC: la memoire du royaume devrait signaler un besoin de voleur apres porte verrouillee vue.');
+    process.exit(1);
+  }
+
+  const pressure = kingdomMemoryRolePressure(doorWorld.kingdomMemory, 2);
+  const memory = createSmokeMemory({
+    rolePressure: {
+      warrior: pressure.warrior ?? 0,
+      thief: pressure.thief ?? 0,
+      mage: pressure.mage ?? 0,
+      healer: pressure.healer ?? 0,
+    },
+    doorBlockedWithoutThief: kingdomMemorySuggestsLockedDoor(doorWorld.kingdomMemory, 2),
+  });
+  const compositionWorld = createInitialWorldMemory();
+  const noThiefRoles: AdventurerRole[] = ['warrior', 'mage', 'healer', 'warrior', 'mage'];
+  const { profiles: noThiefProfiles } = selectProfilesForWave(
+    noThiefRoles,
+    compositionWorld,
+    1,
+    createCompositionContext(createSmokeMemory(), 1, false),
+  );
+  noThiefProfiles.forEach((profile) => activateProfileForExpedition(compositionWorld, profile.id, 1));
+  noThiefProfiles.forEach((profile) => recordProfileSurvival(compositionWorld, profile.id, 1, `${profile.name} survit avec une carte imparfaite.`));
+  const returning = getReturningSurvivorCandidates(compositionWorld);
+  const kingdomRoster = buildWaveRoster(2, memory, false, returning.map((profile) => profile.role));
+  const kingdomComposition = selectProfilesForWave(
+    kingdomRoster,
+    compositionWorld,
+    2,
+    createCompositionContext(memory, 2, false),
+  );
+
+  if (!kingdomComposition.profiles.some((profile) => profile.role === 'thief')) {
+    console.error('ECHEC: une porte verrouillee connue par rumeur fiable devrait imposer un voleur si aucun survivant voleur ne revient.');
+    process.exit(1);
+  }
+
+  const noSurvivorWorld = createInitialWorldMemory();
+  rememberExpeditionFromSurvivors({
+    world: noSurvivorWorld,
+    stats: { ...createSmokeStats(), observedTrapCells: [trapCell], heavyDamageCells: { '9,10': 30 }, adventurersKilled: PARTY_SIZE },
+    wave: 1,
+    tiles,
+    survivors: [],
+  });
+
+  if (noSurvivorWorld.kingdomMemory.facts.some((fact) => fact.type === 'trapSeen' || fact.type === 'heavyDamageArea')) {
+    console.error('ECHEC: sans survivant, la memoire ne doit pas apprendre de faits precis sur pieges ou degats.');
+    process.exit(1);
+  }
+
+  if (!noSurvivorWorld.kingdomMemory.facts.some((fact) => fact.type === 'partyWipedHere' && fact.cell === null)) {
+    console.error('ECHEC: sans survivant, seule une rumeur vague de disparition devrait etre creee.');
+    process.exit(1);
+  }
+
+  const hazardWorld = createInitialWorldMemory();
+  rememberExpeditionFromSurvivors({
+    world: hazardWorld,
+    stats: {
+      ...createSmokeStats(),
+      observedTrapCells: [trapCell],
+      observedDefenderCells: [defenderCell],
+      observedSpecialTreasures: [{ kind: 'specialWeapon', cell: specialCell }],
+      observedBoss: true,
+      roomEvaluations: 1,
+      heavyDamageCells: {
+        [trapCell.x + ',' + trapCell.y]: 24,
+        [defenderCell.x + ',' + defenderCell.y]: 12,
+      },
+    },
+    wave: 1,
+    tiles,
+    survivors: [survivor],
+  });
+
+  const hazardTypes = new Set(hazardWorld.kingdomMemory.facts.map((fact) => fact.type));
+  const expectedHazardTypes: KingdomMemoryFactType[] = [
+    'trapSeen',
+    'defenderSeen',
+    'specialTreasureSeen',
+    'bossSeen',
+    'dangerousRoomSeen',
+    'heavyDamageArea',
+  ];
+  expectedHazardTypes.forEach((type) => {
+    if (!hazardTypes.has(type)) {
+      console.error(`ECHEC: fait de memoire manquant apres temoignage survivant (${type}).`);
+      process.exit(1);
+    }
+  });
+
+  if (!knownTrapCellsFromKingdomMemory(hazardWorld.kingdomMemory, 1).has('9,10')) {
+    console.error('ECHEC: une dalle de piege fiable devrait etre exposee au pathfinding.');
+    process.exit(1);
+  }
+
+  const specialTreasure: DungeonTreasure = {
+    id: 'special-memory-test',
+    kind: 'specialWeapon',
+    cell: specialCell,
+    status: 'secure',
+    holderAdventurerId: null,
+    droppedCell: null,
+    value: 0,
+  };
+
+  if (kingdomTreasureAttractionBonus(hazardWorld.kingdomMemory, specialTreasure, 'thief', 1) <= 0) {
+    console.error('ECHEC: un tresor special connu devrait attirer un role compatible.');
+    process.exit(1);
+  }
+
+  const routeWorld = createInitialWorldMemory();
+  rememberExpeditionFromSurvivors({
+    world: routeWorld,
+    stats: { ...createSmokeStats(), observedDoorCells: [doorCell] },
+    wave: 1,
+    tiles,
+    survivors: [thieflessSurvivor],
+  });
+  rememberExpeditionFromSurvivors({
+    world: routeWorld,
+    stats: { ...createSmokeStats(), observedRouteChanges: [doorCell] },
+    wave: 2,
+    tiles: tiles.map((tile) => (tile.x === doorCell.x && tile.y === doorCell.y ? { ...tile, type: 'rock' } : tile)),
+    survivors: [thieflessSurvivor],
+  });
+
+  const staleDoor = routeWorld.kingdomMemory.facts.find((fact) => fact.type === 'lockedDoorSeen');
+  if (!routeWorld.kingdomMemory.facts.some((fact) => fact.type === 'routeChangedSuspected') || !staleDoor?.stale) {
+    console.error('ECHEC: une route connue contredite par une roche vue plus tard devrait devenir suspecte et rendre le fait ancien stale.');
+    process.exit(1);
+  }
+
+  const fakeReport = buildFakeReport({
+    participants: [buildFakeParticipant({ name: 'Temoin', status: 'survivant' })],
+    adventurersEscaped: 1,
+    kingdomMemoryLines: summarizeKingdomMemory(hazardWorld.kingdomMemory, 1, 2),
+  });
+  const tavern = buildGuildTavernScene({
+    ...fakeReport,
+    chronicle: buildSurvivorChronicle(fakeReport),
+  });
+
+  if (!tavern.beats.some((beat) => beat.text.includes('Registre royal'))) {
+    console.error('ECHEC: la scene de taverne devrait afficher une rumeur issue de vrais faits de memoire.');
+    process.exit(1);
+  }
+
+  console.log('Kingdom Remembers V1: temoignages survivants, confiance, routes suspectes, composition et taverne valides.');
+}
+
+function validateSurvivorRecoveryRules(): void {
+  const roles: AdventurerRole[] = ['warrior', 'thief', 'mage', 'healer', 'warrior'];
+  const memory = createSmokeMemory();
+  const world = createInitialWorldMemory();
+  const { profiles: wave1Profiles } = selectProfilesForWave(
+    roles,
+    world,
+    1,
+    createCompositionContext(memory, 1, false),
+  );
+  wave1Profiles.forEach((profile) => activateProfileForExpedition(world, profile.id, 1));
+
+  recordProfileSurvival(world, wave1Profiles[0].id, 1, `${wave1Profiles[0].name} survit tres blesse.`, null, {
+    hpRatio: 0.16,
+    alliesKilled: 0,
+    groupRetreated: false,
+    bossDamageTaken: 0,
+    escapedWithSpecialTreasure: false,
+  });
+  recordProfileSurvival(world, wave1Profiles[1].id, 1, `${wave1Profiles[1].name} survit fatigue.`, null, {
+    hpRatio: 0.44,
+    alliesKilled: 0,
+    groupRetreated: false,
+    bossDamageTaken: 0,
+    escapedWithSpecialTreasure: false,
+  });
+  wave1Profiles.slice(2).forEach((profile) => recordProfileSurvival(world, profile.id, 1, `${profile.name} survit disponible.`, null, {
+    hpRatio: 0.92,
+    alliesKilled: 0,
+    groupRetreated: false,
+    bossDamageTaken: 0,
+    escapedWithSpecialTreasure: false,
+  }));
+
+  const injured = world.profiles[wave1Profiles[0].id];
+  const resting = world.profiles[wave1Profiles[1].id];
+
+  if (injured.recoveryState !== 'injured' || injured.availableNextExpedition || resting.recoveryState !== 'resting' || resting.availableNextExpedition) {
+    console.error('ECHEC: low HP/resting devraient rendre les survivants indisponibles une expedition.');
+    process.exit(1);
+  }
+
+  const wave2Roster = buildWaveRoster(2, memory, false, getReturningSurvivorCandidates(world).map((profile) => profile.role));
+  const { profiles: wave2Profiles } = selectProfilesForWave(
+    wave2Roster,
+    world,
+    2,
+    createCompositionContext(memory, 2, false),
+  );
+  const wave2Ids = new Set(wave2Profiles.map((profile) => profile.id));
+
+  if (wave2Ids.has(injured.id) || wave2Ids.has(resting.id)) {
+    console.error('ECHEC: injured/resting ne doivent pas partir immediatement.');
+    process.exit(1);
+  }
+
+  if (wave2Profiles.length !== PARTY_SIZE || wave2Profiles.filter((profile) => wave1Profiles.some((old) => old.id === profile.id)).length !== 3) {
+    console.error('ECHEC: la composition devrait garder 3 survivants disponibles et completer avec 2 recrues.');
+    process.exit(1);
+  }
+
+  if (injured.recoveryState !== 'available' || resting.recoveryState !== 'available') {
+    console.error('ECHEC: la recuperation devrait diminuer une seule fois apres la selection de la vague manquee.');
+    process.exit(1);
+  }
+
+  const wave3Roster = buildWaveRoster(3, memory, false, getReturningSurvivorCandidates(world).map((profile) => profile.role));
+  const { profiles: wave3Profiles } = selectProfilesForWave(
+    wave3Roster,
+    world,
+    3,
+    createCompositionContext(memory, 3, false),
+  );
+
+  if (!wave3Profiles.some((profile) => profile.id === injured.id) || !wave3Profiles.some((profile) => profile.id === resting.id)) {
+    console.error('ECHEC: les survivants indisponibles devraient pouvoir revenir apres une expedition manquee.');
+    process.exit(1);
+  }
+
+  const specialWorld = createInitialWorldMemory();
+  const specialMemory = createSmokeMemory();
+  const { profiles: specialProfiles } = selectProfilesForWave(
+    roles,
+    specialWorld,
+    1,
+    createCompositionContext(specialMemory, 1, false),
+  );
+  const specialCarrier = specialProfiles[0];
+  specialWorld.profiles[specialCarrier.id] = specialCarrier;
+  grantSpecialTreasureBonus(
+    specialCarrier,
+    {
+      id: 'test-special-weapon',
+      kind: 'specialWeapon',
+      cell: { x: 1, y: 1 },
+      value: 18,
+      status: 'secure',
+      holderAdventurerId: null,
+      droppedCell: null,
+    },
+    1,
+  );
+  activateProfileForExpedition(specialWorld, specialCarrier.id, 1);
+  recordProfileSurvival(specialWorld, specialCarrier.id, 1, `${specialCarrier.name} survit avec une arme speciale.`, null, {
+    hpRatio: 0.12,
+    alliesKilled: 0,
+    groupRetreated: false,
+    bossDamageTaken: 0,
+    escapedWithSpecialTreasure: true,
+  });
+
+  if (specialCarrier.recoveryState !== 'injured' || specialCarrier.specialTreasureBonuses.length === 0) {
+    console.error('ECHEC: un porteur de tresor special blesse doit garder son bonus pendant son absence.');
+    process.exit(1);
+  }
+
+  const specialWave2Roster = buildWaveRoster(2, specialMemory, false, getReturningSurvivorCandidates(specialWorld).map((profile) => profile.role));
+  selectProfilesForWave(specialWave2Roster, specialWorld, 2, createCompositionContext(specialMemory, 2, false));
+  const specialWave3Roster = buildWaveRoster(3, specialMemory, false, getReturningSurvivorCandidates(specialWorld).map((profile) => profile.role));
+  const { profiles: specialWave3Profiles } = selectProfilesForWave(
+    specialWave3Roster,
+    specialWorld,
+    3,
+    createCompositionContext(specialMemory, 3, false),
+  );
+
+  if (!specialWave3Profiles.some((profile) => profile.id === specialCarrier.id && profile.specialTreasureBonuses.length > 0)) {
+    console.error('ECHEC: le porteur blesse devrait revenir plus tard avec son tresor special conserve.');
+    process.exit(1);
+  }
+
+  const shakenWorld = createInitialWorldMemory();
+  const shakenMemory = createSmokeMemory();
+  const { profiles: shakenProfiles } = selectProfilesForWave(
+    roles,
+    shakenWorld,
+    1,
+    createCompositionContext(shakenMemory, 1, false),
+  );
+  const shakenProfile = shakenProfiles[0];
+  shakenProfiles.forEach((profile) => activateProfileForExpedition(shakenWorld, profile.id, 1));
+  recordProfileSurvival(shakenWorld, shakenProfile.id, 1, `${shakenProfile.name} survit au massacre.`, null, {
+    hpRatio: 0.9,
+    alliesKilled: 3,
+    groupRetreated: false,
+    bossDamageTaken: 0,
+    escapedWithSpecialTreasure: false,
+  });
+
+  if (shakenProfile.recoveryState !== 'shaken' || shakenProfile.lifeStatus === 'dead') {
+    console.error('ECHEC: un survivant traumatise devrait etre shaken/refuser sans etre marque mort.');
+    process.exit(1);
+  }
+
+  const mandatoryWorld = createInitialWorldMemory();
+  const mandatoryMemory = createSmokeMemory({ doorBlockedWithoutThief: true, rolePressure: { warrior: 0, thief: 3, mage: 0, healer: 0 } });
+  const { profiles: mandatoryProfiles } = selectProfilesForWave(
+    roles,
+    mandatoryWorld,
+    1,
+    createCompositionContext(mandatoryMemory, 1, false),
+  );
+  mandatoryProfiles.forEach((profile) => activateProfileForExpedition(mandatoryWorld, profile.id, 1));
+  const injuredThief = mandatoryProfiles.find((profile) => profile.role === 'thief');
+
+  if (!injuredThief) {
+    console.error('ECHEC: le scenario de test devrait contenir un voleur.');
+    process.exit(1);
+  }
+
+  mandatoryProfiles.forEach((profile) => recordProfileSurvival(mandatoryWorld, profile.id, 1, `${profile.name} survit au test obligatoire.`, null, {
+    hpRatio: profile.id === injuredThief.id ? 0.12 : 0.88,
+    alliesKilled: 0,
+    groupRetreated: false,
+    bossDamageTaken: 0,
+    escapedWithSpecialTreasure: false,
+  }));
+
+  const mandatoryRoster = buildWaveRoster(2, mandatoryMemory, true, getReturningSurvivorCandidates(mandatoryWorld).map((profile) => profile.role));
+  const { profiles: mandatoryNext } = selectProfilesForWave(
+    mandatoryRoster,
+    mandatoryWorld,
+    2,
+    createCompositionContext(mandatoryMemory, 2, true),
+  );
+
+  if (mandatoryNext.some((profile) => profile.id === injuredThief.id) || !mandatoryNext.some((profile) => profile.role === 'thief')) {
+    console.error('ECHEC: un voleur blesse ne doit pas satisfaire le role obligatoire; la Guilde doit en recruter un.');
+    process.exit(1);
+  }
+
+  const tacticalWorld = createInitialWorldMemory();
+  const tacticalMemory = createSmokeMemory({ doorBlockedWithoutThief: true, rolePressure: { warrior: 0, thief: 3, mage: 0, healer: 0 } });
+  const noThiefRoles: AdventurerRole[] = ['warrior', 'mage', 'healer', 'warrior', 'mage'];
+  const { profiles: tacticalProfiles } = selectProfilesForWave(
+    noThiefRoles,
+    tacticalWorld,
+    1,
+    createCompositionContext(tacticalMemory, 1, false),
+  );
+  tacticalProfiles.forEach((profile) => activateProfileForExpedition(tacticalWorld, profile.id, 1));
+  tacticalProfiles.forEach((profile) => recordProfileSurvival(tacticalWorld, profile.id, 1, `${profile.name} survit tactiquement.`, null, {
+    hpRatio: 0.9,
+    alliesKilled: 0,
+    groupRetreated: false,
+    bossDamageTaken: 0,
+    escapedWithSpecialTreasure: false,
+  }));
+  const tacticalPlan = planExpeditionComposition(
+    buildWaveRoster(2, tacticalMemory, true, getReturningSurvivorCandidates(tacticalWorld).map((profile) => profile.role)),
+    tacticalWorld,
+    createCompositionContext(tacticalMemory, 2, true),
+  );
+  const tacticallyBenched = tacticalPlan.benchedProfiles[0];
+
+  if (!tacticallyBenched || tacticallyBenched.recoveryState !== 'available' || tacticallyBenched.availability !== 'available') {
+    console.error('ECHEC: la reserve tactique doit rester distincte des etats injured/resting/shaken.');
+    process.exit(1);
+  }
+
+  const reportSim = new DungeonSimulation();
+  reportSim.startNewGame();
+  const reportState = (reportSim as unknown as { state: GameState }).state;
+  reportState.world = world;
+  reportState.wave = 2;
+  const preview = reportSim.getSnapshot();
+
+  if (
+    preview.nextExpeditionUnavailableSurvivors.some((survivor) => survivor.name === injured.name) ||
+    preview.nextExpeditionUnavailableSurvivors.some((survivor) => survivor.name === resting.name)
+  ) {
+    console.error('ECHEC: les absences recuperees ne doivent plus apparaitre dans la preview.');
+    process.exit(1);
+  }
+
+  const fakeReport = buildFakeReport({
+    unavailableSurvivors: [
+      {
+        profileId: injured.id,
+        name: injured.name,
+        role: injured.role,
+        state: 'injured',
+        label: 'Blesse',
+        remainingExpeditions: 1,
+        note: `${injured.name} restera a l'infirmerie pour cette expedition.`,
+      },
+    ],
+  });
+  const tavern = buildGuildTavernScene({
+    ...fakeReport,
+    chronicle: buildSurvivorChronicle(fakeReport),
+  });
+
+  if (!tavern.beats.some((beat) => beat.text.includes('infirmerie')) || tavern.dead.includes(injured.name)) {
+    console.error('ECHEC: la taverne devrait mentionner un absent sans le classer parmi les morts.');
+    process.exit(1);
+  }
+
+  console.log('Repos/Hopital V1: blessures, refus, roles obligatoires, bonus et recuperation valides.');
 }
 
 function validateDoorLockRules(): void {
@@ -2079,8 +2677,10 @@ function buildFakeReport(overrides: Partial<Omit<WaveReport, 'guildTavernScene'>
       tacticalSummary: 'Resume test',
     },
     notableAdventurers: [],
+    kingdomMemoryLines: [],
     returningSurvivorNames: [],
     heldBackSurvivorNames: [],
+    unavailableSurvivors: [],
     imposedRoleNote: null,
     newVolunteerCount: PARTY_SIZE,
     veteranName: null,
@@ -2257,11 +2857,14 @@ function validateGuildTavernSceneRules(): void {
 }
 
 validateDiggingRules();
+validateResealRules();
 validateInitialDungeonLayoutRules();
 validateSpecialRoomBuildRules();
 validateDoorRules();
 validateDungeonAnchorRules();
 validateSurvivorContinuityRules();
+validateKingdomMemoryRules();
+validateSurvivorRecoveryRules();
 validateDoorLockRules();
 validateDoorRemovalRules();
 validateDoorNoThiefRetreat();

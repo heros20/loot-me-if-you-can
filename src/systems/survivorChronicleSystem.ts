@@ -63,6 +63,15 @@ function buildSurvivorLines(report: ChronicleSource, survivorNames: string[]): s
     );
   }
 
+  if (report.kingdomMemoryLines.length > 0) {
+    lines.push(`La Guilde archive: ${report.kingdomMemoryLines[0]}`);
+  }
+
+  if (report.unavailableSurvivors.length > 0) {
+    const absents = report.unavailableSurvivors.slice(0, 3).map((survivor) => `${survivor.name} (${survivor.label})`).join(', ');
+    lines.push(`${absents} ne repart${report.unavailableSurvivors.length > 1 ? 'ent' : ''} pas tout de suite.`);
+  }
+
   if (report.treasureStolen) {
     lines.push('Le porteur du tresor refuse de lacher le coffre, meme loin du donjon.');
   } else if (report.storyLines.some((line) => line.includes('groupe couvre une retraite'))) {
@@ -119,6 +128,10 @@ function buildNoSurvivorLines(report: ChronicleSource): string[] {
     lines.push("Le boss n'a meme pas eu besoin de se montrer dans les recits.");
   } else {
     lines.push('Quelque chose pres du trone a resiste assez longtemps pour devenir une rumeur.');
+  }
+
+  if (report.kingdomMemoryLines.length > 0) {
+    lines.push(`La Guilde archive seulement ceci: ${report.kingdomMemoryLines[0]}`);
   }
 
   lines.push(report.adaptationNotes[0] ?? 'Le Royaume prepare deja des volontaires plus prudents.');

@@ -23,6 +23,7 @@ export const MAX_TREASURES_V1 = 3;
 
 export const STARTING_GOLD = ECONOMY_BALANCE.startingGold;
 export const DIG_COST = ECONOMY_BALANCE.digCost;
+export const RESEAL_TILE_COST = ECONOMY_BALANCE.resealTileCost;
 
 export const DOOR_COST = ECONOMY_BALANCE.doorCost;
 export const DOOR_HP = ECONOMY_BALANCE.doorHp;

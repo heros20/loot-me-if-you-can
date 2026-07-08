@@ -793,6 +793,8 @@ export class DungeonScene extends Phaser.Scene {
             || renderState.gold < DOOR_COST
           : constructionTool === 'removeDoor'
             ? !findDoorAt(renderState.doors, cell)
+          : constructionTool === 'reseal'
+            ? !this.simulation.previewResealTile(cell).ok
           : constructionTool === 'moveBoss'
             ? !tile
               || tile.type !== 'floor' && tile.type !== 'room'

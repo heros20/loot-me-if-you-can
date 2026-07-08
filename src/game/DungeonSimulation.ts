@@ -6,6 +6,7 @@ import {
   GOLD_TREASURE_DEFAULT_VALUE,
   MAX_TREASURES_V1,
   PARTY_SIZE,
+  RESEAL_TILE_COST,
   SAFE_ZONE_RADIUS,
   STARTING_GOLD,
   TREASURE_CELL,
@@ -45,6 +46,7 @@ import type {
   GridCell,
   PartyPlan,
   ReportEntry,
+  SurvivorAbsenceReport,
   TreasureState,
   WaveReport,
   WaveRuntime,
@@ -139,6 +141,7 @@ import {
   digRockTile,
   hasDefenseOnCell,
   markPlayerRoom,
+  resealDugTile,
 } from '../systems/dungeonConstruction';
 import {
   findActiveDoorAt,
@@ -158,6 +161,15 @@ import {
   specialTreasurePickupText,
   specialTreasureValue,
 } from '../systems/specialTreasuresSystem';
+import {
+  kingdomMemoryRolePressure,
+  kingdomMemorySuggestsLockedDoor,
+  kingdomTreasureAttractionBonus,
+  knownTrapCellsFromKingdomMemory,
+  nearbyRememberedRouteFact,
+  rememberExpeditionFromSurvivors,
+  summarizeKingdomMemory,
+} from '../systems/kingdomMemorySystem';
 import {
   addThreat,
   chooseThreatTarget,
@@ -200,6 +212,13 @@ const CONSTRUCTION_TOOLS: Array<{
     description: `Transforme une roche adjacente en sol. ${DIG_COST} or.`,
     category: 'construction',
     cost: DIG_COST,
+  },
+  {
+    type: 'reseal',
+    name: 'Reboucher',
+    description: `Rebouche une case creusee sans bloquer le chemin obligatoire. ${RESEAL_TILE_COST} or.`,
+    category: 'construction',
+    cost: RESEAL_TILE_COST,
   },
   {
     type: 'door',
@@ -521,6 +540,11 @@ export class DungeonSimulation {
       return;
     }
 
+    if (tool === 'reseal') {
+      this.resealTile(cell);
+      return;
+    }
+
     if (tool === 'guardRoom' || tool === 'crypt') {
       this.markRoom(cell, tool);
       return;
@@ -573,6 +597,32 @@ export class DungeonSimulation {
 
   private digTile(cell: GridCell): void {
     const result = digRockTile(this.state.tiles, cell, this.state.gold);
+    this.state.message = result.message;
+
+    if (!result.ok) {
+      return;
+    }
+
+    this.state.gold -= result.cost;
+    this.state.tiles = result.tiles;
+  }
+
+  previewResealTile(cell: GridCell) {
+    return resealDugTile({
+      tiles: this.state.tiles,
+      cell,
+      gold: this.state.gold,
+      doors: this.state.doors,
+      defenses: this.state.defenses,
+      adventurers: this.state.adventurers,
+      treasures: this.state.treasures,
+      bossCell: this.getBossCell(),
+      validateLayout: (tiles) => this.validateDungeonLayout(this.state.treasures, this.getBossCell(), tiles),
+    });
+  }
+
+  private resealTile(cell: GridCell): void {
+    const result = this.previewResealTile(cell);
     this.state.message = result.message;
 
     if (!result.ok) {
@@ -988,9 +1038,11 @@ export class DungeonSimulation {
       nextWaveSize: previewRoster.length,
       nextExpeditionReturningNames: continuityPreview.returningNames,
       nextExpeditionHeldBackNames: continuityPreview.heldBackNames,
+      nextExpeditionUnavailableSurvivors: continuityPreview.unavailableSurvivors,
       nextExpeditionImposedRoleNote: continuityPreview.imposedRoleNote,
       nextExpeditionNewVolunteers: continuityPreview.newVolunteerCount,
       nextExpeditionVeteranName: continuityPreview.veteranName,
+      kingdomMemoryRumors: summarizeKingdomMemory(this.state.world.kingdomMemory, this.state.wave, 3),
       canLaunchWave: this.state.phase === 'build' && dungeonValidation.valid,
       report: this.state.report,
       survivedWaves: Math.max(0, this.state.wave - 1),
@@ -1042,7 +1094,7 @@ export class DungeonSimulation {
 
   private buildAdaptiveRoster(wave: number): AdventurerRole[] {
     const candidateRoles = getReturningSurvivorCandidates(this.state.world, PARTY_SIZE).map((profile) => profile.role);
-    return buildWaveRoster(wave, this.state.memory, this.hasActiveLockedDoor(), candidateRoles);
+    return buildWaveRoster(wave, this.buildMemoryWithKingdomPressure(wave), this.hasActiveLockedDoor(), candidateRoles);
   }
 
   private buildPlannedRoster(wave: number): AdventurerRole[] {
@@ -1050,11 +1102,33 @@ export class DungeonSimulation {
   }
 
   private buildCompositionContext(wave: number): ExpeditionCompositionContext {
+    const rolePressure = this.buildRolePressureWithKingdomMemory(wave);
+
     return {
       wave,
       hasActiveLockedDoor: this.hasActiveLockedDoor(),
-      doorBlockedWithoutThief: this.state.memory.doorBlockedWithoutThief,
-      rolePressure: this.state.memory.rolePressure,
+      doorBlockedWithoutThief:
+        this.state.memory.doorBlockedWithoutThief ||
+        kingdomMemorySuggestsLockedDoor(this.state.world.kingdomMemory, wave),
+      rolePressure,
+    };
+  }
+
+  private buildMemoryWithKingdomPressure(wave: number) {
+    return {
+      ...this.state.memory,
+      rolePressure: this.buildRolePressureWithKingdomMemory(wave),
+    };
+  }
+
+  private buildRolePressureWithKingdomMemory(wave: number): Record<AdventurerRole, number> {
+    const kingdomPressure = kingdomMemoryRolePressure(this.state.world.kingdomMemory, wave);
+
+    return {
+      warrior: this.state.memory.rolePressure.warrior + (kingdomPressure.warrior ?? 0),
+      thief: this.state.memory.rolePressure.thief + (kingdomPressure.thief ?? 0),
+      mage: this.state.memory.rolePressure.mage + (kingdomPressure.mage ?? 0),
+      healer: this.state.memory.rolePressure.healer + (kingdomPressure.healer ?? 0),
     };
   }
 
@@ -1069,6 +1143,7 @@ export class DungeonSimulation {
     newVolunteerCount: number;
     veteranName: string | null;
     plannedRoles: AdventurerRole[];
+    unavailableSurvivors: SurvivorAbsenceReport[];
   } {
     const composition = this.previewExpeditionComposition(wave);
     const veteran = composition.returningProfiles[0] ?? null;
@@ -1076,6 +1151,15 @@ export class DungeonSimulation {
     return {
       returningNames: composition.returningProfiles.map((profile) => profile.name),
       heldBackNames: composition.benchedProfiles.map((profile) => profile.name),
+      unavailableSurvivors: composition.unavailableProfiles.map((profile) => ({
+        profileId: profile.id,
+        name: profile.name,
+        role: profile.role,
+        state: profile.recoveryState === 'available' ? 'resting' : profile.recoveryState,
+        label: recoveryStateLabel(profile.recoveryState),
+        remainingExpeditions: profile.recoveryExpeditionsRemaining,
+        note: profile.lastRecoveryReason ?? `${profile.name} ne repart pas tout de suite.`,
+      })),
       imposedRoleNote: composition.imposedRoleLabel,
       newVolunteerCount: Math.max(0, PARTY_SIZE - composition.returningProfiles.length),
       veteranName: veteran ? veteran.name : null,
@@ -1089,8 +1173,9 @@ export class DungeonSimulation {
   private validateDungeonLayout(
     treasures = this.state.treasures,
     bossCell = this.getBossCell(),
+    tiles = this.state.tiles,
   ): DungeonValidation {
-    const blockedCellKeys = getBlockedCellKeys(this.state.tiles);
+    const blockedCellKeys = getBlockedCellKeys(tiles);
     const activeTreasures = this.getActiveTreasures(treasures);
     const entryToTreasure = activeTreasures.length === 0
       ? hasWalkablePath(ENTRY_CELL, bossCell, blockedCellKeys)
@@ -1306,7 +1391,9 @@ export class DungeonSimulation {
         treasure,
         accessible: hasWalkablePath(ENTRY_CELL, treasure.cell, blockedCellKeys),
         distance: Math.abs(ENTRY_CELL.x - treasure.cell.x) + Math.abs(ENTRY_CELL.y - treasure.cell.y),
-        score: treasureAttraction(treasure, adventurer, profile),
+        score:
+          treasureAttraction(treasure, adventurer, profile) +
+          kingdomTreasureAttractionBonus(this.state.world.kingdomMemory, treasure, adventurer?.role ?? profile?.role ?? null, this.state.wave),
       }))
       .filter((entry) => entry.accessible)
       .sort((a, b) => (b.score - b.distance * 1.1) - (a.score - a.distance * 1.1) || specialTreasurePriority(b.treasure.kind) - specialTreasurePriority(a.treasure.kind))[0]?.treasure ?? null;
@@ -1808,6 +1895,7 @@ export class DungeonSimulation {
     if (!this.state.runtime.doorsEngagedIds.has(door.id)) {
       this.state.runtime.doorsEngagedIds.add(door.id);
       stats.doorEncounters += 1;
+      pushUniqueCell(stats.observedDoorCells, door.cell);
       recordProfileDoorEncounter(this.state.world, adventurer.profileId);
       this.state.message = `${adventurer.name} trouve une porte verrouillee. La force brute signe sa demission.`;
     }
@@ -1982,6 +2070,7 @@ export class DungeonSimulation {
       return;
     }
 
+    pushUniqueSpecialTreasure(this.state.runtime.stats.observedSpecialTreasures, treasure.kind, getTreasureCurrentCell(treasure));
     const specialKind = specialKindFromTreasureKind(treasure.kind);
 
     if (!specialKind) {
@@ -2048,6 +2137,10 @@ export class DungeonSimulation {
 
     const currentCell = { x: Math.round(adventurer.x), y: Math.round(adventurer.y) };
     const treasureCell = getTreasureCurrentCell(treasure);
+
+    if (isSpecialTreasureKind(treasure.kind)) {
+      pushUniqueSpecialTreasure(this.state.runtime.stats.observedSpecialTreasures, treasure.kind, treasureCell);
+    }
 
     if (adventurer.targetStage === 'treasure' && adventurer.targetTreasureId === treasure.id) {
       if (treasureCell && isSameCell(currentCell, treasureCell)) {
@@ -2127,7 +2220,8 @@ export class DungeonSimulation {
             (shortDetour ? 34 : 0) +
             (special ? 26 : 0) +
             treasureAttraction(treasure, adventurer, this.state.world.profiles[adventurer.profileId] ?? null) -
-            Math.max(0, pathToTreasure.length - 1) * 9,
+            Math.max(0, pathToTreasure.length - 1) * 9 +
+            kingdomTreasureAttractionBonus(this.state.world.kingdomMemory, treasure, adventurer.role, this.state.wave),
         };
       })
       .filter((entry) => entry.adjacent || entry.onPath || entry.shortDetour)
@@ -2229,6 +2323,12 @@ export class DungeonSimulation {
       adventurer.hasEnteredDungeon = true;
     }
 
+    const rememberedFact = nearbyRememberedRouteFact(this.state.world.kingdomMemory, cell, this.state.wave);
+
+    if (rememberedFact?.cell && getTileAt(this.state.tiles, rememberedFact.cell)?.type === 'rock' && this.state.runtime) {
+      pushUniqueCell(this.state.runtime.stats.observedRouteChanges, rememberedFact.cell);
+    }
+
     this.maybeEvaluateRoom(adventurer, cell);
 
     const trap = this.state.defenses.find(
@@ -2242,6 +2342,9 @@ export class DungeonSimulation {
     const definition = getDefenseDefinition(trap.type);
     const baseDamage = definition.trapDamage ?? 0;
     const damage = Math.max(1, Math.round(baseDamage * adventurer.trapDamageMultiplier));
+    if (this.state.runtime) {
+      pushUniqueCell(this.state.runtime.stats.observedTrapCells, cell);
+    }
     recordProfileTrapTriggered(this.state.world, adventurer.profileId);
     this.damageAdventurer(adventurer, damage, 'trap', trap.type, cell, trap);
     trap.cooldownRemainingMs = definition.trapCooldownMs ?? 1500;
@@ -2274,7 +2377,25 @@ export class DungeonSimulation {
     adventurer.lastEvaluatedRoomKey = roomKey;
     adventurer.behaviorState = 'evaluatingRoom';
     adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, adventurer.role === 'warrior' ? 120 : 220);
-    this.state.runtime.stats.roomEvaluations += 1;
+    const stats = this.state.runtime.stats;
+    stats.roomEvaluations += 1;
+    this.state.defenses
+      .filter((defense) => defense.alive && defense.kind === 'minion' && distance(defense.x, defense.y, cell.x, cell.y) <= 3)
+      .forEach((defense) => pushUniqueCell(stats.observedDefenderCells, defense.cell));
+    this.state.treasures
+      .filter((treasure) => treasure.status !== 'stolen' && isSpecialTreasureKind(treasure.kind))
+      .forEach((treasure) => {
+        const treasureCell = getTreasureCurrentCell(treasure);
+
+        if (treasureCell && distance(treasureCell.x, treasureCell.y, cell.x, cell.y) <= 3) {
+          pushUniqueSpecialTreasure(stats.observedSpecialTreasures, treasure.kind, treasureCell);
+        }
+      });
+
+    if (distance(this.state.boss.x, this.state.boss.y, cell.x, cell.y) <= this.state.boss.detectionRange + 0.8) {
+      stats.observedBoss = true;
+    }
+
     tryBark(adventurer, adventurer.role === 'warrior' ? 'secureArea' : 'stayTogether', this.visibleBarkCount());
   }
 
@@ -2300,6 +2421,21 @@ export class DungeonSimulation {
     const mitigatedDamage = Math.max(0, damage - reduction - armorReduction);
     const actualDamage = Math.min(adventurer.hp, mitigatedDamage);
     adventurer.hp -= actualDamage;
+
+    if (actualDamage > 0) {
+      const sourceKey = cellKey(sourceCell);
+      this.state.runtime.stats.heavyDamageCells[sourceKey] =
+        (this.state.runtime.stats.heavyDamageCells[sourceKey] ?? 0) + actualDamage;
+
+      if (source === 'trap') {
+        pushUniqueCell(this.state.runtime.stats.observedTrapCells, sourceCell);
+      } else if (source === 'minion') {
+        pushUniqueCell(this.state.runtime.stats.observedDefenderCells, sourceCell);
+      } else if (source === 'boss') {
+        this.state.runtime.stats.observedBoss = true;
+      }
+    }
+
     this.queueCombatFeedback({
       kind: 'damage',
       amount: actualDamage,
@@ -2424,6 +2560,7 @@ export class DungeonSimulation {
     this.state.boss.hp -= actualDamage;
 
     if (!engagement.firstBossAttackerId && actualDamage > 0) {
+      this.state.runtime.stats.observedBoss = true;
       engagement.firstBossAttackerId = attacker.id;
       engagement.firstBossAttackerRole = attacker.role;
       engagement.lockedForFrontline = false;
@@ -2623,6 +2760,16 @@ export class DungeonSimulation {
     const trapHighlights = statsToReportEntries(runtime.stats.trapStats, 'trap');
     const minionHighlights = statsToReportEntries(runtime.stats.minionStats, 'minion');
     const participants = this.buildParticipantReports(runtime, cleared);
+    const memorySurvivors = runtime.stats.survivors
+      .map((record) => this.state.world.profiles[record.profileId] ?? null)
+      .filter((profile): profile is AdventurerProfile => profile !== null);
+    const kingdomMemoryLines = rememberExpeditionFromSurvivors({
+      world: this.state.world,
+      stats: runtime.stats,
+      wave,
+      tiles: this.state.tiles,
+      survivors: memorySurvivors,
+    });
     const continuity = this.buildContinuityPreview(wave + 1);
     const storyLines = buildWaveStoryLines({
       cleared,
@@ -2678,8 +2825,10 @@ export class DungeonSimulation {
       ),
       participants,
       notableAdventurers: buildNotableAdventurers(runtime.stats),
+      kingdomMemoryLines,
       returningSurvivorNames: continuity.returningNames,
       heldBackSurvivorNames: continuity.heldBackNames,
+      unavailableSurvivors: continuity.unavailableSurvivors,
       imposedRoleNote: continuity.imposedRoleNote,
       newVolunteerCount: continuity.newVolunteerCount,
       veteranName: continuity.veteranName,
@@ -2723,13 +2872,14 @@ export class DungeonSimulation {
 
       if (survivor) {
         const currentProfile = this.state.world.profiles[profile.id] ?? profile;
-        const injured = currentProfile.lifeStatus === 'injured';
+        const injured = currentProfile.recoveryState === 'injured' || currentProfile.lifeStatus === 'injured';
+        const recoveryNote = currentProfile.lastRecoveryReason ? ` ${currentProfile.lastRecoveryReason}` : '';
         return {
           name: currentProfile.name,
           role: currentProfile.role,
           level: currentProfile.level,
           status: injured ? 'blesse' : cleared ? 'fuite' : 'survivant',
-          note: survivor.note,
+          note: `${survivor.note}${recoveryNote}`,
         };
       }
 
@@ -2858,6 +3008,9 @@ export class DungeonSimulation {
         : 'Aucun temoin fiable: cinq nouveaux volontaires seront requis.',
       continuity.heldBackNames.length > 0
         ? `Retenus au rapport: ${continuity.heldBackNames.join(', ')}.`
+        : null,
+      continuity.unavailableSurvivors.length > 0
+        ? `Indisponibles: ${continuity.unavailableSurvivors.map((survivor) => `${survivor.name} (${survivor.label})`).join(', ')}.`
         : null,
       continuity.imposedRoleNote,
       continuity.veteranName ? `Veteran pressenti: ${continuity.veteranName}.` : `Nouveaux volontaires: ${continuity.newVolunteerCount}.`,
@@ -3043,12 +3196,20 @@ export class DungeonSimulation {
       'la derniere expedition',
       adventurer.hp / adventurer.maxHp,
     );
+    const escapedWithSpecialTreasure = this.state.runtime.stats.specialTreasureLoots.some((line) => line.includes(adventurer.name));
     const record = recordProfileSurvival(
       this.state.world,
       adventurer.profileId,
       this.state.wave,
       this.describeSurvival(adventurer, injury !== null),
       injury,
+      {
+        hpRatio: adventurer.hp / adventurer.maxHp,
+        alliesKilled: this.state.runtime.stats.adventurersKilled,
+        groupRetreated: this.state.runtime.stats.groupRetreats > 0 || this.state.runtime.stats.panicRetreats > 0,
+        bossDamageTaken: this.state.runtime.stats.bossDamageTaken,
+        escapedWithSpecialTreasure,
+      },
     );
 
     if (record) {
@@ -3088,6 +3249,10 @@ export class DungeonSimulation {
 
     const engagement = runtime.bossEngagement;
     const bossDetected = this.isBossDetectedByParty();
+
+    if (bossDetected) {
+      runtime.stats.observedBoss = true;
+    }
 
     if (!bossDetected || runtime.partyPlan.retreating || runtime.partyPlan.groupObjective === 'escapeWithTreasure') {
       engagement.frontlineAdventurerId = null;
@@ -3654,11 +3819,12 @@ export class DungeonSimulation {
   }
 
   private getKnownTrapCells(): Set<string> {
-    return new Set(
-      this.state.defenses
+    return new Set([
+      ...this.state.defenses
         .filter((defense) => defense.alive && defense.kind === 'trap')
         .map((defense) => cellKey(defense.cell)),
-    );
+      ...knownTrapCellsFromKingdomMemory(this.state.world.kingdomMemory, this.state.wave),
+    ]);
   }
 
   private countDefensesByKind(): CountItem[] {
@@ -3735,6 +3901,13 @@ function createEmptyWaveStats(): WaveStats {
     treasureValueStolen: 0,
     goldTreasureValueStolen: 0,
     specialTreasureLoots: [],
+    observedDoorCells: [],
+    observedTrapCells: [],
+    observedDefenderCells: [],
+    observedSpecialTreasures: [],
+    observedBoss: false,
+    observedRouteChanges: [],
+    heavyDamageCells: {},
     combatFeedbackEvents: 0,
     bossEngagementLocks: 0,
     opportunisticLoots: 0,
@@ -3844,6 +4017,19 @@ function specialTreasureNameForKind(kind: DungeonTreasureKind): string {
   return specialKind ? specialTreasureLabel(specialKind) : 'un tresor special';
 }
 
+function recoveryStateLabel(state: AdventurerProfile['recoveryState']): string {
+  switch (state) {
+    case 'injured':
+      return 'Blesse';
+    case 'resting':
+      return 'Au repos';
+    case 'shaken':
+      return 'Refuse';
+    default:
+      return 'Disponible';
+  }
+}
+
 function bossEngagePriority(role: AdventurerRole): number {
   switch (role) {
     case 'warrior':
@@ -3893,6 +4079,26 @@ function bossStagingOffsets(role: AdventurerRole): Array<{ back: number; side: n
 
 function getTreasureCurrentCell(treasure: DungeonTreasure): GridCell | null {
   return treasure.status === 'dropped' && treasure.droppedCell ? treasure.droppedCell : treasure.cell;
+}
+
+function pushUniqueCell(cells: GridCell[], cell: GridCell): void {
+  if (!cells.some((existing) => isSameCell(existing, cell))) {
+    cells.push({ ...cell });
+  }
+}
+
+function pushUniqueSpecialTreasure(
+  observations: Array<{ kind: DungeonTreasureKind; cell: GridCell }>,
+  kind: DungeonTreasureKind,
+  cell: GridCell | null,
+): void {
+  if (!cell || !isSpecialTreasureKind(kind)) {
+    return;
+  }
+
+  if (!observations.some((existing) => existing.kind === kind && isSameCell(existing.cell, cell))) {
+    observations.push({ kind, cell: { ...cell } });
+  }
 }
 
 function hasSpecialDamageBonus(adventurer: AdventurerEntity): boolean {

@@ -1,9 +1,11 @@
 import { PARTY_SIZE } from '../game/constants';
 import type { AdventurerProfile, AdventurerRole, AdaptationMemory, RunWorldMemory } from '../game/types';
 import {
+  advanceUnavailableSurvivorRecoveries,
   createAdventurerProfile,
   createHeirProfile,
   getReturningSurvivorCandidates,
+  getUnavailableSurvivorReports,
   pickFallenForHeir,
   recoverAvailableProfiles,
 } from './adventurerProfiles';
@@ -21,6 +23,7 @@ export interface ExpeditionCompositionContext {
 export interface ExpeditionCompositionPlan {
   returningProfiles: AdventurerProfile[];
   benchedProfiles: AdventurerProfile[];
+  unavailableProfiles: AdventurerProfile[];
   mandatoryRoles: MandatoryRoleRequirements;
   recruitRoles: AdventurerRole[];
   imposedRoleLabel: string | null;
@@ -226,7 +229,12 @@ export function planExpeditionComposition(
   world: RunWorldMemory,
   context: ExpeditionCompositionContext,
 ): ExpeditionCompositionPlan {
+  recoverAvailableProfiles(world);
   const candidates = getReturningSurvivorCandidates(world, PARTY_SIZE);
+  const unavailableReports = getUnavailableSurvivorReports(world);
+  const unavailableProfiles = unavailableReports
+    .map((report) => world.profiles[report.profileId])
+    .filter((profile): profile is AdventurerProfile => Boolean(profile));
   const mandatoryRoles = resolveMandatoryRoles(candidates, context);
   const reservedSlots = countUnmetMandatoryRoles(candidates, mandatoryRoles);
   const maxReturning = Math.max(0, PARTY_SIZE - reservedSlots);
@@ -240,6 +248,7 @@ export function planExpeditionComposition(
   return {
     returningProfiles: retained,
     benchedProfiles: benched,
+    unavailableProfiles,
     mandatoryRoles,
     recruitRoles,
     imposedRoleLabel: buildImposedRoleLabel(mandatoryRoles),
@@ -276,6 +285,8 @@ export function selectProfilesForWave(
     world.profiles[profile.id] = profile;
     selected.push(profile);
   }
+
+  advanceUnavailableSurvivorRecoveries(world, new Set(selected.map((profile) => profile.id)));
 
   return {
     profiles: selected.slice(0, PARTY_SIZE),

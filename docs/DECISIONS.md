@@ -4,7 +4,7 @@
 |---|---|
 | **Statut** | Vivant — journal append-only, on n'édite jamais une décision passée |
 | **Propriétaire** | Game Design |
-| **Dernière mise à jour** | 2026-07-07 (D-022) |
+| **Dernière mise à jour** | 2026-07-07 (D-025) |
 | **Documents liés** | [DESIGN_PRINCIPLES.md](./DESIGN_PRINCIPLES.md) · [GAME_DESIGN_DOCUMENT.md](./GAME_DESIGN_DOCUMENT.md) |
 
 ---
@@ -26,6 +26,42 @@ Chaque décision structurante obtient une entrée, numérotée dans l'ordre chro
 **Conséquences** : impact sur le design, le code ou la production
 **Remplace / Remplacé par** : lien vers une autre entrée le cas échéant
 ```
+
+---
+
+## D-025 - Kingdom Remembers V1 apprend par temoignages, pas par omniscience
+
+**Date** : 2026-07-07
+**Statut** : Actif
+**Contexte** : D-010 pose la guerre de l'information, mais les adaptations existantes restaient surtout des compteurs tactiques internes. Apres Survivor Continuity, Special Treasures, Rebouchage et Hopital/Repos, il fallait une premiere memoire du royaume utile sans ouvrir la cartographie complete ni le Cartographe.
+**Decision** : `RunWorldMemory.kingdomMemory` stocke des faits imparfaits rapportes uniquement par les survivants officiels d'une expedition. Les faits portent un type, une cellule ou localisation approximative, une confiance, un age (`firstSeenWave`/`lastSeenWave`), une source survivante, des confirmations, un niveau de danger et un etat `stale`. Une expedition sans survivant ne donne pas de connaissance precise : elle peut seulement creer une rumeur vague de groupe disparu. Les faits fiables influencent legerement la composition et le comportement, mais ne remplacent pas les regles existantes de survivants, blessures, roles obligatoires ou portes actives.
+**Alternatives envisagees** : brancher directement l'IA sur l'etat reel du donjon (rejete : omniscient, contredit D-010) ; attendre une cartographie complete avant toute memoire (rejete : trop gros et prive les survivants de consequence mecanique) ; faire du rebouchage une mise a jour instantanee de la carte du royaume (rejete : le joueur doit pouvoir deplacer l'information, et les changements ne sont suspects qu'apres observation).
+**Consequences** : la Guilde peut recruter plus volontiers un voleur apres une porte/piege signale, preparer plus de frontliners/soigneurs apres une zone dangereuse ou le boss, attirer des roles compatibles vers les tresors speciaux connus, et traiter une ancienne route comme suspecte si une expedition la retrouve bouchee. La taverne, la chronique et la sidebar affichent seulement des rumeurs issues de ces faits. V1 reste volontairement limitee : pas de carte connue visible, pas de Cartographe, pas de memoire trans-run, pas de nouvelle classe, pas de mise a jour magique au moment ou le joueur modifie le donjon.
+**Remplace / Remplace par** : affine D-010 sans la remplacer.
+
+---
+
+## D-024 - Les survivants peuvent manquer une expedition sans quitter la continuite
+
+**Date** : 2026-07-07
+**Statut** : Actif
+**Contexte** : Survivor Continuity V1 faisait revenir automatiquement les survivants, ce qui rendait les profils trop mecaniques apres des sorties tres blessees ou traumatisantes. Il fallait ajouter une consequence lisible sans ouvrir un vrai systeme medical, un hopital gere par le joueur, ni Kingdom Remembers.
+**Decision** : chaque profil survivant porte un `recoveryState` simple : `available`, `injured`, `resting` ou `shaken`, avec `recoveryExpeditionsRemaining = 1` en V1. Un survivant tres bas en PV devient injured et saute la prochaine expedition. Un survivant moderement blesse peut etre resting. Une expedition traumatique peut rendre un non-veteran shaken/refusant. Un veteran ou un porteur de tresor special peut insister pour repartir si la blessure physique ne prime pas. Les profils indisponibles restent vivants, gardent leur identite et leurs bonus, ne satisfont pas les roles obligatoires, puis redeviennent disponibles apres l'expedition manquee.
+**Alternatives envisagees** : hopital dedie avec soins payants (rejete : trop lourd et hors V1) ; trauma probabiliste profond (rejete : peu lisible et dur a tester) ; laisser les blesses satisfaire les roles obligatoires (rejete : contredit l'indisponibilite) ; transformer un refus en mort/disparition (rejete : casserait la promesse de continuite).
+**Consequences** : `expeditionComposition` distingue maintenant indisponibilite, retour disponible et reserve tactique. La Guilde complete avec des volontaires et recrute un role obligatoire si le survivant qui le couvre est blesse. La taverne et la sidebar affichent les absents comme vivants, pas comme morts. V1 reste volontairement courte : pas de medecins, pas de soins payants, pas de blessures localisees.
+**Remplace / Remplace par** :
+
+---
+
+## D-023 - Reboucher corrige le donjon sans devenir un outil de mur libre
+
+**Date** : 2026-07-07
+**Statut** : Actif
+**Contexte** : Dungeon Structure V2 prevoyait un "Mur" mais le design valide reste "le donjon se creuse". Le joueur doit pouvoir corriger et remodeler une case deja creusee sans transformer le jeu en editeur de chateau ni rendre une expedition impossible.
+**Decision** : l'outil s'appelle `Reboucher` dans l'UI. Il coute peu (`RESEAL_TILE_COST = 2`) et ne peut viser que des cases floor/room deja creusees. Il refuse les ancres et objets critiques (entree, tresor principal ou secondaire/special, trone/boss, porte, defense, aventurier present). Avant d'appliquer, la simulation transforme temporairement la case en roche puis valide la topologie obligatoire entry -> tresor(s) actif(s) -> boss. Si la route casse, aucun or n'est retire et le message reste court.
+**Alternatives envisagees** : poser librement des murs (rejete : contredit la philosophie "creuser puis reboucher") ; supprimer automatiquement portes/pieges/tresors sur la case (rejete pour V1 : trop implicite et risquerait des pertes surprises) ; ne proteger que le tresor principal et laisser les tresors speciaux s'isoler (rejete pour l'instant : les tresors actifs sont deja des objectifs et les special treasures doivent rester compatibles).
+**Consequences** : le pathfinding reste base sur les tiles courantes via `getBlockedCellKeys`, donc une case rebouchee devient immediatement bloquante pour la prochaine expedition. Le systeme est volontairement strict sur tous les tresors actifs ; cette limite pourra etre assouplie plus tard si les objectifs optionnels deviennent explicitement sacrifiables.
+**Remplace / Remplace par** :
 
 ---
 

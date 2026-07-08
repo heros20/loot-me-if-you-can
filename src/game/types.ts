@@ -15,6 +15,7 @@ export type RoomSpecialization = 'guardRoom' | 'crypt' | 'treasureRoom' | 'thron
 
 export type ConstructionTool =
   | 'dig'
+  | 'reseal'
   | 'guardRoom'
   | 'crypt'
   | 'door'
@@ -123,6 +124,7 @@ export interface DungeonTreasure {
 }
 
 export type AdventurerAvailability = 'available' | 'onExpedition' | 'recovering';
+export type SurvivorRecoveryState = 'available' | 'injured' | 'resting' | 'shaken';
 
 export type ExpeditionOutcome = 'survived' | 'died' | 'bossDefeated';
 
@@ -218,6 +220,10 @@ export interface AdventurerProfile {
   lifeStatus: AdventurerLifeStatus;
   availability: AdventurerAvailability;
   availableNextExpedition: boolean;
+  recoveryState: SurvivorRecoveryState;
+  recoveryExpeditionsRemaining: number;
+  lastRecoveryReason: string | null;
+  lastRecoveryWave: number | null;
   traits: AdventurerTrait[];
   guildId: string;
   realmId: string;
@@ -289,6 +295,7 @@ export interface RunWorldMemory {
   survivorProfileIds: string[];
   expeditionHistory: ExpeditionRecord[];
   chronicles: ChronicleEntry[];
+  kingdomMemory: KingdomMemory;
   dungeonReputation: DungeonReputation;
   guilds: Record<string, GuildProfile>;
   realms: Record<string, RealmProfile>;
@@ -296,6 +303,41 @@ export interface RunWorldMemory {
   nextProfileNumber: number;
   rumors: TavernRumor[];
   treasuresStolen: number;
+}
+
+export type KingdomMemoryFactType =
+  | 'lockedDoorSeen'
+  | 'trapSeen'
+  | 'dangerousRoomSeen'
+  | 'treasureSeen'
+  | 'specialTreasureSeen'
+  | 'bossSeen'
+  | 'bossReached'
+  | 'defenderSeen'
+  | 'partyWipedHere'
+  | 'heavyDamageArea'
+  | 'routeBlocked'
+  | 'routeChangedSuspected';
+
+export interface KingdomMemoryFact {
+  id: string;
+  type: KingdomMemoryFactType;
+  cell: GridCell | null;
+  confidence: number;
+  firstSeenWave: number;
+  lastSeenWave: number;
+  sourceProfileId: string | null;
+  sourceName: string;
+  confirmations: number;
+  danger: number;
+  stale: boolean;
+  label: string;
+  data: Record<string, string | number | boolean | null>;
+}
+
+export interface KingdomMemory {
+  facts: KingdomMemoryFact[];
+  nextFactId: number;
 }
 
 export interface DefenseEntity {
@@ -477,6 +519,13 @@ export interface WaveStats {
   treasureValueStolen: number;
   goldTreasureValueStolen: number;
   specialTreasureLoots: string[];
+  observedDoorCells: GridCell[];
+  observedTrapCells: GridCell[];
+  observedDefenderCells: GridCell[];
+  observedSpecialTreasures: Array<{ kind: DungeonTreasureKind; cell: GridCell }>;
+  observedBoss: boolean;
+  observedRouteChanges: GridCell[];
+  heavyDamageCells: Record<string, number>;
   combatFeedbackEvents: number;
   bossEngagementLocks: number;
   opportunisticLoots: number;
@@ -558,6 +607,16 @@ export interface ExpeditionParticipantReport {
   role: AdventurerRole;
   level: number;
   status: 'mort' | 'survivant' | 'blesse' | 'fuite' | 'disparu';
+  note: string;
+}
+
+export interface SurvivorAbsenceReport {
+  profileId: string;
+  name: string;
+  role: AdventurerRole;
+  state: Exclude<SurvivorRecoveryState, 'available'> | 'tacticalReserve';
+  label: string;
+  remainingExpeditions: number;
   note: string;
 }
 
@@ -685,8 +744,10 @@ export interface WaveReport {
   chronicle: SurvivorChronicle;
   guildTavernScene: GuildTavernScene;
   notableAdventurers: string[];
+  kingdomMemoryLines: string[];
   returningSurvivorNames: string[];
   heldBackSurvivorNames: string[];
+  unavailableSurvivors: SurvivorAbsenceReport[];
   imposedRoleNote: string | null;
   newVolunteerCount: number;
   veteranName: string | null;

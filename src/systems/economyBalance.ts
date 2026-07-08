@@ -3,6 +3,7 @@ import type { BossEntity } from '../game/types';
 export const ECONOMY_BALANCE = {
   startingGold: 120,
   digCost: 8,
+  resealTileCost: 2,
   doorCost: 18,
   doorRefundRatio: 0.5,
   doorHp: 82,

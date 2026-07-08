@@ -10,6 +10,7 @@ import type {
   DungeonValidation,
   GamePhase,
   SpecialTreasureBonus,
+  SurvivorAbsenceReport,
   TreasureStatus,
   WaveReport,
 } from './types';
@@ -125,9 +126,11 @@ export interface DungeonSnapshot {
   nextWaveSize: number;
   nextExpeditionReturningNames: string[];
   nextExpeditionHeldBackNames: string[];
+  nextExpeditionUnavailableSurvivors: SurvivorAbsenceReport[];
   nextExpeditionImposedRoleNote: string | null;
   nextExpeditionNewVolunteers: number;
   nextExpeditionVeteranName: string | null;
+  kingdomMemoryRumors: string[];
   canLaunchWave: boolean;
   report: WaveReport | null;
   survivedWaves: number;

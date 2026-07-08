@@ -219,6 +219,29 @@ function buildSurvivorBeats(report: SceneSource, layout: TavernSceneLayout, ctx:
     usedIds.add(recruiterLine.id);
   }
 
+  const archivist = layout.counterActors.find((actor) => actor.id === 'archivist');
+
+  if (archivist && report.kingdomMemoryLines.length > 0) {
+    beats.push({
+      id: 'kingdom-memory-survivor',
+      actorId: archivist.id,
+      speakerName: archivist.name,
+      role: archivist.role,
+      text: `Registre royal: ${report.kingdomMemoryLines[0]}`,
+    });
+  }
+
+  if (archivist && report.unavailableSurvivors.length > 0) {
+    const absent = report.unavailableSurvivors[0];
+    beats.push({
+      id: `unavailable-${absent.profileId}`,
+      actorId: archivist.id,
+      speakerName: archivist.name,
+      role: archivist.role,
+      text: absent.note,
+    });
+  }
+
   const volunteer = layout.backgroundActors[0];
 
   if (volunteer) {
@@ -247,8 +270,6 @@ function buildSurvivorBeats(report: SceneSource, layout: TavernSceneLayout, ctx:
       usedIds.add(desperateLine.id);
     }
   }
-
-  const archivist = layout.counterActors.find((actor) => actor.id === 'archivist');
 
   if (archivist && report.specialTreasureLoots.length > 0) {
     beats.push({
@@ -319,6 +340,27 @@ function buildNoSurvivorBeats(report: SceneSource, layout: TavernSceneLayout, ct
   if (openLine) {
     beats.push(makeBeat(archivist.id, archivist.name, archivist.role, openLine, { ...ctx, speakerName: archivist.name }));
     usedIds.add(openLine.id);
+  }
+
+  if (report.kingdomMemoryLines.length > 0) {
+    beats.push({
+      id: 'kingdom-memory-empty-table',
+      actorId: archivist.id,
+      speakerName: archivist.name,
+      role: archivist.role,
+      text: `Registre royal: ${report.kingdomMemoryLines[0]}`,
+    });
+  }
+
+  if (report.unavailableSurvivors.length > 0) {
+    const absent = report.unavailableSurvivors[0];
+    beats.push({
+      id: `unavailable-${absent.profileId}`,
+      actorId: archivist.id,
+      speakerName: archivist.name,
+      role: archivist.role,
+      text: absent.note,
+    });
   }
 
   const waitLine = pickDialogueLine(
@@ -467,6 +509,8 @@ function buildSummaryFacts(report: SceneSource): GuildTavernSummaryFact[] {
     { label: 'Tresor', value: report.treasureStolen ? 'Vole' : 'Protege', tone: report.treasureStolen ? 'bad' : 'good' },
     { label: 'Boss', value: report.cleared ? 'Toujours debout' : 'Vaincu', tone: report.cleared ? 'good' : 'bad' },
     { label: 'Or perdu', value: report.treasurePenaltyGold > 0 ? `${report.treasurePenaltyGold} or` : 'Aucun', tone: report.treasurePenaltyGold > 0 ? 'bad' : 'neutral' },
+    { label: 'Absents', value: report.unavailableSurvivors.length > 0 ? String(report.unavailableSurvivors.length) : 'Aucun', tone: report.unavailableSurvivors.length > 0 ? 'warning' : 'neutral' },
+    { label: 'Rumeurs', value: report.kingdomMemoryLines.length > 0 ? String(report.kingdomMemoryLines.length) : 'Aucune', tone: report.kingdomMemoryLines.length > 0 ? 'warning' : 'neutral' },
     { label: 'Prochaine expedition', value: nextExpeditionValue, tone: 'neutral' },
   ];
 }

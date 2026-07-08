@@ -7,9 +7,12 @@ import type {
   ExpeditionRecord,
   RunWorldMemory,
   DefenseType,
+  SurvivorAbsenceReport,
+  SurvivorRecoveryState,
 } from '../game/types';
 import { ADVENTURER_DEFINITIONS } from '../entities/definitions';
 import { PARTY_SIZE } from '../game/constants';
+import { createInitialKingdomMemory } from './kingdomMemorySystem';
 
 const GUILD_ID = 'guild-ashen-contract';
 const REALM_ID = 'realm-candlemark';
@@ -32,6 +35,25 @@ const TRAIT_CYCLE: AdventurerTrait[] = [
   'famous',
 ];
 
+export const SURVIVOR_RECOVERY_BALANCE = {
+  lowHpInjuryThreshold: 0.28,
+  moderateHpRestThreshold: 0.55,
+  highCasualtyShakenDeaths: 2,
+  violentBossDamageThreshold: 90,
+  injuredRecoveryExpeditions: 1,
+  restingRecoveryExpeditions: 1,
+  shakenRecoveryExpeditions: 1,
+  veteranSurvivedExpeditions: 2,
+} as const;
+
+export interface SurvivorRecoveryContext {
+  hpRatio: number;
+  alliesKilled: number;
+  groupRetreated: boolean;
+  bossDamageTaken: number;
+  escapedWithSpecialTreasure: boolean;
+}
+
 export function createInitialWorldMemory(): RunWorldMemory {
   return {
     profiles: {},
@@ -40,6 +62,7 @@ export function createInitialWorldMemory(): RunWorldMemory {
     survivorProfileIds: [],
     expeditionHistory: [],
     chronicles: [],
+    kingdomMemory: createInitialKingdomMemory(),
     dungeonReputation: {
       value: 0,
       title: 'Donjon oublie',
@@ -73,16 +96,39 @@ export function advanceWorldDay(world: RunWorldMemory, days: number): number {
 
 export function recoverAvailableProfiles(world: RunWorldMemory): void {
   Object.values(world.profiles).forEach((profile) => {
-    if (
-      profile.availability === 'recovering' &&
-      profile.lifeStatus === 'injured' &&
-      profile.returnAvailableDay <= world.currentDay
-    ) {
-      profile.availability = 'available';
-      profile.lifeStatus = 'alive';
-      profile.availableNextExpedition = true;
+    if (!profile.recoveryState) {
+      profile.recoveryState = profile.lifeStatus === 'injured' ? 'injured' : 'available';
+      profile.recoveryExpeditionsRemaining = profile.lifeStatus === 'injured' ? 1 : 0;
+      profile.lastRecoveryReason = null;
+      profile.lastRecoveryWave = null;
+    }
+
+    if (profile.recoveryState !== 'available' && profile.recoveryExpeditionsRemaining <= 0) {
+      markProfileAvailable(profile);
     }
   });
+}
+
+export function advanceUnavailableSurvivorRecoveries(world: RunWorldMemory, selectedProfileIds: Set<string>): void {
+  world.survivorProfileIds
+    .map((id) => world.profiles[id])
+    .filter((profile): profile is AdventurerProfile => Boolean(profile))
+    .forEach((profile) => {
+      if (
+        selectedProfileIds.has(profile.id) ||
+        profile.lifeStatus === 'dead' ||
+        profile.lifeStatus === 'retired' ||
+        profile.recoveryState === 'available'
+      ) {
+        return;
+      }
+
+      profile.recoveryExpeditionsRemaining = Math.max(0, profile.recoveryExpeditionsRemaining - 1);
+
+      if (profile.recoveryExpeditionsRemaining <= 0) {
+        markProfileAvailable(profile);
+      }
+    });
 }
 
 export function releaseUndeployedExpedition(world: RunWorldMemory, profileId: string): void {
@@ -108,7 +154,7 @@ export function activateProfileForExpedition(
     return null;
   }
 
-  if (!profile.availableNextExpedition || (profile.availability === 'recovering' && profile.returnAvailableDay > world.currentDay)) {
+  if (!profile.availableNextExpedition || profile.availability === 'recovering' || profile.recoveryState !== 'available') {
     return null;
   }
 
@@ -157,6 +203,7 @@ export function recordProfileSurvival(
   wave: number,
   note: string,
   injury: AdventurerInjury | null = null,
+  recoveryContext: SurvivorRecoveryContext | null = null,
 ): ExpeditionRecord | null {
   const profile = world.profiles[profileId];
 
@@ -169,10 +216,10 @@ export function recordProfileSurvival(
 
   if (injury) {
     profile.injuries.push(injury);
-    profile.lifeStatus = 'injured';
-    profile.availability = 'available';
-    profile.returnAvailableDay = world.currentDay;
   }
+
+  const recovery = determineSurvivorRecovery(profile, injury, recoveryContext);
+  applySurvivorRecovery(profile, recovery.state, wave, recovery.reason);
 
   return completeProfileExpedition(world, profile, wave, 'survived', note);
 }
@@ -187,6 +234,7 @@ export function recordBossDefeatSurvivors(world: RunWorldMemory, profileIds: str
       }
 
       profile.reputation += 3;
+      applySurvivorRecovery(profile, 'available', wave, `${profile.name} insiste pour rester dans les contrats apres la chute du boss.`);
       profile.legacyHooks.push({
         type: 'lostItem',
         description: `${profile.name} jure avoir laisse quelque chose d'important dans le donjon.`,
@@ -295,6 +343,10 @@ export function createAdventurerProfile(
     lifeStatus: 'alive',
     availability: 'available',
     availableNextExpedition: true,
+    recoveryState: 'available',
+    recoveryExpeditionsRemaining: 0,
+    lastRecoveryReason: null,
+    lastRecoveryWave: null,
     traits,
     guildId: GUILD_ID,
     realmId: REALM_ID,
@@ -372,6 +424,10 @@ export function createHeirProfile(
     lifeStatus: 'alive',
     availability: 'available',
     availableNextExpedition: true,
+    recoveryState: 'available',
+    recoveryExpeditionsRemaining: 0,
+    lastRecoveryReason: null,
+    lastRecoveryWave: null,
     traits,
     guildId: fallen.guildId,
     realmId: fallen.realmId,
@@ -508,6 +564,8 @@ export function getReturningSurvivorCandidates(
   world: RunWorldMemory,
   limit = PARTY_SIZE,
 ): AdventurerProfile[] {
+  recoverAvailableProfiles(world);
+
   return (
     world.survivorProfileIds
       .map((id) => world.profiles[id])
@@ -515,6 +573,7 @@ export function getReturningSurvivorCandidates(
       .filter((profile) =>
         profile.availableNextExpedition &&
         profile.availability === 'available' &&
+        profile.recoveryState === 'available' &&
         profile.lifeStatus !== 'dead' &&
         profile.lifeStatus !== 'retired',
       )
@@ -526,6 +585,28 @@ export function getReturningSurvivorCandidates(
       )
       .slice(0, limit)
   );
+}
+
+export function getUnavailableSurvivorReports(world: RunWorldMemory): SurvivorAbsenceReport[] {
+  recoverAvailableProfiles(world);
+
+  return world.survivorProfileIds
+    .map((id) => world.profiles[id])
+    .filter((profile): profile is AdventurerProfile => Boolean(profile))
+    .filter((profile) =>
+      profile.lifeStatus !== 'dead' &&
+      profile.lifeStatus !== 'retired' &&
+      profile.recoveryState !== 'available',
+    )
+    .map((profile) => ({
+      profileId: profile.id,
+      name: profile.name,
+      role: profile.role,
+      state: profile.recoveryState as Exclude<SurvivorRecoveryState, 'available'>,
+      label: recoveryLabel(profile.recoveryState),
+      remainingExpeditions: profile.recoveryExpeditionsRemaining,
+      note: profile.lastRecoveryReason ?? recoveryFallbackNote(profile),
+    }));
 }
 
 function createUniqueFirstName(
@@ -584,14 +665,24 @@ function completeProfileExpedition(
     profile.lifeStatus = 'dead';
     profile.availability = 'available';
     profile.availableNextExpedition = false;
+    profile.recoveryState = 'available';
+    profile.recoveryExpeditionsRemaining = 0;
     profile.defeats += 1;
   } else {
-    if (profile.lifeStatus !== 'injured') {
+    if (profile.recoveryState === 'available') {
       profile.lifeStatus = 'alive';
       profile.availability = 'available';
+      profile.availableNextExpedition = true;
+    } else if (profile.recoveryState === 'injured') {
+      profile.lifeStatus = 'injured';
+      profile.availability = 'recovering';
+      profile.availableNextExpedition = false;
+    } else {
+      profile.lifeStatus = 'alive';
+      profile.availability = 'recovering';
+      profile.availableNextExpedition = false;
     }
 
-    profile.availableNextExpedition = true;
     profile.survivedExpeditions += 1;
     profile.victories += outcome === 'bossDefeated' ? 1 : 0;
     profile.experience += outcome === 'bossDefeated' ? 5 : 2;
@@ -615,6 +706,143 @@ function completeProfileExpedition(
   profile.expeditionHistory.push(record);
   world.expeditionHistory.push(record);
   return record;
+}
+
+function determineSurvivorRecovery(
+  profile: AdventurerProfile,
+  injury: AdventurerInjury | null,
+  context: SurvivorRecoveryContext | null,
+): { state: SurvivorRecoveryState; reason: string | null } {
+  if (!context) {
+    return injury
+      ? {
+        state: 'injured',
+        reason: `${profile.name} restera a l'infirmerie pour la prochaine expedition.`,
+      }
+      : { state: 'available', reason: null };
+  }
+
+  const veteran = profile.survivedExpeditions >= SURVIVOR_RECOVERY_BALANCE.veteranSurvivedExpeditions || profile.level >= 3;
+
+  if (context.hpRatio <= SURVIVOR_RECOVERY_BALANCE.lowHpInjuryThreshold || injury?.severity === 'serious') {
+    return {
+      state: 'injured',
+      reason: `${profile.name} tient a peine debout. Une expedition de repos medical s'impose.`,
+    };
+  }
+
+  if (context.hpRatio <= SURVIVOR_RECOVERY_BALANCE.moderateHpRestThreshold || injury) {
+    if (veteran || context.escapedWithSpecialTreasure) {
+      return {
+        state: 'available',
+        reason: `${profile.name} insiste pour repartir malgre les bandages.`,
+      };
+    }
+
+    return {
+      state: 'resting',
+      reason: `${profile.name} survivra mieux en ratant le prochain contrat.`,
+    };
+  }
+
+  const traumatic =
+    context.alliesKilled >= SURVIVOR_RECOVERY_BALANCE.highCasualtyShakenDeaths ||
+    context.groupRetreated ||
+    context.bossDamageTaken >= SURVIVOR_RECOVERY_BALANCE.violentBossDamageThreshold;
+
+  if (traumatic && !veteran && !context.escapedWithSpecialTreasure) {
+    return {
+      state: 'shaken',
+      reason: `${profile.name} refuse de redescendre tout de suite apres ce qu'il a vu.`,
+    };
+  }
+
+  if (traumatic && veteran) {
+    return {
+      state: 'available',
+      reason: `${profile.name} a vu pire et insiste pour repartir.`,
+    };
+  }
+
+  return { state: 'available', reason: null };
+}
+
+function applySurvivorRecovery(
+  profile: AdventurerProfile,
+  state: SurvivorRecoveryState,
+  wave: number,
+  reason: string | null,
+): void {
+  profile.recoveryState = state;
+  profile.lastRecoveryReason = reason;
+  profile.lastRecoveryWave = reason ? wave : null;
+
+  switch (state) {
+    case 'injured':
+      profile.lifeStatus = 'injured';
+      profile.availability = 'recovering';
+      profile.availableNextExpedition = false;
+      profile.recoveryExpeditionsRemaining = SURVIVOR_RECOVERY_BALANCE.injuredRecoveryExpeditions;
+      profile.trauma += 1;
+      break;
+    case 'resting':
+      profile.lifeStatus = 'alive';
+      profile.availability = 'recovering';
+      profile.availableNextExpedition = false;
+      profile.recoveryExpeditionsRemaining = SURVIVOR_RECOVERY_BALANCE.restingRecoveryExpeditions;
+      break;
+    case 'shaken':
+      profile.lifeStatus = 'alive';
+      profile.availability = 'recovering';
+      profile.availableNextExpedition = false;
+      profile.recoveryExpeditionsRemaining = SURVIVOR_RECOVERY_BALANCE.shakenRecoveryExpeditions;
+      profile.trauma += 1;
+      break;
+    case 'available':
+    default:
+      profile.lifeStatus = 'alive';
+      profile.availability = 'available';
+      profile.availableNextExpedition = true;
+      profile.recoveryExpeditionsRemaining = 0;
+      break;
+  }
+}
+
+function markProfileAvailable(profile: AdventurerProfile): void {
+  if (profile.lifeStatus !== 'dead' && profile.lifeStatus !== 'retired') {
+    profile.lifeStatus = 'alive';
+    profile.availability = 'available';
+    profile.availableNextExpedition = true;
+  }
+
+  profile.recoveryState = 'available';
+  profile.recoveryExpeditionsRemaining = 0;
+}
+
+function recoveryLabel(state: SurvivorRecoveryState): string {
+  switch (state) {
+    case 'injured':
+      return 'Blesse';
+    case 'resting':
+      return 'Au repos';
+    case 'shaken':
+      return 'Refuse';
+    default:
+      return 'Disponible';
+  }
+}
+
+function recoveryFallbackNote(profile: AdventurerProfile): string {
+  switch (profile.recoveryState) {
+    case 'injured':
+      return `${profile.name} reste a l'infirmerie.`;
+    case 'resting':
+      return `${profile.name} reprend son souffle pour une expedition.`;
+    case 'shaken':
+      return `${profile.name} refuse de repartir tout de suite.`;
+    default:
+      return `${profile.name} est disponible.`;
+  }
 }
 
 function reputationTitle(value: number): string {

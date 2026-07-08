@@ -265,7 +265,7 @@ export class GameDomUi {
     const traps = snapshot.availableDefenses.filter((item) => item.kind === 'trap');
     const minions = snapshot.availableDefenses.filter((item) => item.kind === 'minion');
     const defensesActive = snapshot.defensesByKind.reduce((total, item) => total + item.count, 0);
-    const journalCount = snapshot.recentRumors.length + snapshot.recentJournal.length + snapshot.recentChronicles.length
+    const journalCount = snapshot.recentRumors.length + snapshot.kingdomMemoryRumors.length + snapshot.recentJournal.length + snapshot.recentChronicles.length
       + (snapshot.report ? 1 : 0);
     const roomsOpen = snapshot.selectedConstructionTool === 'guardRoom' || snapshot.selectedConstructionTool === 'crypt';
     const objectivesOpen = objectiveTools.some((item) => item.type === snapshot.selectedConstructionTool);
@@ -279,14 +279,6 @@ export class GameDomUi {
 
       <div class="primary-actions">
         ${constructionTools.map((item) => this.renderToolCard(item, snapshot)).join('')}
-      </div>
-
-      <div class="primary-actions primary-actions--soon">
-        <button class="tool-card tool-card--soon" type="button" disabled
-          title="Bientot disponible : reboucher ou rediriger un couloir pour pas cher.">
-          <strong>Mur</strong>
-          <span class="tool-card__cost">Bientot</span>
-        </button>
       </div>
 
       ${this.renderSelectedToolDetail(snapshot)}
@@ -436,7 +428,10 @@ export class GameDomUi {
       const imposed = snapshot.nextExpeditionImposedRoleNote
         ? ` &middot; ${escapeHtml(snapshot.nextExpeditionImposedRoleNote)}`
         : '';
-      return `<p class="side-panel__meta side-panel__meta--continuity">Revenants : aucun &middot; Nouveaux volontaires : ${snapshot.nextExpeditionNewVolunteers}${imposed}</p>`;
+      const unavailable = snapshot.nextExpeditionUnavailableSurvivors.length > 0
+        ? ` &middot; Absents : ${escapeHtml(snapshot.nextExpeditionUnavailableSurvivors.map((survivor) => `${survivor.name} (${survivor.label})`).join(', '))}`
+        : '';
+      return `<p class="side-panel__meta side-panel__meta--continuity">Revenants : aucun &middot; Nouveaux volontaires : ${snapshot.nextExpeditionNewVolunteers}${unavailable}${imposed}</p>`;
     }
 
     const names = returning.slice(0, 3).join(', ');
@@ -445,6 +440,9 @@ export class GameDomUi {
     const heldBack = snapshot.nextExpeditionHeldBackNames.length > 0
       ? ` &middot; Retenus au rapport : ${escapeHtml(snapshot.nextExpeditionHeldBackNames.join(', '))}`
       : '';
+    const unavailable = snapshot.nextExpeditionUnavailableSurvivors.length > 0
+      ? ` &middot; Absents : ${escapeHtml(snapshot.nextExpeditionUnavailableSurvivors.map((survivor) => `${survivor.name} (${survivor.label})`).join(', '))}`
+      : '';
     const imposed = snapshot.nextExpeditionImposedRoleNote
       ? ` &middot; ${escapeHtml(snapshot.nextExpeditionImposedRoleNote)}`
       : '';
@@ -452,7 +450,7 @@ export class GameDomUi {
     return `
       <p class="side-panel__meta side-panel__meta--continuity">
         Revenants : ${escapeHtml(names)}${suffix}
-        &middot; Nouveaux volontaires : ${snapshot.nextExpeditionNewVolunteers}${veteran}${heldBack}${imposed}
+        &middot; Nouveaux volontaires : ${snapshot.nextExpeditionNewVolunteers}${veteran}${heldBack}${unavailable}${imposed}
       </p>
     `;
   }
@@ -509,6 +507,7 @@ export class GameDomUi {
     }
 
     snapshot.recentRumors.slice(-2).forEach((text) => entries.push({ tag: 'Rumeur', text }));
+    snapshot.kingdomMemoryRumors.slice(0, 3).forEach((text) => entries.push({ tag: 'Guilde', text }));
     snapshot.recentJournal.slice(-3).forEach((text) => entries.push({ tag: 'Journal', text }));
     snapshot.recentChronicles.slice(-3).forEach((text) => entries.push({ tag: 'Chronique', text }));
 
@@ -891,7 +890,7 @@ function toneIcon(tone: MessageTone): string {
 }
 
 const ERROR_MESSAGE_HINTS = ['pas assez', 'insuffisant', 'refuse', 'impossible', 'zone de surete', 'aucune porte', 'aucun outil', 'aucune defense'];
-const SUCCESS_MESSAGE_HINTS = ['recupere', 'demonte', 'deplace', 'depose'];
+const SUCCESS_MESSAGE_HINTS = ['recupere', 'demonte', 'deplace', 'depose', 'rebouchee'];
 
 function classifyMessageTone(message: string): MessageTone {
   const lower = message.toLowerCase();
@@ -938,6 +937,8 @@ function placementHintFor(type: ConstructionTool): string {
   switch (type) {
     case 'dig':
       return 'Placement : case de roche adjacente a une zone deja creusee.';
+    case 'reseal':
+      return 'Placement : sol ou salle deja creusee, sans porte, defense, tresor, boss ni chemin obligatoire coupe.';
     case 'door':
       return 'Placement : couloir creuse, sans piege ni monstre sur la case.';
     case 'removeDoor':

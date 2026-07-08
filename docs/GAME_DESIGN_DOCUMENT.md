@@ -309,7 +309,7 @@ rolePressure       : { rôle → pression }, pousse vers plus/moins de tel rôle
 
 Ces valeurs modifient directement le **pathfinding** (une case qui a déjà tué coûte plus cher à traverser, avec un multiplicateur plus fort pour les voleurs) et la **composition des futures escouades**.
 
-**`RunWorldMemory`** (mémoire narrative persistante) : profils d'aventuriers individuels, morts/survies enregistrées, chroniques, réputation, guilde et royaume associés.
+**`RunWorldMemory`** (mémoire narrative persistante) : profils d'aventuriers individuels, morts/survies enregistrées, chroniques, réputation, guilde et royaume associés, plus `kingdomMemory` (faits imparfaits rapportés par survivants).
 
 **Déclencheurs d'adaptation post-expédition** (`applyAdaptation`) :
 
@@ -325,7 +325,7 @@ Ces valeurs modifient directement le **pathfinding** (une case qui a déjà tué
 
 ⚠️ **Important** — Cette mémoire est **entièrement réinitialisée** à chaque nouvelle partie (`startNewGame()` appelle `createInitialWorldMemory()`). Le royaume apprend *à l'intérieur* d'une partie continue, mais pas encore *entre* deux parties distinctes après une Defeat. Voir [§18 Royaume](#18-royaume-) pour la cible d'une mémoire trans-parties.
 
-Cette mémoire tactique est aujourd'hui alimentée par une observation directe et complète de la simulation — elle ne simule pas encore la guerre de l'information décrite par [DECISIONS.md](./DECISIONS.md) D-010 (le royaume connaît tout ce qui s'est passé, pas seulement ce que des survivants auraient pu rapporter). Voir [§21](#21-exploration-des-aventuriers-) à [§24](#24-cartographe-) pour la cible d'une mémoire construite à partir d'informations imparfaites.
+Kingdom Remembers V1 ajoute une première mémoire imparfaite (`kingdomMemory`) alimentée uniquement par les survivants officiels : portes, pièges, zones dangereuses, défenseurs, trésors spéciaux, boss et routes suspectes y gagnent une confiance, un âge, une source et un état `stale`. Une expédition sans survivant ne donne pas de savoir précis. Cette V1 n'est pas encore une cartographie complète : elle ne montre pas de carte connue, n'ajoute pas de Cartographe et reste réinitialisée à chaque nouvelle partie.
 
 ---
 
