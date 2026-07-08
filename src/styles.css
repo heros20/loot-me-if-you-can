@@ -399,6 +399,41 @@ body.tavern-active .side-panel {
   font-weight: 900;
 }
 
+.floor-selector {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.floor-selector__button {
+  min-height: 32px;
+  border: 1px solid rgba(244, 234, 210, 0.16);
+  border-radius: 8px;
+  padding: 6px 8px;
+  color: #d8ccb0;
+  background: rgba(244, 234, 210, 0.045);
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 800;
+  text-align: center;
+}
+
+.floor-selector__button:hover:not(:disabled),
+.floor-selector__button.is-selected {
+  border-color: rgba(225, 179, 90, 0.72);
+  color: #fff4d8;
+  background: rgba(225, 179, 90, 0.14);
+}
+
+.floor-selector__button.has-expedition {
+  box-shadow: inset 0 -2px 0 #79c7a1;
+}
+
+.floor-selector__button:disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+
 .phase-pill {
   border: 1px solid rgba(244, 234, 210, 0.22);
   border-radius: 999px;
@@ -1309,6 +1344,11 @@ body.tavern-active .side-panel {
 .tavern-actor--healer .tavern-actor__avatar {
   background: rgba(121, 199, 161, 0.28);
   color: #bdf0d3;
+}
+
+.tavern-actor--cartographer .tavern-actor__avatar {
+  background: rgba(214, 177, 95, 0.28);
+  color: #f0d68a;
 }
 
 .tavern-actor--guild .tavern-actor__avatar,

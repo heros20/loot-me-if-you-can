@@ -4,10 +4,13 @@ export type BarkKind =
   | 'doorThief'
   | 'doorBlocked'
   | 'doorNoThief'
+  | 'doorNoLockpicks'
   | 'doorOpened'
   | 'trapSeen'
   | 'trapThief'
   | 'trapThiefOverwhelmed'
+  | 'roomLockTriggered'
+  | 'roomLockCleared'
   | 'treasureEscape'
   | 'treasureChallenge'
   | 'protectCarrier'
@@ -25,6 +28,12 @@ export type BarkKind =
   | 'bossPrepare'
   | 'backlineHold'
   | 'secureArea'
+  | 'mapping'
+  | 'mapTrap'
+  | 'mapBoss'
+  | 'mapChanged'
+  | 'remainsSeen'
+  | 'relicRecognized'
   | 'returningSurvivor'
   | 'bossAbility'
   | 'warriorTaunt'
@@ -33,13 +42,16 @@ export type BarkKind =
   | 'mageIce';
 
 const BARKS: Record<BarkKind, string[]> = {
-  doorThief: ['Laissez-moi faire.', 'Cette serrure ne tiendra pas longtemps.', "Je m'en occupe."],
+  doorThief: ['Je crochete cette porte.', 'Cette serrure ne tiendra pas longtemps.', "Je m'en occupe."],
   doorBlocked: ['Laissez passer le voleur.', 'La serrure nous bloque.'],
   doorNoThief: ["On n'a personne pour ouvrir ca.", 'Sans voleur, cette porte nous arrete net.', "On reviendra avec quelqu'un capable de l'ouvrir."],
-  doorOpened: ['Ouverte.', 'Passage libre.'],
+  doorNoLockpicks: ['Plus de crochets.', 'Deux portes, pas trois.', "Je n'en ouvrirai pas une troisieme."],
+  doorOpened: ["C'est ouvert.", 'Passage libre.'],
   trapSeen: ['Attendez... le sol est bizarre.', 'Ne marchez pas la-dessus !'],
-  trapThief: ['Je vois le mecanisme.', 'Pas si vite, je peux l affaiblir.', 'Celui-la, je le vois.'],
+  trapThief: ['Piege desamorce.', 'Celui-la ne sautera plus.', "J'ai neutralise le mecanisme."],
   trapThiefOverwhelmed: ['Trop de mecanismes, je ne pourrai pas tout neutraliser.', 'Plus le temps de desamorcer !'],
+  roomLockTriggered: ['Les issues se verrouillent !', 'La salle se ferme !'],
+  roomLockCleared: ['Le verrou cede.', 'La salle se rouvre.'],
   treasureEscape: ["On a le tresor, sortons d'ici !", 'Protegez le porteur !'],
   treasureChallenge: ['Non, le boss est affaibli, on termine ca !', 'On ne s eparpille pas !'],
   protectCarrier: ['Protegez le porteur !', 'Couvrez notre retraite !'],
@@ -57,6 +69,12 @@ const BARKS: Record<BarkKind, string[]> = {
   bossPrepare: ['Le boss... preparez-vous.', 'Derriere moi.', 'On se place.'],
   backlineHold: ['Je reste derriere.', 'Restez devant moi.', 'Je garde la distance.'],
   secureArea: ["On securise d'abord.", 'Pas de loot avant la ligne.', 'Nettoyez la salle.'],
+  mapping: ['Je note ce passage.', 'Laissez-moi relever la salle.', 'Cette route merite une marge.'],
+  mapTrap: ['Ce piege sera sur la carte.', 'Dalle dangereuse, reperee.'],
+  mapBoss: ["J'ai vu le boss. Il faut rentrer avec ca.", 'Le trone est confirme.'],
+  mapChanged: ['La salle ne correspond pas aux recits.', 'Le passage a change.'],
+  remainsSeen: ["C'est l'un des notres...", 'Ne regardez pas trop longtemps.', 'Le donjon garde ses morts.'],
+  relicRecognized: ['Je reconnais cet ecusson.', "Cette relique... je l'ai deja vue.", 'Un nom connu est tombe ici.'],
   returningSurvivor: ['Je connais ce couloir.', 'Restez pres de moi.', "J'ai deja survecu a ce trou."],
   bossAbility: ['Il prepare quelque chose !', 'Le maitre du donjon bouge enfin.'],
   warriorTaunt: ['Derriere moi !', 'Je les retiens !', 'Touchez-moi plutot !'],
@@ -69,6 +87,7 @@ const GLOBAL_BARK_COOLDOWN_MS = 9000;
 const MAX_VISIBLE_BARKS = 2;
 const BARK_PRIORITY: Partial<Record<BarkKind, number>> = {
   doorNoThief: 3,
+  doorNoLockpicks: 3,
   doorOpened: 3,
   treasureTaken: 3,
   opportunisticLoot: 2,
@@ -76,6 +95,12 @@ const BARK_PRIORITY: Partial<Record<BarkKind, number>> = {
   bossPrepare: 3,
   backlineHold: 2,
   secureArea: 2,
+  mapping: 2,
+  mapTrap: 3,
+  mapBoss: 3,
+  mapChanged: 3,
+  remainsSeen: 2,
+  relicRecognized: 3,
   treasureEscape: 3,
   treasureChallenge: 3,
   returningSurvivor: 2,
@@ -89,6 +114,8 @@ const BARK_PRIORITY: Partial<Record<BarkKind, number>> = {
   healerGroupHeal: 3,
   trapThiefOverwhelmed: 3,
   trapThief: 2,
+  roomLockTriggered: 3,
+  roomLockCleared: 3,
   warriorTaunt: 2,
 };
 const phraseCooldownMs = new Map<string, number>();

@@ -8,11 +8,253 @@ import type {
   KingdomMemory,
   KingdomMemoryFact,
   KingdomMemoryFactType,
+  KingdomMemoryObservation,
+  KingdomMemoryPrecision,
+  LegacyKingdomMemoryFact,
   RunWorldMemory,
   WaveStats,
 } from '../game/types';
 import { getTileAt } from '../game/dungeonTiles';
 import { isSpecialTreasureKind, specialKindFromTreasureKind, specialTreasureLabel } from './specialTreasuresSystem';
+
+export const CARTOGRAPHER_CONFIDENCE_BOOST = 0.22;
+export const CARTOGRAPHER_OBSERVATION_RADIUS = 4.0;
+export const BASE_OBSERVATION_RADIUS = 2.35;
+export const CARTOGRAPHER_STALE_RESOLVE_BOOST = 0.12;
+export const CARTOGRAPHER_SPECIAL_TREASURE_REPORT_BOOST = 0.08;
+export const CARTOGRAPHER_TRAP_REPORT_BOOST = 0.07;
+export const CARTOGRAPHER_ZONE_REPORT_BOOST = 0.08;
+
+const STALE_AFTER_WAVES = 3;
+
+export interface KingdomMemoryCommitResult {
+  committedObservations: number;
+  cartographerReports: number;
+  lostCartographerReports: number;
+  cartographerNames: string[];
+  lostCartographerNames: string[];
+  improvedFacts: KingdomMemoryFact[];
+}
+
+export function ageKingdomMemory(world: RunWorldMemory, wave: number): void {
+  world.kingdomFacts.forEach((fact) => {
+    fact.age = Math.max(0, wave - fact.lastSeenWave);
+    fact.stale = fact.age >= STALE_AFTER_WAVES;
+
+    if (fact.stale) {
+      fact.confidence = clamp(fact.confidence - 0.02, 0.12, 0.98);
+    }
+  });
+}
+
+export function commitSurvivorObservations(
+  world: RunWorldMemory,
+  observations: KingdomMemoryObservation[],
+  survivorProfileIds: string[],
+  wave: number,
+): KingdomMemoryCommitResult {
+  ageKingdomMemory(world, wave);
+
+  const survivorIds = new Set(survivorProfileIds);
+  const lostCartographerNames = new Set<string>();
+  const cartographerNames = new Set<string>();
+  const improvedFacts: KingdomMemoryFact[] = [];
+  let committedObservations = 0;
+  let cartographerReports = 0;
+
+  observations.forEach((observation) => {
+    const survived = survivorIds.has(observation.observerProfileId);
+    const fromCartographer = observation.observerRole === 'cartographer';
+
+    if (!survived) {
+      if (fromCartographer) {
+        lostCartographerNames.add(observation.observerName);
+      }
+
+      return;
+    }
+
+    const fact = upsertFact(world, observation, wave);
+    const boost = confidenceBoostFor(observation, fact.stale);
+    const nextConfidence = clamp(observation.confidence + boost, 0.1, fromCartographer ? 0.94 : 0.78);
+    const confirmationBoost = fromCartographer ? 0.18 : 0.08;
+
+    fact.confidence = clamp(Math.max(fact.confidence, nextConfidence) + confirmationBoost, 0.1, fromCartographer ? 0.98 : 0.86);
+    fact.confirmations += fromCartographer ? 2 : 1;
+    fact.lastSeenWave = wave;
+    fact.age = 0;
+    fact.stale = false;
+    fact.sourceSurvivorProfileId = observation.observerProfileId;
+    fact.sourceRole = observation.observerRole;
+    fact.precision = bestPrecision(fact.precision, fromCartographer ? upgradePrecision(observation.precision) : observation.precision);
+    fact.confirmedByCartographer ||= fromCartographer;
+
+    committedObservations += 1;
+    improvedFacts.push({ ...fact, cell: fact.cell ? { ...fact.cell } : null });
+
+    if (fromCartographer) {
+      cartographerReports += 1;
+      cartographerNames.add(observation.observerName);
+    }
+  });
+
+  world.lostCartographerReports += lostCartographerNames.size;
+
+  return {
+    committedObservations,
+    cartographerReports,
+    lostCartographerReports: lostCartographerNames.size,
+    cartographerNames: [...cartographerNames],
+    lostCartographerNames: [...lostCartographerNames],
+    improvedFacts,
+  };
+}
+
+export function computeCartographerRecruitmentPressure(world: RunWorldMemory): number {
+  const facts = world.kingdomFacts;
+
+  if (facts.length === 0) {
+    return 0.2;
+  }
+
+  const staleCount = facts.filter((fact) => fact.stale).length;
+  const lowConfidenceCount = facts.filter((fact) => fact.confidence < 0.48).length;
+  const uncertainSpecialCount = facts.filter(
+    (fact) =>
+      (fact.kind === 'specialTreasureSeen' ||
+        fact.kind === 'trapSeen' ||
+        fact.kind === 'bossSeen' ||
+        fact.kind === 'guardianSeen' ||
+        fact.kind === 'antechamberSeen' ||
+        fact.kind === 'bossApproachKnown' ||
+        fact.kind === 'roomLockTrapSeen' ||
+        fact.kind === 'dangerousRoomSeen') &&
+      fact.confidence < 0.62,
+  ).length;
+  const routeConcernCount = facts.filter(
+    (fact) => (fact.kind === 'routeBlocked' || fact.kind === 'routeChangedSuspected') && fact.confidence < 0.7,
+  ).length;
+
+  return Math.min(
+    3.2,
+    staleCount * 0.32 +
+      lowConfidenceCount * 0.2 +
+      uncertainSpecialCount * 0.34 +
+      routeConcernCount * 0.55 +
+      world.lostCartographerReports * 0.18,
+  );
+}
+
+export function summarizeCartographyResult(result: KingdomMemoryCommitResult): string[] {
+  const lines: string[] = [];
+
+  if (result.cartographerReports > 0) {
+    const names = result.cartographerNames.slice(0, 2).join(', ');
+    lines.push(
+      names
+        ? `${names} remet un croquis: ${result.cartographerReports} fait${result.cartographerReports > 1 ? 's' : ''} gagne${result.cartographerReports > 1 ? 'nt' : ''} en confiance.`
+        : `Un croquis fiable renforce ${result.cartographerReports} fait${result.cartographerReports > 1 ? 's' : ''}.`,
+    );
+  }
+
+  if (result.lostCartographerReports > 0) {
+    const names = result.lostCartographerNames.slice(0, 2).join(', ');
+    lines.push(
+      names
+        ? `${names} n'est pas revenu. La carte non plus.`
+        : "Le cartographe n'est pas revenu. La carte non plus.",
+    );
+  }
+
+  return lines;
+}
+
+function upsertFact(world: RunWorldMemory, observation: KingdomMemoryObservation, wave: number): KingdomMemoryFact {
+  const existing = world.kingdomFacts.find((fact) => sameFact(fact, observation));
+
+  if (existing) {
+    return existing;
+  }
+
+  const fact: KingdomMemoryFact = {
+    id: `kingdom-fact-${world.kingdomFacts.length + 1}`,
+    kind: observation.kind,
+    label: observation.label,
+    mapId: observation.mapId ?? null,
+    cell: observation.cell ? { ...observation.cell } : null,
+    precision: observation.precision,
+    confidence: 0,
+    confirmations: 0,
+    firstSeenWave: wave,
+    lastSeenWave: wave,
+    age: 0,
+    stale: false,
+    sourceSurvivorProfileId: null,
+    sourceRole: null,
+    confirmedByCartographer: false,
+  };
+
+  world.kingdomFacts.push(fact);
+  return fact;
+}
+
+function sameFact(fact: KingdomMemoryFact, observation: KingdomMemoryObservation): boolean {
+  if (fact.kind !== observation.kind) {
+    return false;
+  }
+
+  const factCell = fact.cell ? cellKey(fact.cell) : null;
+  const observationCell = observation.cell ? cellKey(observation.cell) : null;
+
+  return fact.mapId === (observation.mapId ?? null) && factCell === observationCell && fact.label === observation.label;
+}
+
+function confidenceBoostFor(observation: KingdomMemoryObservation, wasStale: boolean): number {
+  if (observation.observerRole !== 'cartographer') {
+    return 0;
+  }
+
+  const kindBoost =
+    observation.kind === 'trapSeen'
+      ? CARTOGRAPHER_TRAP_REPORT_BOOST
+      : observation.kind === 'specialTreasureSeen'
+        ? CARTOGRAPHER_SPECIAL_TREASURE_REPORT_BOOST
+        : observation.kind === 'guardianSeen' ||
+            observation.kind === 'guardianFought' ||
+            observation.kind === 'zoneReached' ||
+            observation.kind === 'antechamberSeen' ||
+            observation.kind === 'bossApproachKnown' ||
+            observation.kind === 'dangerousZoneSeen' ||
+            observation.kind === 'roomLockTrapSeen' ||
+            observation.kind === 'dangerousRoomSeen' ||
+            observation.kind === 'trappedRoomSurvived'
+          ? CARTOGRAPHER_ZONE_REPORT_BOOST
+        : 0;
+
+  return CARTOGRAPHER_CONFIDENCE_BOOST + kindBoost + (wasStale ? CARTOGRAPHER_STALE_RESOLVE_BOOST : 0);
+}
+
+function upgradePrecision(precision: KingdomMemoryPrecision): KingdomMemoryPrecision {
+  if (precision === 'vague') {
+    return 'room';
+  }
+
+  return 'exact';
+}
+
+function bestPrecision(a: KingdomMemoryPrecision, b: KingdomMemoryPrecision): KingdomMemoryPrecision {
+  const score: Record<KingdomMemoryPrecision, number> = {
+    vague: 0,
+    room: 1,
+    exact: 2,
+  };
+
+  return score[b] > score[a] ? b : a;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
 
 export const KINGDOM_MEMORY_BALANCE = {
   maxFacts: 32,
@@ -40,10 +282,10 @@ export function rememberExpeditionFromSurvivors(input: {
   tiles: DungeonTile[];
   survivors: AdventurerProfile[];
 }): string[] {
-  decayKingdomMemory(input.world.kingdomMemory, input.wave);
+  decayLegacyKingdomMemory(input.world.kingdomMemory, input.wave);
 
   if (input.survivors.length === 0) {
-    addKingdomFact(input.world.kingdomMemory, {
+    addLegacyKingdomFact(input.world.kingdomMemory, {
       type: 'partyWipedHere',
       cell: null,
       wave: input.wave,
@@ -56,9 +298,9 @@ export function rememberExpeditionFromSurvivors(input: {
     return summarizeKingdomMemory(input.world.kingdomMemory, input.wave, 3);
   }
 
-  const source = pickSource(input.survivors);
+  const source = pickLegacySource(input.survivors);
 
-  input.stats.observedDoorCells.forEach((cell) => addKingdomFact(input.world.kingdomMemory, {
+  input.stats.observedDoorCells.forEach((cell) => addLegacyKingdomFact(input.world.kingdomMemory, {
     type: 'lockedDoorSeen',
     cell,
     wave: input.wave,
@@ -69,7 +311,7 @@ export function rememberExpeditionFromSurvivors(input: {
     data: { locked: true },
   }));
 
-  input.stats.observedTrapCells.forEach((cell) => addKingdomFact(input.world.kingdomMemory, {
+  input.stats.observedTrapCells.forEach((cell) => addLegacyKingdomFact(input.world.kingdomMemory, {
     type: 'trapSeen',
     cell,
     wave: input.wave,
@@ -80,7 +322,7 @@ export function rememberExpeditionFromSurvivors(input: {
     data: {},
   }));
 
-  input.stats.observedDefenderCells.forEach((cell) => addKingdomFact(input.world.kingdomMemory, {
+  input.stats.observedDefenderCells.forEach((cell) => addLegacyKingdomFact(input.world.kingdomMemory, {
     type: 'defenderSeen',
     cell,
     wave: input.wave,
@@ -93,9 +335,9 @@ export function rememberExpeditionFromSurvivors(input: {
 
   Object.entries(input.stats.heavyDamageCells)
     .filter(([, damage]) => damage >= 18)
-    .forEach(([key, damage]) => addKingdomFact(input.world.kingdomMemory, {
+    .forEach(([key, damage]) => addLegacyKingdomFact(input.world.kingdomMemory, {
       type: 'heavyDamageArea',
-      cell: parseCellKey(key),
+      cell: parseLegacyCellKey(key),
       wave: input.wave,
       source,
       confidence: KINGDOM_MEMORY_BALANCE.baseConfidence + 0.08,
@@ -105,7 +347,7 @@ export function rememberExpeditionFromSurvivors(input: {
     }));
 
   if (input.stats.roomEvaluations > 0 && (input.stats.observedTrapCells.length > 0 || input.stats.observedDefenderCells.length > 0 || input.stats.observedBoss)) {
-    addKingdomFact(input.world.kingdomMemory, {
+    addLegacyKingdomFact(input.world.kingdomMemory, {
       type: 'dangerousRoomSeen',
       cell: input.stats.observedTrapCells[0] ?? input.stats.observedDefenderCells[0] ?? null,
       wave: input.wave,
@@ -119,14 +361,12 @@ export function rememberExpeditionFromSurvivors(input: {
 
   input.stats.observedSpecialTreasures.forEach((treasure) => {
     const specialKind = specialKindFromTreasureKind(treasure.kind);
-    addKingdomFact(input.world.kingdomMemory, {
+    addLegacyKingdomFact(input.world.kingdomMemory, {
       type: 'specialTreasureSeen',
       cell: treasure.cell,
       wave: input.wave,
       source,
-      confidence: input.stats.specialTreasureLoots.length > 0
-        ? KINGDOM_MEMORY_BALANCE.strongConfidence
-        : KINGDOM_MEMORY_BALANCE.baseConfidence + 0.08,
+      confidence: input.stats.specialTreasureLoots.length > 0 ? KINGDOM_MEMORY_BALANCE.strongConfidence : KINGDOM_MEMORY_BALANCE.baseConfidence + 0.08,
       danger: 0,
       label: specialKind ? `${specialTreasureLabel(specialKind)} signale.` : 'Tresor special signale.',
       data: { treasureKind: treasure.kind },
@@ -134,7 +374,7 @@ export function rememberExpeditionFromSurvivors(input: {
   });
 
   if (input.stats.treasureStolen || input.stats.treasureValueStolen > 0) {
-    addKingdomFact(input.world.kingdomMemory, {
+    addLegacyKingdomFact(input.world.kingdomMemory, {
       type: 'treasureSeen',
       cell: null,
       wave: input.wave,
@@ -147,7 +387,7 @@ export function rememberExpeditionFromSurvivors(input: {
   }
 
   if (input.stats.observedBoss || input.stats.bossDamageTaken > 0) {
-    addKingdomFact(input.world.kingdomMemory, {
+    addLegacyKingdomFact(input.world.kingdomMemory, {
       type: input.stats.bossDamageTaken > 0 ? 'bossReached' : 'bossSeen',
       cell: null,
       wave: input.wave,
@@ -160,7 +400,7 @@ export function rememberExpeditionFromSurvivors(input: {
   }
 
   if (input.stats.doorNoThiefRetreats > 0) {
-    addKingdomFact(input.world.kingdomMemory, {
+    addLegacyKingdomFact(input.world.kingdomMemory, {
       type: 'routeBlocked',
       cell: input.stats.observedDoorCells[0] ?? null,
       wave: input.wave,
@@ -173,8 +413,8 @@ export function rememberExpeditionFromSurvivors(input: {
   }
 
   input.stats.observedRouteChanges.forEach((cell) => {
-    markFactsNearCellStale(input.world.kingdomMemory, cell);
-    addKingdomFact(input.world.kingdomMemory, {
+    markLegacyFactsNearCellStale(input.world.kingdomMemory, cell);
+    addLegacyKingdomFact(input.world.kingdomMemory, {
       type: 'routeChangedSuspected',
       cell,
       wave: input.wave,
@@ -186,8 +426,8 @@ export function rememberExpeditionFromSurvivors(input: {
     });
   });
 
-  markContradictedFactsFromVisitedRock(input.world.kingdomMemory, input.tiles, input.stats.observedRouteChanges);
-  trimKingdomMemory(input.world.kingdomMemory);
+  markLegacyContradictedFactsFromVisitedRock(input.world.kingdomMemory, input.tiles, input.stats.observedRouteChanges);
+  trimLegacyKingdomMemory(input.world.kingdomMemory);
   return summarizeKingdomMemory(input.world.kingdomMemory, input.wave, 3);
 }
 
@@ -196,13 +436,13 @@ export function summarizeKingdomMemory(memory: KingdomMemory, currentWave: numbe
     .filter((fact) => fact.confidence >= KINGDOM_MEMORY_BALANCE.lowConfidenceCutoff)
     .sort((a, b) => b.confidence - a.confidence || b.lastSeenWave - a.lastSeenWave)
     .slice(0, limit)
-    .map((fact) => `${confidenceLabel(fact.confidence)} rumeur : ${factSummary(fact, currentWave)}`);
+    .map((fact) => `${legacyConfidenceLabel(fact.confidence)} rumeur : ${legacyFactSummary(fact, currentWave)}`);
 }
 
 export function kingdomMemoryRolePressure(memory: KingdomMemory, currentWave: number): Partial<Record<AdventurerRole, number>> {
   const pressure: Partial<Record<AdventurerRole, number>> = {};
 
-  reliableFacts(memory, currentWave).forEach((fact) => {
+  reliableLegacyFacts(memory, currentWave).forEach((fact) => {
     switch (fact.type) {
       case 'lockedDoorSeen':
       case 'routeBlocked':
@@ -226,7 +466,7 @@ export function kingdomMemoryRolePressure(memory: KingdomMemory, currentWave: nu
         pressure.healer = (pressure.healer ?? 0) + 0.9;
         break;
       case 'specialTreasureSeen':
-        addSpecialTreasurePressure(pressure, fact.data.treasureKind);
+        addLegacySpecialTreasurePressure(pressure, fact.data.treasureKind);
         break;
       default:
         break;
@@ -237,12 +477,12 @@ export function kingdomMemoryRolePressure(memory: KingdomMemory, currentWave: nu
 }
 
 export function kingdomMemorySuggestsLockedDoor(memory: KingdomMemory, currentWave: number): boolean {
-  return reliableFacts(memory, currentWave).some((fact) => fact.type === 'lockedDoorSeen' || fact.type === 'routeBlocked');
+  return reliableLegacyFacts(memory, currentWave).some((fact) => fact.type === 'lockedDoorSeen' || fact.type === 'routeBlocked');
 }
 
 export function knownTrapCellsFromKingdomMemory(memory: KingdomMemory, currentWave: number): Set<string> {
   return new Set(
-    reliableFacts(memory, currentWave)
+    reliableLegacyFacts(memory, currentWave)
       .filter((fact) => fact.type === 'trapSeen' && fact.cell)
       .map((fact) => cellKey(fact.cell as GridCell)),
   );
@@ -258,7 +498,7 @@ export function kingdomTreasureAttractionBonus(
     return 0;
   }
 
-  const relevant = reliableFacts(memory, currentWave).some((fact) =>
+  const relevant = reliableLegacyFacts(memory, currentWave).some((fact) =>
     fact.type === 'specialTreasureSeen' &&
     fact.data.treasureKind === treasure.kind &&
     (!fact.cell || cellKey(fact.cell) === cellKey(treasure.cell)),
@@ -283,13 +523,13 @@ export function kingdomTreasureAttractionBonus(
   return 6;
 }
 
-export function nearbyRememberedRouteFact(memory: KingdomMemory, cell: GridCell, currentWave: number): KingdomMemoryFact | null {
-  return reliableFacts(memory, currentWave)
+export function nearbyRememberedRouteFact(memory: KingdomMemory, cell: GridCell, currentWave: number): LegacyKingdomMemoryFact | null {
+  return reliableLegacyFacts(memory, currentWave)
     .filter((fact) => fact.cell !== null && fact.type !== 'routeChangedSuspected')
     .find((fact) => fact.cell && Math.abs(fact.cell.x - cell.x) + Math.abs(fact.cell.y - cell.y) <= 1) ?? null;
 }
 
-function addKingdomFact(
+function addLegacyKingdomFact(
   memory: KingdomMemory,
   input: {
     type: KingdomMemoryFactType;
@@ -301,10 +541,10 @@ function addKingdomFact(
     label: string;
     data: Record<string, string | number | boolean | null>;
   },
-): KingdomMemoryFact {
+): LegacyKingdomMemoryFact {
   const existing = memory.facts.find((fact) =>
     fact.type === input.type &&
-    sameOptionalCell(fact.cell, input.cell) &&
+    sameLegacyOptionalCell(fact.cell, input.cell) &&
     fact.data.treasureKind === input.data.treasureKind &&
     fact.data.reason === input.data.reason,
   );
@@ -312,7 +552,7 @@ function addKingdomFact(
   if (existing) {
     existing.confirmations += 1;
     existing.lastSeenWave = input.wave;
-    existing.confidence = clamp01(existing.confidence + KINGDOM_MEMORY_BALANCE.confirmationBoost + input.confidence * 0.12);
+    existing.confidence = clamp(existing.confidence + KINGDOM_MEMORY_BALANCE.confirmationBoost + input.confidence * 0.12, 0, 1);
     existing.danger = Math.max(existing.danger, input.danger);
     existing.stale = false;
     existing.sourceProfileId = input.source?.id ?? existing.sourceProfileId;
@@ -322,11 +562,11 @@ function addKingdomFact(
     return existing;
   }
 
-  const fact: KingdomMemoryFact = {
+  const fact: LegacyKingdomMemoryFact = {
     id: `kingdom-fact-${memory.nextFactId}`,
     type: input.type,
     cell: input.cell ? { ...input.cell } : null,
-    confidence: clamp01(input.confidence),
+    confidence: clamp(input.confidence, 0, 1),
     firstSeenWave: input.wave,
     lastSeenWave: input.wave,
     sourceProfileId: input.source?.id ?? null,
@@ -339,14 +579,14 @@ function addKingdomFact(
   };
   memory.nextFactId += 1;
   memory.facts.push(fact);
-  trimKingdomMemory(memory);
+  trimLegacyKingdomMemory(memory);
   return fact;
 }
 
-function decayKingdomMemory(memory: KingdomMemory, currentWave: number): void {
+function decayLegacyKingdomMemory(memory: KingdomMemory, currentWave: number): void {
   memory.facts.forEach((fact) => {
     const age = Math.max(0, currentWave - fact.lastSeenWave);
-    fact.confidence = clamp01(fact.confidence - age * KINGDOM_MEMORY_BALANCE.confidenceDecayPerExpedition);
+    fact.confidence = clamp(fact.confidence - age * KINGDOM_MEMORY_BALANCE.confidenceDecayPerExpedition, 0, 1);
 
     if (fact.confidence < KINGDOM_MEMORY_BALANCE.lowConfidenceCutoff) {
       fact.stale = true;
@@ -354,39 +594,35 @@ function decayKingdomMemory(memory: KingdomMemory, currentWave: number): void {
   });
 }
 
-function markFactsNearCellStale(memory: KingdomMemory, cell: GridCell): void {
+function markLegacyFactsNearCellStale(memory: KingdomMemory, cell: GridCell): void {
   memory.facts.forEach((fact) => {
-    if (
-      fact.type === 'routeChangedSuspected' ||
-      !fact.cell ||
-      Math.abs(fact.cell.x - cell.x) + Math.abs(fact.cell.y - cell.y) > 1
-    ) {
+    if (fact.type === 'routeChangedSuspected' || !fact.cell || Math.abs(fact.cell.x - cell.x) + Math.abs(fact.cell.y - cell.y) > 1) {
       return;
     }
 
     fact.stale = true;
-    fact.confidence = clamp01(fact.confidence - KINGDOM_MEMORY_BALANCE.stalePenalty);
+    fact.confidence = clamp(fact.confidence - KINGDOM_MEMORY_BALANCE.stalePenalty, 0, 1);
   });
 }
 
-function markContradictedFactsFromVisitedRock(memory: KingdomMemory, tiles: DungeonTile[], cells: GridCell[]): void {
+function markLegacyContradictedFactsFromVisitedRock(memory: KingdomMemory, tiles: DungeonTile[], cells: GridCell[]): void {
   cells.forEach((cell) => {
     const tile = getTileAt(tiles, cell);
 
     if (tile?.type === 'rock') {
-      markFactsNearCellStale(memory, cell);
+      markLegacyFactsNearCellStale(memory, cell);
     }
   });
 }
 
-function trimKingdomMemory(memory: KingdomMemory): void {
+function trimLegacyKingdomMemory(memory: KingdomMemory): void {
   memory.facts = memory.facts
     .filter((fact) => fact.confidence >= KINGDOM_MEMORY_BALANCE.lowConfidenceCutoff || !fact.stale)
     .sort((a, b) => b.confidence - a.confidence || b.lastSeenWave - a.lastSeenWave)
     .slice(0, KINGDOM_MEMORY_BALANCE.maxFacts);
 }
 
-function reliableFacts(memory: KingdomMemory, currentWave: number): KingdomMemoryFact[] {
+function reliableLegacyFacts(memory: KingdomMemory, currentWave: number): LegacyKingdomMemoryFact[] {
   return memory.facts.filter((fact) =>
     !fact.stale &&
     fact.confidence - Math.max(0, currentWave - fact.lastSeenWave) * KINGDOM_MEMORY_BALANCE.confidenceDecayPerExpedition >=
@@ -394,7 +630,7 @@ function reliableFacts(memory: KingdomMemory, currentWave: number): KingdomMemor
   );
 }
 
-function pickSource(survivors: AdventurerProfile[]): AdventurerProfile | null {
+function pickLegacySource(survivors: AdventurerProfile[]): AdventurerProfile | null {
   return [...survivors].sort(
     (a, b) =>
       b.survivedExpeditions - a.survivedExpeditions ||
@@ -403,7 +639,7 @@ function pickSource(survivors: AdventurerProfile[]): AdventurerProfile | null {
   )[0] ?? null;
 }
 
-function addSpecialTreasurePressure(pressure: Partial<Record<AdventurerRole, number>>, treasureKind: unknown): void {
+function addLegacySpecialTreasurePressure(pressure: Partial<Record<AdventurerRole, number>>, treasureKind: unknown): void {
   if (treasureKind === 'specialArmor') {
     pressure.warrior = (pressure.warrior ?? 0) + 1.1;
     return;
@@ -422,7 +658,7 @@ function addSpecialTreasurePressure(pressure: Partial<Record<AdventurerRole, num
   }
 }
 
-function factSummary(fact: KingdomMemoryFact, currentWave: number): string {
+function legacyFactSummary(fact: LegacyKingdomMemoryFact, currentWave: number): string {
   const age = currentWave - fact.lastSeenWave;
   const ageText = age > 0 ? ` (${age} expedition${age > 1 ? 's' : ''})` : '';
 
@@ -453,7 +689,7 @@ function factSummary(fact: KingdomMemoryFact, currentWave: number): string {
   }
 }
 
-function confidenceLabel(confidence: number): string {
+function legacyConfidenceLabel(confidence: number): string {
   if (confidence >= 0.76) {
     return 'Forte';
   }
@@ -465,19 +701,15 @@ function confidenceLabel(confidence: number): string {
   return 'Faible';
 }
 
-function parseCellKey(key: string): GridCell {
+function parseLegacyCellKey(key: string): GridCell {
   const [x, y] = key.split(',').map(Number);
   return { x, y };
 }
 
-function sameOptionalCell(a: GridCell | null, b: GridCell | null): boolean {
+function sameLegacyOptionalCell(a: GridCell | null, b: GridCell | null): boolean {
   if (!a || !b) {
     return a === b;
   }
 
   return a.x === b.x && a.y === b.y;
-}
-
-function clamp01(value: number): number {
-  return Math.max(0, Math.min(1, value));
 }

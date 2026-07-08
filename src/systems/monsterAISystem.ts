@@ -6,8 +6,8 @@ export interface MonsterAITickResult {
 }
 
 interface MonsterMovementOptions {
-  canMoveBetween: (fromX: number, fromY: number, toX: number, toY: number) => boolean;
-  getNextWaypoint: (fromX: number, fromY: number, targetX: number, targetY: number) => { x: number; y: number } | null;
+  canMoveBetween: (entity: DefenseEntity, fromX: number, fromY: number, toX: number, toY: number) => boolean;
+  getNextWaypoint: (entity: DefenseEntity, fromX: number, fromY: number, targetX: number, targetY: number) => { x: number; y: number } | null;
 }
 
 interface ChaseConfig {
@@ -20,7 +20,7 @@ interface ChaseConfig {
   patrolRadius: number;
 }
 
-const CHASE_CONFIG: Record<'goblin' | 'skeleton' | 'slime', ChaseConfig> = {
+const CHASE_CONFIG: Record<'goblin' | 'skeleton' | 'slime' | 'guardian', ChaseConfig> = {
   goblin: {
     acquireRange: 4.2,
     forcedTargetRange: 5.2,
@@ -48,6 +48,15 @@ const CHASE_CONFIG: Record<'goblin' | 'skeleton' | 'slime', ChaseConfig> = {
     returnSpeed: 0.0005,
     patrolRadius: 0.14,
   },
+  guardian: {
+    acquireRange: 3.6,
+    forcedTargetRange: 4.4,
+    maxHomeDistance: 3.2,
+    chaseMs: 6400,
+    speed: 0.00105,
+    returnSpeed: 0.001,
+    patrolRadius: 0.12,
+  },
 };
 
 export function updateMonsterAI(
@@ -63,18 +72,25 @@ export function updateMonsterAI(
       return;
     }
 
+    const localAdventurers = adventurers.filter((adventurer) => adventurer.mapId === minion.mapId);
+
     if (minion.type === 'goblin') {
-      updateGoblin(minion, adventurers, deltaMs, movement);
+      updateGoblin(minion, localAdventurers, deltaMs, movement);
       return;
     }
 
     if (minion.type === 'skeleton') {
-      updateSkeleton(minion, adventurers, deltaMs, movement);
+      updateSkeleton(minion, localAdventurers, deltaMs, movement);
       return;
     }
 
     if (minion.type === 'slime') {
-      updateSlime(minion, adventurers, deltaMs, slowedAdventurerIds, movement);
+      updateSlime(minion, localAdventurers, deltaMs, slowedAdventurerIds, movement);
+      return;
+    }
+
+    if (minion.type === 'guardian') {
+      updateGuardian(minion, localAdventurers, deltaMs, movement);
     }
   });
 
@@ -97,6 +113,15 @@ function updateSkeleton(
   movement: MonsterMovementOptions,
 ): void {
   updateChaser(minion, adventurers, deltaMs, movement, CHASE_CONFIG.skeleton);
+}
+
+function updateGuardian(
+  minion: DefenseEntity,
+  adventurers: AdventurerEntity[],
+  deltaMs: number,
+  movement: MonsterMovementOptions,
+): void {
+  updateChaser(minion, adventurers, deltaMs, movement, CHASE_CONFIG.guardian);
 }
 
 function updateSlime(
@@ -220,9 +245,9 @@ function moveToward(
   }
 
   const directStep = computeStep(entity.x, entity.y, targetX, targetY, step);
-  const waypoint = movement.canMoveBetween(entity.x, entity.y, directStep.x, directStep.y)
+  const waypoint = movement.canMoveBetween(entity, entity.x, entity.y, directStep.x, directStep.y)
     ? { x: targetX, y: targetY }
-    : movement.getNextWaypoint(entity.x, entity.y, targetX, targetY);
+    : movement.getNextWaypoint(entity, entity.x, entity.y, targetX, targetY);
 
   if (!waypoint) {
     entity.targetAdventurerId = null;
@@ -234,7 +259,7 @@ function moveToward(
   const nextX = nextStep.x;
   const nextY = nextStep.y;
 
-  if (!movement.canMoveBetween(entity.x, entity.y, nextX, nextY)) {
+  if (!movement.canMoveBetween(entity, entity.x, entity.y, nextX, nextY)) {
     entity.targetAdventurerId = null;
     entity.aiState = 'return';
     return false;
@@ -251,7 +276,7 @@ function movePatrol(
   targetY: number,
   movement: MonsterMovementOptions,
 ): void {
-  if (!movement.canMoveBetween(entity.x, entity.y, targetX, targetY)) {
+  if (!movement.canMoveBetween(entity, entity.x, entity.y, targetX, targetY)) {
     return;
   }
 

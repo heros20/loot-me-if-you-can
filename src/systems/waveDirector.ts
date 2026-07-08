@@ -1,15 +1,16 @@
-import { ENTRY_CELL, PARTY_SIZE, cellKey } from '../game/constants';
+import { ENTRANCE_MAP_ID, ENTRY_CELL, PARTY_SIZE, THIEF_MAX_LOCKPICKS_PER_EXPEDITION, cellKey } from '../game/constants';
 import type { AdventurerEntity, AdventurerProfile, AdventurerRole, AdaptationMemory } from '../game/types';
 import { getAdventurerDefinition } from '../entities/definitions';
 import { COMBAT_ABILITY_BALANCE } from './combatAbilitySystem';
 import { computeSpecialTreasureModifiers } from './specialTreasuresSystem';
 
-const ADAPTIVE_ROLE_ORDER: AdventurerRole[] = ['warrior', 'thief', 'mage', 'healer'];
+const ADAPTIVE_ROLE_ORDER: AdventurerRole[] = ['warrior', 'thief', 'mage', 'healer', 'cartographer'];
 const BASE_ROLE_SCORE: Record<AdventurerRole, number> = {
   warrior: 1.34,
   thief: 0.96,
   mage: 1.02,
   healer: 0.88,
+  cartographer: 0.06,
 };
 
 export function buildWaveRoster(
@@ -63,6 +64,7 @@ export function createAdventurer(profile: AdventurerProfile, id: string, wave: n
 
   return {
     id,
+    mapId: ENTRANCE_MAP_ID,
     profileId: profile.id,
     role,
     name: profile.name,
@@ -84,6 +86,8 @@ export function createAdventurer(profile: AdventurerProfile, id: string, wave: n
     abilityFxTimerMs: 0,
     damageReductionTimerMs: 0,
     thiefTrapInterventionsRemaining: role === 'thief' ? COMBAT_ABILITY_BALANCE.thiefTrapInterventionsPerExpedition : 0,
+    lockpicksUsedThisExpedition: 0,
+    maxLockpicksPerExpedition: role === 'thief' ? THIEF_MAX_LOCKPICKS_PER_EXPEDITION : 0,
     trapDamageMultiplier: definition.trapDamageMultiplier * (profile.dominantPersonality === 'cautious' ? 0.9 : 1),
     injuryPerformanceMultiplier,
     speedMultiplier: 1,
@@ -93,6 +97,8 @@ export function createAdventurer(profile: AdventurerProfile, id: string, wave: n
     behaviorState: 'advancing',
     path: [],
     lastCellKey: cellKey(ENTRY_CELL),
+    currentZoneId: null,
+    lastImportantZoneId: null,
     lastEvaluatedRoomKey: null,
     alive: true,
     escaped: false,
@@ -126,6 +132,10 @@ function roleScore(
 ): number {
   const currentCount = currentRoles.filter((candidate) => candidate === role).length;
 
+  if (role === 'cartographer' && currentCount >= 1) {
+    return -100;
+  }
+
   if (currentCount >= 2) {
     return -100;
   }
@@ -133,9 +143,12 @@ function roleScore(
   const pressure = memory.rolePressure[role] ?? 0;
   const waveBias = ((wave + ADAPTIVE_ROLE_ORDER.indexOf(role)) % ADAPTIVE_ROLE_ORDER.length) * 0.045;
   const trapLearningBias = role === 'thief' ? Math.max(0, memory.trapAvoidance - 0.35) * 0.36 : 0;
+  const cartographyBias = role === 'cartographer'
+    ? Math.max(0, pressure) * 0.72 + (wave >= 2 ? 0.16 : 0)
+    : 0;
   // Une porte verrouillee connue du Royaume doit quasi-garantir un voleur dans le prochain contrat (D-012).
   const lockedDoorBias = role === 'thief' && hasActiveLockedDoor && currentCount === 0 ? 0.9 : 0;
   const duplicatePenalty = currentCount * 1.08 + Math.max(0, currentCount - 1) * 0.68;
 
-  return BASE_ROLE_SCORE[role] + pressure * 1.22 + waveBias + trapLearningBias + lockedDoorBias - duplicatePenalty;
+  return BASE_ROLE_SCORE[role] + pressure * 1.22 + waveBias + trapLearningBias + cartographyBias + lockedDoorBias - duplicatePenalty;
 }

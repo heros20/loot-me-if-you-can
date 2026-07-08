@@ -11,6 +11,10 @@ export const GRID_ROWS = 16;
 export const TILE_SIZE = 28;
 export const GRID_OFFSET_X = 14;
 export const GRID_OFFSET_Y = 92;
+export const ENTRANCE_MAP_ID = 'floor-1';
+export const INTERMEDIATE_MAP_ID = 'floor-2';
+export const FINAL_MAP_ID = 'floor-3';
+export const DEFAULT_MAP_ID = ENTRANCE_MAP_ID;
 
 export const ENTRY_CELL: GridCell = { x: 0, y: 7 };
 export const TREASURE_CELL: GridCell = { x: 16, y: 4 };
@@ -28,6 +32,7 @@ export const RESEAL_TILE_COST = ECONOMY_BALANCE.resealTileCost;
 export const DOOR_COST = ECONOMY_BALANCE.doorCost;
 export const DOOR_HP = ECONOMY_BALANCE.doorHp;
 export const THIEF_DOOR_DAMAGE_MULTIPLIER = 2;
+export const THIEF_MAX_LOCKPICKS_PER_EXPEDITION = 2;
 
 export function cellKey(cell: GridCell): string {
   return `${cell.x},${cell.y}`;

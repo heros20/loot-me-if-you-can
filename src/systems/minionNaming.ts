@@ -4,6 +4,7 @@ const MINION_NAMES: Partial<Record<DefenseType, string[]>> = {
   slime: ['Gluant', 'Flaque', 'Bulle', 'Visqueux', 'Ectoplasme', 'Morve'],
   goblin: ['Grattouille', 'Krik', 'Mordicus', 'Fourbe', 'Ricanou', 'Chapardeur'],
   skeleton: ['Clavicule', 'Tibia', 'Vertebre', 'Phalange', 'Sternum', 'Rotule'],
+  guardian: ['Heaume Noir', 'Porte-Seuil', 'Brisepas', 'Veille-Fer', 'Gardeclos'],
 };
 
 export function createMinionName(type: DefenseType, counter: number): string {

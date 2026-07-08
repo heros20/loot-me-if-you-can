@@ -24,10 +24,12 @@ import {
 import { DungeonSimulation } from '../game/DungeonSimulation';
 import type {
   AdventurerEntity,
+  AdventurerRemains,
   CombatFeedbackEvent,
   ConstructionTool,
   DefenseEntity,
   DungeonDoor,
+  DungeonTransition,
   DungeonTile,
   DungeonTreasureKind,
 } from '../game/types';
@@ -68,7 +70,10 @@ export class DungeonScene extends Phaser.Scene {
   private safeZoneGraphics!: Phaser.GameObjects.Graphics;
   private hpGraphics!: Phaser.GameObjects.Graphics;
   private pathGraphics!: Phaser.GameObjects.Graphics;
+  private transitionGraphics!: Phaser.GameObjects.Graphics;
   private treasureGraphics!: Phaser.GameObjects.Graphics;
+  private remainsGraphics!: Phaser.GameObjects.Graphics;
+  private hoverLabel!: Phaser.GameObjects.Text;
   private tileViews = new Map<string, Phaser.GameObjects.Image>();
   private uiPublishTimerMs = 0;
   private tavernReportKey: string | null = null;
@@ -83,7 +88,20 @@ export class DungeonScene extends Phaser.Scene {
     this.safeZoneGraphics = this.add.graphics();
     this.hoverGraphics = this.add.graphics();
     this.pathGraphics = this.add.graphics();
+    this.transitionGraphics = this.add.graphics();
     this.treasureGraphics = this.add.graphics();
+    this.remainsGraphics = this.add.graphics();
+    this.hoverLabel = this.add
+      .text(0, 0, '', {
+        color: '#fff4d8',
+        fontSize: '9px',
+        fontFamily: 'monospace',
+        backgroundColor: 'rgba(15, 13, 16, 0.88)',
+        padding: { x: 5, y: 3 },
+        wordWrap: { width: 190 },
+      })
+      .setDepth(260)
+      .setVisible(false);
     this.hpGraphics = this.add.graphics();
     this.createBossView();
     this.bindInput();
@@ -95,7 +113,9 @@ export class DungeonScene extends Phaser.Scene {
     this.syncRenderState();
     this.drawHealthBars();
     this.drawPaths();
+    this.drawTransitions();
     this.drawTreasure();
+    this.drawRemains();
     this.drawSafeZone();
     this.uiPublishTimerMs -= delta;
 
@@ -138,6 +158,12 @@ export class DungeonScene extends Phaser.Scene {
       if (action.type === 'select-construction') {
         this.simulation.selectConstructionTool(action.constructionType);
         this.publishUi();
+      }
+
+      if (action.type === 'select-map') {
+        this.simulation.selectMap(action.mapId);
+        this.publishUi();
+        this.syncRenderState();
       }
 
       if (action.type === 'launch-wave') {
@@ -305,12 +331,17 @@ export class DungeonScene extends Phaser.Scene {
     const world = defense.kind === 'minion'
       ? gridPositionToWorld(defense.x, defense.y)
       : cellToWorld(defense.cell);
+    const defenseSize = defense.type === 'guardian' ? 34 : defense.kind === 'minion' ? 28 : 24;
 
     if (!view) {
       const sprite = this.add
         .image(0, 0, TEXTURE_KEYS.defense[defense.type])
-        .setDisplaySize(defense.kind === 'minion' ? 28 : 24, defense.kind === 'minion' ? 28 : 24);
-      const labelText = defense.kind === 'minion' ? shortDisplayName(defense.name, definition.shortName) : definition.shortName;
+        .setDisplaySize(defenseSize, defenseSize);
+      const labelText = defense.type === 'guardian'
+        ? 'GARD'
+        : defense.kind === 'minion'
+          ? shortDisplayName(defense.name, definition.shortName)
+          : definition.shortName;
       const label = this.add
         .text(0, 20, labelText, {
           color: '#fff4d8',
@@ -345,9 +376,20 @@ export class DungeonScene extends Phaser.Scene {
 
     this.previousDefenseHp.set(defense.id, defense.hp);
     view.container.setPosition(currentWorld.x, currentWorld.y);
-    view.container.setAlpha(defense.kind === 'trap' && defense.cooldownRemainingMs > 0 ? 0.52 : 1);
+    view.container.setAlpha(trapVisualAlpha(defense));
+    view.sprite.setDisplaySize(defenseSize, defenseSize);
+    view.label.setText(defense.type === 'guardian' ? 'GARD' : defense.kind === 'minion' ? shortDisplayName(defense.name, definition.shortName) : trapMapShortName(defense, definition.shortName));
 
-    if (defense.abilityFxTimerMs > 0) {
+    if (defense.kind === 'trap' && defense.trapState === 'disarmed') {
+      view.sprite.setTint(0x8a8f96);
+      view.fxLabel?.setText('DESARME').setVisible(true).setAlpha(0.84);
+    } else if (defense.kind === 'trap' && defense.trapState === 'triggered') {
+      view.sprite.setTint(0x9fb0c0);
+      view.fxLabel?.setText('VERROU').setVisible(true).setAlpha(0.9);
+    } else if (defense.kind === 'trap' && defense.trapState === 'cleared') {
+      view.sprite.setTint(0x6f7f6f);
+      view.fxLabel?.setText('OUVERT').setVisible(true).setAlpha(0.72);
+    } else if (defense.abilityFxTimerMs > 0) {
       view.sprite.setTint(0xf6d88a);
       view.fxLabel?.setText(defenseFxText(defense)).setVisible(true).setAlpha(Math.min(1, defense.abilityFxTimerMs / 220));
     } else if (defense.slowedTimerMs > 0) {
@@ -735,6 +777,110 @@ export class DungeonScene extends Phaser.Scene {
     }
   }
 
+  private drawTransitions(): void {
+    const renderState = this.simulation.getRenderState();
+    this.transitionGraphics.clear();
+
+    renderState.transitions.forEach((transition) => {
+      if (transition.locked) {
+        return;
+      }
+
+      const world = cellToWorld(transition.fromCell);
+      const down = transition.label.toLowerCase().includes('desc');
+      this.drawTransitionMarker(world.x, world.y, down);
+    });
+  }
+
+  private drawTransitionMarker(x: number, y: number, down: boolean): void {
+    const fill = down ? 0x6e93c9 : 0x79c7a1;
+    const stroke = down ? 0xcfe0f6 : 0xd8ead9;
+    this.transitionGraphics.fillStyle(0x0f0d10, 0.82);
+    this.transitionGraphics.fillRoundedRect(x - 11, y - 11, 22, 22, 5);
+    this.transitionGraphics.lineStyle(2, stroke, 0.92);
+    this.transitionGraphics.strokeRoundedRect(x - 11, y - 11, 22, 22, 5);
+    this.transitionGraphics.fillStyle(fill, 0.98);
+    this.transitionGraphics.beginPath();
+
+    if (down) {
+      this.transitionGraphics.moveTo(x - 6, y - 3);
+      this.transitionGraphics.lineTo(x + 6, y - 3);
+      this.transitionGraphics.lineTo(x, y + 6);
+    } else {
+      this.transitionGraphics.moveTo(x - 6, y + 4);
+      this.transitionGraphics.lineTo(x + 6, y + 4);
+      this.transitionGraphics.lineTo(x, y - 6);
+    }
+
+    this.transitionGraphics.closePath();
+    this.transitionGraphics.fillPath();
+  }
+
+  private drawRemains(): void {
+    const renderState = this.simulation.getRenderState();
+    const byCell = new Map<string, AdventurerRemains[]>();
+
+    this.remainsGraphics.clear();
+    renderState.remains.forEach((remains) => {
+      const key = cellKey(remains.cell);
+      const stack = byCell.get(key) ?? [];
+      stack.push(remains);
+      byCell.set(key, stack);
+    });
+
+    byCell.forEach((stack) => {
+      const visible = stack.slice(-3);
+      const world = cellToWorld(stack[0].cell);
+
+      visible.forEach((remains, index) => {
+        this.drawRemainsMarker(
+          world.x - 5 + index * 5,
+          world.y + 6 - index * 3,
+          remains.visualState,
+          remains.emotionalTone,
+          !remains.loot.claimed,
+        );
+      });
+
+      if (stack.length > 3) {
+        this.remainsGraphics.fillStyle(0x0f0d10, 0.86);
+        this.remainsGraphics.fillCircle(world.x + 11, world.y - 9, 6);
+        this.remainsGraphics.fillStyle(0xf6d88a, 0.95);
+        this.remainsGraphics.fillCircle(world.x + 11, world.y - 9, 2);
+      }
+    });
+  }
+
+  private drawRemainsMarker(
+    x: number,
+    y: number,
+    visualState: AdventurerRemains['visualState'],
+    tone: AdventurerRemains['emotionalTone'],
+    hasLoot: boolean,
+  ): void {
+    const alpha = visualState === 'old' ? 0.56 : visualState === 'bones' ? 0.72 : 0.88;
+    const tint = remainsToneColor(tone);
+
+    this.remainsGraphics.lineStyle(3, 0xe6dcc8, alpha);
+    this.remainsGraphics.beginPath();
+    this.remainsGraphics.moveTo(x - 6, y - 3);
+    this.remainsGraphics.lineTo(x + 6, y + 3);
+    this.remainsGraphics.moveTo(x + 5, y - 4);
+    this.remainsGraphics.lineTo(x - 5, y + 4);
+    this.remainsGraphics.strokePath();
+    this.remainsGraphics.fillStyle(0xe6dcc8, alpha);
+    this.remainsGraphics.fillCircle(x, y - 6, 4);
+    this.remainsGraphics.lineStyle(1, tint, 0.9);
+    this.remainsGraphics.strokeCircle(x, y - 6, 5);
+
+    if (hasLoot) {
+      this.remainsGraphics.fillStyle(0xf6d88a, 0.96);
+      this.remainsGraphics.fillCircle(x + 7, y - 10, 2);
+      this.remainsGraphics.lineStyle(1, 0x7a4a13, 0.9);
+      this.remainsGraphics.strokeCircle(x + 7, y - 10, 3);
+    }
+  }
+
   private drawSafeZone(): void {
     const renderState = this.simulation.getRenderState();
     this.safeZoneGraphics.clear();
@@ -773,6 +919,7 @@ export class DungeonScene extends Phaser.Scene {
   private drawHover(x: number, y: number): void {
     const cell = worldToCell(x, y);
     this.hoverGraphics.clear();
+    this.hoverLabel.setVisible(false);
 
     if (!cell) {
       return;
@@ -780,10 +927,36 @@ export class DungeonScene extends Phaser.Scene {
 
     const renderState = this.simulation.getRenderState();
     const tile = getTileAt(renderState.tiles, cell);
+    const remainsOnCell = renderState.remains.filter((remains) => isSameCell(remains.cell, cell));
+    const transitionOnCell = renderState.transitions.find((transition) => isSameCell(transition.fromCell, cell)) ?? null;
+    const hasUnclaimedRemainsLoot = remainsOnCell.some((remains) => !remains.loot.claimed);
     const constructionTool = renderState.selectedConstructionTool;
     const activeTreasureOnCell = renderState.treasures.some((treasure) => treasure.status !== 'stolen' && isSameCell(treasure.cell, cell));
+    const defenseOnCell = renderState.defenses.find((defense) => defense.alive && isSameCell(defense.cell, cell)) ?? null;
+    const selectedDefense = renderState.selectedDefense;
+    const guardianAlreadyPlaced = renderState.defenses.some((defense) => defense.alive && defense.type === 'guardian');
+    const guardianPreferredCell = renderState.zones.some(
+      (zone) =>
+        (zone.type === 'defense' || zone.type === 'secondary' || zone.type === 'antechamber') &&
+        zone.cells.some((zoneCell) => isSameCell(zoneCell, cell)),
+    );
+    const roomLockZone = renderState.zones.find(
+      (zone) =>
+        (zone.type === 'defense' || zone.type === 'secondary' || zone.type === 'antechamber') &&
+        zone.cells.some((zoneCell) => isSameCell(zoneCell, cell)),
+    ) ?? null;
+    const roomLockZoneHasMinion = roomLockZone
+      ? renderState.defenses.some(
+        (defense) =>
+          defense.alive &&
+          defense.kind === 'minion' &&
+          roomLockZone.cells.some((zoneCell) => isSameCell(zoneCell, defense.cell)),
+      )
+      : false;
     const invalid = constructionTool === 'dig'
       ? tile?.type !== 'rock' || !hasAdjacentDugTile(renderState.tiles, cell) || renderState.gold < DIG_COST
+      : constructionTool === 'reseal'
+        ? !this.simulation.previewResealTile(cell).ok
       : constructionTool === 'guardRoom' || constructionTool === 'crypt'
         ? !canMarkRoomTile(tile)
         : constructionTool === 'door'
@@ -793,8 +966,6 @@ export class DungeonScene extends Phaser.Scene {
             || renderState.gold < DOOR_COST
           : constructionTool === 'removeDoor'
             ? !findDoorAt(renderState.doors, cell)
-          : constructionTool === 'reseal'
-            ? !this.simulation.previewResealTile(cell).ok
           : constructionTool === 'moveBoss'
             ? !tile
               || tile.type !== 'floor' && tile.type !== 'room'
@@ -815,7 +986,25 @@ export class DungeonScene extends Phaser.Scene {
               || renderState.gold < treasurePlacementCost(constructionTool)
           : constructionTool === 'removeTreasure'
             ? !renderState.treasures.some((treasure) => treasure.kind !== 'main' && treasure.status !== 'stolen' && isSameCell(treasure.cell, cell))
-          : !canBuildDefenseOnTile(tile);
+          : constructionTool === 'collectRemainsLoot'
+            ? !hasUnclaimedRemainsLoot
+          : !canBuildDefenseOnTile(tile)
+            || transitionOnCell !== null
+            || defenseOnCell !== null
+            || (selectedDefense === 'guardian' && (
+              guardianAlreadyPlaced ||
+              !guardianPreferredCell ||
+              remainsOnCell.length > 0 ||
+              activeTreasureOnCell ||
+              isSameCell(cell, renderState.boss.homeCell)
+            ))
+            || (selectedDefense === 'roomLockTrap' && (
+              !roomLockZone ||
+              !roomLockZoneHasMinion ||
+              remainsOnCell.length > 0 ||
+              activeTreasureOnCell ||
+              isSameCell(cell, renderState.boss.homeCell)
+            ));
     const color = invalid ? 0x8f2631 : 0xe1b35a;
     this.hoverGraphics.lineStyle(3, color, 0.86);
     this.hoverGraphics.strokeRect(
@@ -824,6 +1013,46 @@ export class DungeonScene extends Phaser.Scene {
       TILE_SIZE - 4,
       TILE_SIZE - 4,
     );
+
+    if (remainsOnCell.length > 0) {
+      const world = cellToWorld(cell);
+      const first = remainsOnCell[remainsOnCell.length - 1];
+      this.hoverLabel
+        .setText(remainsMapLabel(first, remainsOnCell.length))
+        .setData('details', remainsTooltip(first))
+        .setPosition(Math.min(world.x + 18, GRID_OFFSET_X + GRID_COLS * TILE_SIZE - 198), Math.max(8, world.y - 34))
+        .setVisible(true);
+      return;
+    }
+
+    if (transitionOnCell) {
+      const world = cellToWorld(cell);
+      this.hoverLabel
+        .setText(transitionMapLabel(transitionOnCell))
+        .setPosition(Math.min(world.x + 18, GRID_OFFSET_X + GRID_COLS * TILE_SIZE - 170), Math.max(8, world.y - 28))
+        .setVisible(true);
+      return;
+    }
+
+    if (defenseOnCell?.kind === 'trap') {
+      const world = cellToWorld(cell);
+      this.hoverLabel
+        .setText(trapTooltip(defenseOnCell))
+        .setPosition(Math.min(world.x + 18, GRID_OFFSET_X + GRID_COLS * TILE_SIZE - 170), Math.max(8, world.y - 28))
+        .setVisible(true);
+      return;
+    }
+
+    const zone = renderState.zones.find((candidate) => candidate.cells.some((zoneCell) => isSameCell(zoneCell, cell)));
+
+    if (zone && (zone.type !== 'corridor' || selectedDefense === 'guardian')) {
+      const world = cellToWorld(cell);
+      const guardianSuffix = zone.guardianId ? '\nGardien: present' : '';
+      this.hoverLabel
+        .setText(`${zone.label}\nDanger: ${zone.dangerLevel.toFixed(1)}${guardianSuffix}`)
+        .setPosition(Math.min(world.x + 18, GRID_OFFSET_X + GRID_COLS * TILE_SIZE - 170), Math.max(8, world.y - 28))
+        .setVisible(true);
+    }
   }
 
   private publishUi(): void {
@@ -926,6 +1155,8 @@ function roleBadgeText(adventurer: AdventurerEntity): string {
       return 'MAG';
     case 'healer':
       return 'SOIN';
+    case 'cartographer':
+      return 'CART';
     default:
       return '?';
   }
@@ -945,6 +1176,8 @@ function roleBadgeColor(adventurer: AdventurerEntity): string {
       return 'rgba(184, 115, 214, 0.94)';
     case 'healer':
       return 'rgba(121, 199, 161, 0.94)';
+    case 'cartographer':
+      return 'rgba(214, 177, 95, 0.94)';
     default:
       return 'rgba(244, 234, 210, 0.9)';
   }
@@ -960,6 +1193,8 @@ function adventurerFxText(adventurer: AdventurerEntity): string {
       return 'GLACE';
     case 'healer':
       return 'SOIN';
+    case 'cartographer':
+      return 'CARTE';
     default:
       return 'ACTIF';
   }
@@ -967,6 +1202,8 @@ function adventurerFxText(adventurer: AdventurerEntity): string {
 
 function defenseFxText(defense: DefenseEntity): string {
   switch (defense.type) {
+    case 'guardian':
+      return 'GARDE';
     case 'goblin':
       return 'SOURNOIS';
     case 'skeleton':
@@ -976,9 +1213,43 @@ function defenseFxText(defense: DefenseEntity): string {
     case 'fireTrap':
     case 'spikeTrap':
       return 'PIEGE -';
+    case 'roomLockTrap':
+      return 'VERROU';
     default:
       return 'ACTIF';
   }
+}
+
+function trapMapShortName(defense: DefenseEntity, fallback: string): string {
+  if (defense.trapState === 'disarmed') {
+    return 'OFF';
+  }
+
+  if (defense.trapState === 'triggered') {
+    return 'LOCK';
+  }
+
+  if (defense.trapState === 'cleared') {
+    return 'CLR';
+  }
+
+  return fallback;
+}
+
+function trapVisualAlpha(defense: DefenseEntity): number {
+  if (defense.kind !== 'trap') {
+    return 1;
+  }
+
+  if (defense.trapState === 'disarmed' || defense.trapState === 'cleared') {
+    return 0.56;
+  }
+
+  if (defense.cooldownRemainingMs > 0) {
+    return 0.52;
+  }
+
+  return 1;
 }
 
 function isTreasurePlacementTool(tool: ConstructionTool | null): boolean {
@@ -1036,6 +1307,69 @@ function treasureStrokeColor(kind: DungeonTreasureKind): number {
   }
 }
 
+function remainsTooltip(remains: AdventurerRemains): string {
+  const loot = remains.loot.claimed
+    ? `Butin: deja fouille.`
+    : `Butin: ${remains.loot.label} (+${remains.loot.goldValue} or).`;
+
+  return `Restes de ${remains.ownerName} - ${roleLabel(remains.ownerRole)}.\n${remains.causeLabel}. ${remains.relicLabel}.\n${loot}`;
+}
+
+function remainsMapLabel(remains: AdventurerRemains, stackCount: number): string {
+  return stackCount > 1 ? `${remains.ownerName}\n+${stackCount - 1}` : remains.ownerName;
+}
+
+function transitionMapLabel(transition: DungeonTransition): string {
+  return `${transition.label}\nVers ${transition.toMapId}`;
+}
+
+function trapTooltip(defense: DefenseEntity): string {
+  const definition = getDefenseDefinition(defense.type);
+  const state =
+    defense.trapState === 'disarmed'
+      ? 'Desarme'
+      : defense.trapState === 'triggered'
+        ? 'Verrouille'
+        : defense.trapState === 'cleared'
+          ? 'Rouvre'
+          : 'Arme';
+
+  return `${definition.name}\nEtat: ${state}`;
+}
+
+function roleLabel(role: AdventurerRemains['ownerRole']): string {
+  switch (role) {
+    case 'warrior':
+      return 'Guerrier';
+    case 'thief':
+      return 'Voleur';
+    case 'mage':
+      return 'Mage';
+    case 'healer':
+      return 'Soigneur';
+    case 'cartographer':
+      return 'Cartographe';
+    default:
+      return 'Aventurier';
+  }
+}
+
+function remainsToneColor(tone: AdventurerRemains['emotionalTone']): number {
+  switch (tone) {
+    case 'revenge':
+      return 0xc75a42;
+    case 'respect':
+      return 0xd6b15f;
+    case 'grief':
+      return 0x9f947e;
+    case 'fear':
+      return 0x7d94d6;
+    case 'warning':
+    default:
+      return 0xe1b35a;
+  }
+}
+
 function combatFeedbackVisual(event: CombatFeedbackEvent): { color: number; prefix: string; fontSize: number } {
   if (event.kind === 'heal') {
     return { color: 0x9ee29f, prefix: '', fontSize: 12 };
@@ -1050,8 +1384,12 @@ function combatFeedbackVisual(event: CombatFeedbackEvent): { color: number; pref
       return { color: 0xb873d6, prefix: 'M', fontSize: 11 };
     case 'healer':
       return { color: 0x79c7a1, prefix: 'S', fontSize: 11 };
+    case 'cartographer':
+      return { color: 0xd6b15f, prefix: 'C', fontSize: 11 };
     case 'boss':
       return { color: 0xff6b6b, prefix: 'BOSS', fontSize: 13 };
+    case 'guardian':
+      return { color: 0xff9a7a, prefix: 'GUARD', fontSize: 12 };
     case 'trap':
       return { color: 0xe1b35a, prefix: 'PIEGE', fontSize: 10 };
     case 'monster':

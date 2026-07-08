@@ -1,4 +1,4 @@
-import { DOOR_COST, DOOR_HP, isInEntrySafeZone, isSameCell } from '../game/constants';
+import { DEFAULT_MAP_ID, DOOR_COST, DOOR_HP, isInEntrySafeZone, isSameCell } from '../game/constants';
 import { getTileAt } from '../game/dungeonTiles';
 import { ECONOMY_BALANCE } from './economyBalance';
 import type { DungeonDoor, DungeonTile, GridCell } from '../game/types';
@@ -108,6 +108,7 @@ export function placeDoorAt(
 export function createDoor(id: string, cell: GridCell): DungeonDoor {
   return {
     id,
+    mapId: DEFAULT_MAP_ID,
     cell: { ...cell },
     locked: true,
     openedForExpedition: false,

@@ -22,6 +22,7 @@ const FIRST_NAMES: Record<AdventurerRole, string[]> = {
   thief: ['Filou', 'Rapiat', 'Serrure', 'Velours', 'Griffe', 'Larcin'],
   mage: ['Pyrox', 'Runebert', 'Etincelle', 'Manuscrit', 'Cendrelin', 'Vortex'],
   healer: ['Pansement', 'Misericorde', 'Tisane', 'Baume', 'Clairbaume', 'Onguent'],
+  cartographer: ['Atlasin', 'Croquis', 'Boussole', 'Marge', 'Calepin', 'Repere'],
 };
 
 const FAMILY_NAMES = ['de Suie', 'Roncefer', 'Clairfosse', 'Mornelune', 'Portecharme', 'Brisecrypte'];
@@ -86,6 +87,8 @@ export function createInitialWorldMemory(): RunWorldMemory {
     nextProfileNumber: 1,
     rumors: [],
     treasuresStolen: 0,
+    kingdomFacts: [],
+    lostCartographerReports: 0,
   };
 }
 
@@ -384,6 +387,7 @@ const HEIR_FIRST_NAMES: Record<AdventurerRole, string[]> = {
   thief: ['Revanche', 'Ombrage', 'Rancoeur'],
   mage: ['Memoriam', 'Cendrier', 'Requiem'],
   healer: ['Promesse', 'Relique', 'Veillee'],
+  cartographer: ['Palimpseste', 'Releve', 'Retrouve'],
 };
 
 export function createHeirProfile(
@@ -648,6 +652,10 @@ function createTraits(
   }
 
   if (role === 'healer') {
+    traits.add('cautious');
+  }
+
+  if (role === 'cartographer') {
     traits.add('cautious');
   }
 

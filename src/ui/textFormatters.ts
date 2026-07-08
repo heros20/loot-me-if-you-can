@@ -22,6 +22,8 @@ export function roleLabel(role: string): string {
       return 'Mage';
     case 'healer':
       return 'Soigneur';
+    case 'cartographer':
+      return 'Cartographe';
     case 'guild':
       return 'Guilde';
     case 'rumor':
@@ -41,6 +43,8 @@ export function roleInitial(role: string): string {
       return 'M';
     case 'healer':
       return 'S';
+    case 'cartographer':
+      return 'C';
     case 'guild':
       return 'PN';
     case 'rumor':

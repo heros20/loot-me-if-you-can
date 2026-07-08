@@ -219,6 +219,8 @@ function roleLabel(role: AdventurerRole): string {
       return 'mage';
     case 'healer':
       return 'soigneur';
+    case 'cartographer':
+      return 'cartographe';
     default:
       return role;
   }

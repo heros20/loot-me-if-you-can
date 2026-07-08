@@ -5,7 +5,15 @@ export function addThreat(table: Record<string, number>, adventurer: AdventurerE
     return;
   }
 
-  const roleMultiplier = adventurer.role === 'warrior' ? 1.35 : adventurer.role === 'healer' ? 0.58 : adventurer.role === 'thief' ? 0.82 : 1;
+  const roleMultiplier = adventurer.role === 'warrior'
+    ? 1.35
+    : adventurer.role === 'healer'
+      ? 0.58
+      : adventurer.role === 'cartographer'
+        ? 0.52
+        : adventurer.role === 'thief'
+          ? 0.82
+          : 1;
   table[adventurer.id] = Math.min(250, (table[adventurer.id] ?? 0) + amount * roleMultiplier);
 }
 
@@ -52,13 +60,15 @@ export function chooseThreatTarget(
             ? 4
             : adventurer.role === 'mage'
               ? -22
-              : -34;
+              : adventurer.role === 'cartographer'
+                ? -28
+                : -34;
       const frontlineBonus = adventurer.role === 'warrior' && adventurer.hp > 0 ? 24 : 0;
       const lowHealthPenalty = adventurer.hp / adventurer.maxHp < 0.28 ? -16 : 0;
       const threat = threatByAdventurerId[adventurer.id] ?? 0;
       const targetStickiness = preferredId && adventurer.id === preferredId ? 18 : 0;
       const backlineSafety =
-        adventurer.role === 'mage' || adventurer.role === 'healer'
+        adventurer.role === 'mage' || adventurer.role === 'healer' || adventurer.role === 'cartographer'
           ? Math.max(0, 3 - targetDistance) * -10
           : 0;
 
