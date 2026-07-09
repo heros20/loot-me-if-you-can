@@ -105,6 +105,65 @@ export function createPlaceholderTextures(scene: Phaser.Scene): void {
     graphics.fillCircle(23, 17, 2);
   });
 
+  makeTexture(scene, TEXTURE_KEYS.decor.transitionDown, 24, (graphics) => {
+    graphics.fillStyle(0x0f0d10, 0.9);
+    graphics.fillRoundedRect(1, 1, 22, 22, 4);
+    graphics.fillStyle(0x6e93c9, 1);
+    graphics.fillTriangle(6, 8, 18, 8, 12, 18);
+  });
+
+  makeTexture(scene, TEXTURE_KEYS.decor.transitionUp, 24, (graphics) => {
+    graphics.fillStyle(0x0f0d10, 0.9);
+    graphics.fillRoundedRect(1, 1, 22, 22, 4);
+    graphics.fillStyle(0x79c7a1, 1);
+    graphics.fillTriangle(6, 16, 18, 16, 12, 6);
+  });
+
+  makeTexture(scene, TEXTURE_KEYS.decor.treasureGold, 24, (graphics) => {
+    graphics.fillStyle(0xe1b35a, 1);
+    graphics.fillRoundedRect(4, 8, 16, 11, 3);
+    graphics.fillStyle(0x7a4a13, 1);
+    graphics.fillRect(7, 5, 10, 5);
+  });
+
+  makeTexture(scene, TEXTURE_KEYS.decor.treasureWeapon, 24, (graphics) => {
+    graphics.lineStyle(3, 0xd85a32, 1);
+    graphics.lineBetween(7, 18, 17, 6);
+    graphics.lineStyle(2, 0xf6d88a, 1);
+    graphics.lineBetween(6, 14, 11, 19);
+  });
+
+  makeTexture(scene, TEXTURE_KEYS.decor.treasureArmor, 24, (graphics) => {
+    graphics.fillStyle(0x7d94d6, 1);
+    graphics.fillTriangle(12, 4, 20, 8, 17, 19);
+    graphics.fillTriangle(12, 4, 4, 8, 7, 19);
+    graphics.lineStyle(1, 0xd8e2ff, 1);
+    graphics.strokeTriangle(12, 4, 20, 8, 17, 19);
+  });
+
+  makeTexture(scene, TEXTURE_KEYS.decor.treasureTechnique, 24, (graphics) => {
+    graphics.fillStyle(0xb873d6, 1);
+    graphics.fillCircle(12, 12, 7);
+    graphics.lineStyle(2, 0xe8c8ff, 1);
+    graphics.strokeCircle(12, 12, 9);
+  });
+
+  makeTexture(scene, TEXTURE_KEYS.decor.remains, 24, (graphics) => {
+    graphics.fillStyle(0xd8d0b8, 1);
+    graphics.fillCircle(12, 8, 5);
+    graphics.lineStyle(2, 0xd8d0b8, 1);
+    graphics.lineBetween(5, 17, 19, 11);
+    graphics.lineBetween(5, 11, 19, 17);
+  });
+
+  makeTexture(scene, TEXTURE_KEYS.decor.relic, 24, (graphics) => {
+    graphics.fillStyle(0xd6b15f, 1);
+    graphics.fillRoundedRect(7, 5, 10, 14, 2);
+    graphics.lineStyle(1, 0x4a3217, 1);
+    graphics.lineBetween(9, 9, 15, 9);
+    graphics.lineBetween(9, 13, 14, 13);
+  });
+
   makeTexture(scene, TEXTURE_KEYS.boss, 44, (graphics) => {
     graphics.fillStyle(0x8f2631, 1);
     graphics.fillCircle(22, 24, 16);

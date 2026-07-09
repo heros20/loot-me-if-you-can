@@ -95,7 +95,6 @@ import {
   recordProfileTrapTriggered,
   recordTreasureTheft,
   releaseUndeployedExpedition,
-  updateDungeonReputation,
 } from '../systems/adventurerProfiles';
 import {
   planExpeditionComposition,
@@ -136,7 +135,19 @@ import {
 import {
   computeExpeditionEconomy,
   computeDoorRemovalRefund,
+  computeTrapSalvageValue,
+  computeTreasureReplacementPenalty,
 } from '../systems/economyBalance';
+import {
+  applyRunProgressionFromExpedition,
+  computeReputationRewardBonus,
+  computeReputationRolePressure,
+  describeDefenseUnlock,
+  getReputationTierInfo,
+  isDefenseUnlockedByReputation,
+  normalizeDungeonReputation,
+} from '../systems/runProgressionSystem';
+import { BOSS_BALANCE } from '../systems/combatBalance';
 import { tickAdventurerBarks, tickGlobalBarks, tryBark } from '../systems/barkSystem';
 import type { BarkKind } from '../systems/barkSystem';
 import { assignGroupRetreat } from '../systems/partyRetreatSystem';
@@ -207,19 +218,20 @@ import {
   createInitialDungeonMaps,
   recalculateDungeonMapZones,
 } from '../systems/dungeonMapSystem';
+import { EXPEDITION_PACING_BALANCE } from '../systems/progressionBalance';
 
 const BOSS_TEMPLATE: Omit<BossEntity, 'hp' | 'attackTimerMs' | 'abilities'> = {
   mapId: FINAL_MAP_ID,
   homeCell: BOSS_CELL,
   x: BOSS_CELL.x,
   y: BOSS_CELL.y,
-  maxHp: 340,
-  damage: 16,
-  attackRange: 1.25,
+  maxHp: BOSS_BALANCE.maxHp,
+  damage: BOSS_BALANCE.damage,
+  attackRange: BOSS_BALANCE.attackRange,
   // La detection doit depasser la portee du mage (2.55 + 0.3), sinon le boss se fait kiter sans riposter.
-  detectionRange: 3.5,
-  leashRange: 3.1,
-  attackCooldownMs: 760,
+  detectionRange: BOSS_BALANCE.detectionRange,
+  leashRange: BOSS_BALANCE.leashRange,
+  attackCooldownMs: BOSS_BALANCE.attackCooldownMs,
   targetAdventurerId: null,
   tauntedByAdventurerId: null,
   tauntTimerMs: 0,
@@ -520,6 +532,13 @@ export class DungeonSimulation {
   }
 
   selectDefense(type: DefenseType): void {
+    if (!isDefenseUnlockedByReputation(type, this.state.world.dungeonReputation, this.state.wave)) {
+      this.state.selectedConstructionTool = null;
+      this.state.selectedDefense = null;
+      this.state.message = describeDefenseUnlock(type);
+      return;
+    }
+
     this.state.selectedConstructionTool = null;
     this.state.selectedDefense = type;
     this.state.message = `${getDefenseDefinition(type).name} selectionne. La decoration devient enfin hostile.`;
@@ -556,6 +575,11 @@ export class DungeonSimulation {
 
     if (!selected) {
       this.state.message = 'Choisis une horreur a poser avant de tapisser le sol de regrets.';
+      return;
+    }
+
+    if (!isDefenseUnlockedByReputation(selected, this.state.world.dungeonReputation, this.state.wave)) {
+      this.state.message = describeDefenseUnlock(selected);
       return;
     }
 
@@ -1083,7 +1107,9 @@ export class DungeonSimulation {
       unexploredRooms: new Set<string>(),
       frontierRooms: new Set<string>(),
       explorationTarget: null,
-      explorationChoicesRemaining: profiles.some((profile) => profile.role === 'cartographer') ? 4 : 2,
+      explorationChoicesRemaining: profiles.some((profile) => profile.role === 'cartographer')
+        ? EXPEDITION_PACING_BALANCE.cartographerExplorationChoices
+        : EXPEDITION_PACING_BALANCE.baseExplorationChoices,
     };
     this.state.report = null;
     this.state.adventurers = [];
@@ -1156,6 +1182,8 @@ export class DungeonSimulation {
   }
 
   getSnapshot(): DungeonSnapshot {
+    this.state.world.dungeonReputation = normalizeDungeonReputation(this.state.world.dungeonReputation);
+    const reputationTier = getReputationTierInfo(this.state.world.dungeonReputation.value);
     const continuityPreview = this.buildContinuityPreview(this.state.wave);
     const previewRoster = this.state.phase === 'wave' && this.state.runtime
       ? this.state.runtime.spawnQueue.map((profile) => profile.role)
@@ -1195,6 +1223,7 @@ export class DungeonSimulation {
       availableDefenses: DEFENSE_ORDER.map((type) => {
         const definition = getDefenseDefinition(type);
         const uniqueGuardianAlreadyPlaced = type === 'guardian' && this.state.defenses.some((defense) => defense.alive && defense.type === 'guardian');
+        const locked = !isDefenseUnlockedByReputation(type, this.state.world.dungeonReputation, this.state.wave);
         return {
           type,
           kind: definition.kind,
@@ -1202,7 +1231,9 @@ export class DungeonSimulation {
           description: definition.description,
           cost: definition.cost,
           color: definition.color,
-          disabled: this.state.phase !== 'build' || this.state.gold < definition.cost || uniqueGuardianAlreadyPlaced,
+          disabled: this.state.phase !== 'build' || this.state.gold < definition.cost || uniqueGuardianAlreadyPlaced || locked,
+          locked,
+          unlockHint: locked ? describeDefenseUnlock(type) : null,
         };
       }),
       dungeonTiles: this.state.tiles,
@@ -1228,6 +1259,9 @@ export class DungeonSimulation {
       survivedWaves: Math.max(0, this.state.wave - 1),
       dungeonReputation: this.state.world.dungeonReputation.value,
       dungeonReputationTitle: this.state.world.dungeonReputation.title,
+      dungeonThreat: this.state.world.dungeonReputation.threat,
+      dungeonReputationTier: reputationTier.tier,
+      dungeonReputationSummary: `${reputationTier.title} - menace ${reputationTier.threatLabel}. ${reputationTier.description}`,
       recentJournal: this.state.world.expeditionHistory.slice(-5).map((record) => record.note),
       recentChronicles: this.state.world.chronicles.slice(-5).map((entry) => `Jour ${entry.day}: ${entry.text}`),
       activeAdventurerNames: this.state.adventurers.map((adventurer) => adventurer.name),
@@ -1322,13 +1356,14 @@ export class DungeonSimulation {
 
   private buildRolePressureWithKingdomMemory(wave: number): Record<AdventurerRole, number> {
     const kingdomPressure = kingdomMemoryRolePressure(this.state.world.kingdomMemory, wave);
+    const reputationPressure = computeReputationRolePressure(this.state.world);
 
     return {
-      warrior: this.state.memory.rolePressure.warrior + (kingdomPressure.warrior ?? 0),
-      thief: this.state.memory.rolePressure.thief + (kingdomPressure.thief ?? 0),
-      mage: this.state.memory.rolePressure.mage + (kingdomPressure.mage ?? 0),
-      healer: this.state.memory.rolePressure.healer + (kingdomPressure.healer ?? 0),
-      cartographer: this.state.memory.rolePressure.cartographer + (kingdomPressure.cartographer ?? 0),
+      warrior: this.state.memory.rolePressure.warrior + (kingdomPressure.warrior ?? 0) + (reputationPressure.warrior ?? 0),
+      thief: this.state.memory.rolePressure.thief + (kingdomPressure.thief ?? 0) + (reputationPressure.thief ?? 0),
+      mage: this.state.memory.rolePressure.mage + (kingdomPressure.mage ?? 0) + (reputationPressure.mage ?? 0),
+      healer: this.state.memory.rolePressure.healer + (kingdomPressure.healer ?? 0) + (reputationPressure.healer ?? 0),
+      cartographer: this.state.memory.rolePressure.cartographer + (kingdomPressure.cartographer ?? 0) + (reputationPressure.cartographer ?? 0),
     };
   }
 
@@ -2121,7 +2156,13 @@ export class DungeonSimulation {
         continue;
       }
 
-      const adventurer = createAdventurer(activeProfile, `adventurer-${this.nextAdventurerId}`, this.state.wave, runtime.spawned);
+      const adventurer = createAdventurer(
+        activeProfile,
+        `adventurer-${this.nextAdventurerId}`,
+        this.state.wave,
+        runtime.spawned,
+        this.state.world.dungeonReputation,
+      );
       this.nextAdventurerId += 1;
       runtime.spawned += 1;
       this.state.adventurers.push(adventurer);
@@ -2297,7 +2338,7 @@ export class DungeonSimulation {
 
     if (this.roomLockBlocksStep(adventurer.mapId, currentCell, nextCell)) {
       adventurer.path = [];
-      adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, 220);
+      adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, EXPEDITION_PACING_BALANCE.roomLockHesitationMs);
       adventurer.behaviorState = 'evaluatingRoom';
       tryBark(adventurer, 'roomLockTriggered', this.visibleBarkCount());
       this.state.message = 'Les issues sont verrouillees: il faut abattre les defenseurs de la salle.';
@@ -2408,7 +2449,7 @@ export class DungeonSimulation {
     }
 
     if (adventurer.barkCooldownMs <= 0) {
-      adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, 520);
+      adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, EXPEDITION_PACING_BALANCE.fleeTrapHesitationMs);
       this.state.runtime.stats.tacticalHesitations += 1;
       tryBark(adventurer, 'fleeTrap', this.visibleBarkCount());
       return true;
@@ -2453,27 +2494,27 @@ export class DungeonSimulation {
     }
 
     if (adventurer.role !== 'thief') {
-      adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, 260);
+      adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, EXPEDITION_PACING_BALANCE.doorBlockedHesitationMs);
       tryBark(adventurer, 'doorBlocked', this.visibleBarkCount());
       return;
     }
 
     if (adventurer.lockpicksUsedThisExpedition >= adventurer.maxLockpicksPerExpedition) {
-      adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, 520);
+      adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, EXPEDITION_PACING_BALANCE.doorNoLockpicksHesitationMs);
       tryBark(adventurer, 'doorNoLockpicks', this.visibleBarkCount());
       this.state.message = `${adventurer.name}: Plus de crochets. Deux portes, pas trois.`;
       return;
     }
 
     if (door.beingPickedById && door.beingPickedById !== adventurer.id) {
-      adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, 220);
+      adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, EXPEDITION_PACING_BALANCE.doorBusyHesitationMs);
       return;
     }
 
     const wasPicking = door.beingPickedById === adventurer.id;
     door.beingPickedById = adventurer.id;
     door.pickProgressMs = Math.min(door.pickRequiredMs, door.pickProgressMs + deltaMs);
-    adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, 80);
+    adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, EXPEDITION_PACING_BALANCE.doorPickingPulseMs);
     stats.thiefDoorLeads += 1;
     tryBark(adventurer, 'doorThief', this.visibleBarkCount());
 
@@ -2515,7 +2556,7 @@ export class DungeonSimulation {
       this.startGroupRetreat('Porte verrouillee: plus de crochets.', 'lockedDoorNoThief');
     }
 
-    adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, 900);
+    adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, EXPEDITION_PACING_BALANCE.doorRetreatHesitationMs);
     tryBark(adventurer, 'doorNoLockpicks', this.visibleBarkCount());
     this.state.message = 'Plus de crochets. La serrure gagne par plafond logistique.';
   }
@@ -2533,7 +2574,7 @@ export class DungeonSimulation {
       this.startGroupRetreat('Porte verrouillee sans voleur.', 'lockedDoorNoThief');
     }
 
-    adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, 900);
+    adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, EXPEDITION_PACING_BALANCE.doorRetreatHesitationMs);
     tryBark(adventurer, 'doorNoThief', this.visibleBarkCount());
     this.state.message = 'Sans voleur, la serrure gagne par forfait. Retraite.';
   }
@@ -3007,7 +3048,7 @@ export class DungeonSimulation {
     trap.abilityFxTimerMs = COMBAT_ABILITY_BALANCE.abilityFxMs;
     adventurer.path = [];
     adventurer.behaviorState = 'evaluatingRoom';
-    adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, 220);
+    adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, EXPEDITION_PACING_BALANCE.roomLockHesitationMs);
     this.recordMemoryObservation(adventurer, 'roomLockTrapSeen', trap.cell, 'Salle verrouillee', 0.54, adventurer.role === 'cartographer' ? 'exact' : 'room');
     this.recordMemoryObservation(adventurer, 'dangerousRoomSeen', zone.center, `${zone.label} verrouillee`, 0.46, adventurer.role === 'cartographer' ? 'exact' : 'room');
     this.state.runtime.stats.storyEvents.push(`${adventurer.name} declenche un piege de verrouillage: ${zone.label} se ferme.`);
@@ -3062,7 +3103,10 @@ export class DungeonSimulation {
     adventurer.path = [];
     adventurer.lastCellKey = `${adventurer.mapId}:${cellKey(transition.toCell)}`;
     adventurer.behaviorState = 'regrouping';
-    adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, adventurer.role === 'warrior' ? 120 : 220);
+    adventurer.hesitationTimerMs = Math.max(
+      adventurer.hesitationTimerMs,
+      adventurer.role === 'warrior' ? EXPEDITION_PACING_BALANCE.transitionWarriorRegroupMs : EXPEDITION_PACING_BALANCE.transitionRegroupMs,
+    );
     this.recordMemoryObservation(adventurer, 'floorReached', transition.toCell, this.getMap(transition.toMapId).label, 0.52, adventurer.role === 'cartographer' ? 'exact' : 'room');
     this.state.expeditionMapId = transition.toMapId;
     this.setDisplayedMap(transition.toMapId);
@@ -3091,7 +3135,11 @@ export class DungeonSimulation {
     adventurer.behaviorState = adventurer.role === 'cartographer' ? 'mapping' : 'evaluatingRoom';
     adventurer.hesitationTimerMs = Math.max(
       adventurer.hesitationTimerMs,
-      adventurer.role === 'warrior' ? 120 : adventurer.role === 'cartographer' ? 360 : 220,
+      adventurer.role === 'warrior'
+        ? EXPEDITION_PACING_BALANCE.roomEvaluationWarriorMs
+        : adventurer.role === 'cartographer'
+          ? EXPEDITION_PACING_BALANCE.roomEvaluationCartographerMs
+          : EXPEDITION_PACING_BALANCE.roomEvaluationDefaultMs,
     );
     this.state.runtime.stats.roomEvaluations += 1;
     tryBark(adventurer, adventurer.role === 'warrior' ? 'secureArea' : adventurer.role === 'cartographer' ? 'mapping' : 'stayTogether', this.visibleBarkCount());
@@ -3229,7 +3277,10 @@ export class DungeonSimulation {
 
       this.recordMemoryObservation(adventurer, 'bossApproachKnown', zone.center, 'Approche du boss', confidence + 0.02, precision);
       adventurer.behaviorState = adventurer.role === 'cartographer' ? 'mapping' : 'bossPreparation';
-      adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, adventurer.role === 'warrior' ? 120 : 260);
+      adventurer.hesitationTimerMs = Math.max(
+        adventurer.hesitationTimerMs,
+        adventurer.role === 'warrior' ? EXPEDITION_PACING_BALANCE.bossApproachWarriorMs : EXPEDITION_PACING_BALANCE.bossPreparationMs,
+      );
       runtime.stats.tacticalHesitations += 1;
       tryBark(adventurer, adventurer.role === 'cartographer' ? 'mapBoss' : 'stayTogether', this.visibleBarkCount());
     }
@@ -3318,7 +3369,10 @@ export class DungeonSimulation {
     const line = reactionLineFor(nearby, shouldRecognize);
     runtime.stats.remainsReactionEvents.push(line);
     runtime.stats.storyEvents.push(line);
-    adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, adventurer.role === 'warrior' ? 180 : 360);
+    adventurer.hesitationTimerMs = Math.max(
+      adventurer.hesitationTimerMs,
+      adventurer.role === 'warrior' ? EXPEDITION_PACING_BALANCE.remainsWarriorReactionMs : EXPEDITION_PACING_BALANCE.remainsReactionMs,
+    );
     runtime.stats.tacticalHesitations += 1;
     adventurer.behaviorState = adventurer.role === 'cartographer' ? 'mapping' : 'evaluatingRoom';
     tryBark(adventurer, shouldRecognize ? 'relicRecognized' : 'remainsSeen', this.visibleBarkCount());
@@ -3708,14 +3762,25 @@ export class DungeonSimulation {
     const currentWave = this.state.wave;
     const treasureStolen = runtime.stats.treasureStolen;
     const trapRefundGold = this.dismantleRemainingTraps();
-    const rawGoldAwarded = 22 + currentWave * 6;
-    const treasurePenaltyGold = treasureStolen ? Math.min(rawGoldAwarded + trapRefundGold, 8 + currentWave * 2) : 0;
+    const reputationBonusGold = computeReputationRewardBonus(this.state.world.dungeonReputation);
+    const rawGoldAwarded = computeExpeditionEconomy({
+      wave: currentWave,
+      boss: this.state.boss,
+      treasureStolen: false,
+      trapRefundGold: 0,
+      treasurePenaltyGold: 0,
+      reputationBonusGold,
+    }).goldAwarded;
+    const treasurePenaltyGold = treasureStolen
+      ? computeTreasureReplacementPenalty({ wave: currentWave, goldAwarded: rawGoldAwarded, trapRefundGold })
+      : 0;
     const economy = computeExpeditionEconomy({
       wave: currentWave,
       boss: this.state.boss,
       treasureStolen,
       trapRefundGold,
       treasurePenaltyGold,
+      reputationBonusGold,
     });
     const goldAwarded = economy.goldAwarded;
     const preparationBudget = economy.preparationBudget;
@@ -3760,13 +3825,14 @@ export class DungeonSimulation {
     }
 
     const previousTitle = this.state.world.dungeonReputation.title;
-    const reputationDelta = updateDungeonReputation(
-      this.state.world,
-      runtime.stats.adventurersKilled * 2 + runtime.stats.adventurersEscaped + currentWave - (treasureStolen ? 6 : 0),
-      treasureStolen
-        ? 'Un tresor vole fait rire les tavernes. Tres mauvais pour le prestige.'
-        : 'Les morts et survivants bavards ameliorent la notoriete du donjon.',
-    );
+    const progression = applyRunProgressionFromExpedition(this.state.world, {
+      wave: currentWave,
+      cleared: true,
+      treasureStolen,
+      stats: runtime.stats,
+      currentGold: this.state.gold,
+    });
+    adaptationNotes.push(...progression.lines);
     this.addReputationChronicle(previousTitle);
     const bossHeal = 24 + currentWave * 2;
     this.state.boss.hp = Math.min(this.state.boss.maxHp, this.state.boss.hp + bossHeal);
@@ -3776,13 +3842,16 @@ export class DungeonSimulation {
       currentWave,
       runtime,
       goldAwarded,
+      economy.reputationBonusGold,
       trapRefundGold,
       treasurePenaltyGold,
       economy.treasureProtectedBonusGold,
       economy.bossSurvivalBonusGold,
       Math.max(0, preparationBudget),
       adaptationNotes,
-      reputationDelta,
+      progression.reputationDelta,
+      progression.threatDelta,
+      progression.lines,
     );
     this.state.wave += 1;
     this.state.phase = 'report';
@@ -3831,11 +3900,14 @@ export class DungeonSimulation {
     runtime.stats.adventurersEscaped += survivorRecords.length;
     adaptationNotes.unshift(...this.applyKingdomMemoryTransmission(runtime, this.state.wave));
     const previousTitle = this.state.world.dungeonReputation.title;
-    const reputationDelta = updateDungeonReputation(
-      this.state.world,
-      runtime.stats.adventurersKilled + survivorRecords.length,
-      'La chute du boss fera parler les tavernes. Tres mauvais pour la confidentialite.',
-    );
+    const progression = applyRunProgressionFromExpedition(this.state.world, {
+      wave: this.state.wave,
+      cleared: false,
+      treasureStolen: runtime.stats.treasureStolen,
+      stats: runtime.stats,
+      currentGold: this.state.gold,
+    });
+    adaptationNotes.push(...progression.lines);
     this.addReputationChronicle(previousTitle);
     this.state.report = this.createReport(
       false,
@@ -3847,8 +3919,11 @@ export class DungeonSimulation {
       0,
       0,
       0,
+      0,
       adaptationNotes,
-      reputationDelta,
+      progression.reputationDelta,
+      progression.threatDelta,
+      progression.lines,
     );
     this.state.phase = 'defeat';
     this.state.runtime = null;
@@ -3899,6 +3974,7 @@ export class DungeonSimulation {
     wave: number,
     runtime: WaveRuntime,
     goldAwarded: number,
+    reputationBonusGold: number,
     trapRefundGold: number,
     treasurePenaltyGold: number,
     treasureProtectedBonusGold: number,
@@ -3906,6 +3982,8 @@ export class DungeonSimulation {
     preparationBudget: number,
     adaptationNotes: string[],
     reputationDelta: number,
+    threatDelta: number,
+    runProgressionLines: string[],
   ): WaveReport {
     const trapHighlights = statsToReportEntries(runtime.stats.trapStats, 'trap');
     const minionHighlights = statsToReportEntries(runtime.stats.minionStats, 'minion');
@@ -3944,6 +4022,7 @@ export class DungeonSimulation {
       adventurersEscaped: runtime.stats.adventurersEscaped,
       bossDamageTaken: Math.round(runtime.stats.bossDamageTaken),
       goldAwarded,
+      reputationBonusGold,
       trapRefundGold,
       treasurePenaltyGold,
       treasureProtectedBonusGold,
@@ -3976,7 +4055,12 @@ export class DungeonSimulation {
       relicsRecognized: runtime.stats.relicsRecognized,
       remainsLines,
       dungeonReputation: this.state.world.dungeonReputation.value,
+      dungeonThreat: this.state.world.dungeonReputation.threat,
+      reputationTier: this.state.world.dungeonReputation.tier,
+      reputationTierName: this.state.world.dungeonReputation.title,
       reputationDelta,
+      threatDelta,
+      runProgressionLines,
       trapHighlights,
       minionHighlights,
       storyLines,
@@ -3986,6 +4070,7 @@ export class DungeonSimulation {
       guildChanges: this.buildGuildChanges(wave, adaptationNotes),
       economyLines: this.buildEconomyLines(
         goldAwarded,
+        reputationBonusGold,
         trapRefundGold,
         treasurePenaltyGold,
         treasureProtectedBonusGold,
@@ -4321,6 +4406,7 @@ export class DungeonSimulation {
 
   private buildEconomyLines(
     goldAwarded: number,
+    reputationBonusGold: number,
     trapRefundGold: number,
     treasurePenaltyGold: number,
     treasureProtectedBonusGold: number,
@@ -4331,6 +4417,10 @@ export class DungeonSimulation {
       `Or gagne par notoriete: +${goldAwarded}.`,
       `Or recupere via demontage des pieges: +${trapRefundGold}.`,
     ];
+
+    if (reputationBonusGold > 0) {
+      lines.push(`Contrats attires par la reputation: +${reputationBonusGold}.`);
+    }
 
     if (treasureProtectedBonusGold > 0) {
       lines.push(`Tresor protege: +${treasureProtectedBonusGold}.`);
@@ -4480,7 +4570,7 @@ export class DungeonSimulation {
       runtime.explorationTarget = null;
     }
 
-    if (runtime.explorationChoicesRemaining <= 0 || adventurer.hp / adventurer.maxHp < 0.42) {
+    if (runtime.explorationChoicesRemaining <= 0 || adventurer.hp / adventurer.maxHp < EXPEDITION_PACING_BALANCE.explorationHpCutoffRatio) {
       return null;
     }
 
@@ -4521,8 +4611,12 @@ export class DungeonSimulation {
       blockedCellKeys,
     }).length || 99;
     const hasCartographer = runtime.partyProfiles.some((profile) => profile.role === 'cartographer');
-    const maxPath = adventurer.role === 'cartographer' || hasCartographer ? 16 : 10;
-    const maxDetour = adventurer.role === 'cartographer' || hasCartographer ? 12 : 7;
+    const maxPath = adventurer.role === 'cartographer' || hasCartographer
+      ? EXPEDITION_PACING_BALANCE.cartographerMaxExplorationPath
+      : EXPEDITION_PACING_BALANCE.normalMaxExplorationPath;
+    const maxDetour = adventurer.role === 'cartographer' || hasCartographer
+      ? EXPEDITION_PACING_BALANCE.cartographerMaxExplorationDetour
+      : EXPEDITION_PACING_BALANCE.normalMaxExplorationDetour;
 
     const selected = map.zones
       .filter(isExplorableZone)
@@ -4538,10 +4632,10 @@ export class DungeonSimulation {
         const pathLength = path.length;
         const score =
           zoneExplorationPriority(zone.type) +
-          (hasCartographer ? 8 : 0) +
-          (adventurer.role === 'cartographer' ? 8 : 0) -
-          pathLength * 1.15 -
-          Math.max(0, pathLength - primaryPathLength) * 0.9;
+          (hasCartographer ? EXPEDITION_PACING_BALANCE.explorationPartyCartographerScoreBonus : 0) +
+          (adventurer.role === 'cartographer' ? EXPEDITION_PACING_BALANCE.explorationCartographerSelfScoreBonus : 0) -
+          pathLength * EXPEDITION_PACING_BALANCE.explorationPathPenalty -
+          Math.max(0, pathLength - primaryPathLength) * EXPEDITION_PACING_BALANCE.explorationDetourPenalty;
 
         return { zone, pathLength, score };
       })
@@ -4843,7 +4937,10 @@ export class DungeonSimulation {
     const stagingCell = this.getBossStagingCell(adventurer);
 
     if (distance(adventurer.x, adventurer.y, stagingCell.x, stagingCell.y) <= 0.35) {
-      adventurer.hesitationTimerMs = Math.max(adventurer.hesitationTimerMs, adventurer.role === 'thief' ? 220 : 280);
+      adventurer.hesitationTimerMs = Math.max(
+        adventurer.hesitationTimerMs,
+        adventurer.role === 'thief' ? EXPEDITION_PACING_BALANCE.bossStagingThiefMs : EXPEDITION_PACING_BALANCE.bossStagingMs,
+      );
     }
   }
 
@@ -5308,7 +5405,7 @@ export class DungeonSimulation {
 
     this.state.defenses.forEach((defense) => {
       if (defense.kind === 'trap') {
-        refund += getDefenseDefinition(defense.type).cost;
+        refund += computeTrapSalvageValue(getDefenseDefinition(defense.type).cost);
         return;
       }
 
@@ -5748,18 +5845,8 @@ function isExplorableZone(zone: DungeonZone): boolean {
 }
 
 function zoneExplorationPriority(type: DungeonZone['type']): number {
-  switch (type) {
-    case 'defense':
-      return 34;
-    case 'secondary':
-      return 30;
-    case 'treasure':
-      return 24;
-    case 'antechamber':
-      return 18;
-    default:
-      return 0;
-  }
+  const priorities = EXPEDITION_PACING_BALANCE.explorationZonePriority;
+  return type in priorities ? priorities[type as keyof typeof priorities] : 0;
 }
 
 function personalityTrapAvoidance(adventurer: AdventurerEntity): number {

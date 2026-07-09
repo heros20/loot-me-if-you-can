@@ -447,8 +447,11 @@ export interface ChronicleEntry {
 
 export interface DungeonReputation {
   value: number;
+  threat: number;
+  tier: 0 | 1 | 2 | 3 | 4;
   title: string;
   lastChangeReason: string;
+  lastThreatReason: string;
 }
 
 export interface RunWorldMemory {
@@ -918,6 +921,7 @@ export interface WaveReport {
   adventurersEscaped: number;
   bossDamageTaken: number;
   goldAwarded: number;
+  reputationBonusGold: number;
   trapRefundGold: number;
   treasurePenaltyGold: number;
   treasureProtectedBonusGold: number;
@@ -950,7 +954,12 @@ export interface WaveReport {
   relicsRecognized: number;
   remainsLines: string[];
   dungeonReputation: number;
+  dungeonThreat: number;
+  reputationTier: 0 | 1 | 2 | 3 | 4;
+  reputationTierName: string;
   reputationDelta: number;
+  threatDelta: number;
+  runProgressionLines: string[];
   trapHighlights: ReportEntry[];
   minionHighlights: ReportEntry[];
   storyLines: string[];

@@ -1,10 +1,12 @@
 import Phaser from 'phaser';
-import { TEXTURE_KEYS } from '../assets/manifest';
+import { ENTITY_VISUALS, type EntityVisualProfile } from '../assets/animationManifest';
+import { AUDIO_KEYS, TEXTURE_KEYS } from '../assets/manifest';
 import {
   BOSS_CELL,
   DIG_COST,
   DOOR_COST,
   ENTRY_CELL,
+  FINAL_MAP_ID,
   GRID_COLS,
   GRID_OFFSET_X,
   GRID_OFFSET_Y,
@@ -36,16 +38,19 @@ import type {
 import { getAdventurerDefinition, getDefenseDefinition } from '../entities/definitions';
 import { canBuildDefenseOnTile, canMarkRoomTile } from '../systems/dungeonConstruction';
 import { canPlaceDoorAt, findActiveDoorAt, findDoorAt } from '../systems/doorSystem';
+import { AudioSystem } from '../systems/audioSystem';
 import { emitUiState, onUiAction } from '../ui/uiEvents';
 
 interface RenderedEntity {
   container: Phaser.GameObjects.Container;
-  sprite: Phaser.GameObjects.Image;
+  sprite: Phaser.GameObjects.Sprite;
   label: Phaser.GameObjects.Text;
   badge?: Phaser.GameObjects.Text;
   fxLabel?: Phaser.GameObjects.Text;
   intentLabel?: Phaser.GameObjects.Text;
   bark?: Phaser.GameObjects.Text;
+  actionUntilMs?: number;
+  currentAnimation?: string;
 }
 
 interface RenderedDoor {
@@ -63,9 +68,20 @@ export class DungeonScene extends Phaser.Scene {
   private previousDefenseHp = new Map<string, number>();
   private previousAdventurerHp = new Map<string, number>();
   private previousDoorHp = new Map<string, number>();
+  private previousDoorState = new Map<string, string>();
+  private previousTrapState = new Map<string, string>();
+  private previousTreasureState = new Map<string, string>();
+  private previousRemainsLootState = new Map<string, boolean>();
+  private previousAdventurerCell = new Map<string, string>();
   private seenCombatFeedbackIds = new Set<string>();
+  private treasureViews = new Map<string, Phaser.GameObjects.Image>();
+  private transitionViews = new Map<string, Phaser.GameObjects.Image>();
+  private remainsViews = new Map<string, Phaser.GameObjects.Image>();
   private bossView: RenderedEntity | null = null;
   private previousBossHp = 0;
+  private audio!: AudioSystem;
+  private atmosphereGraphics!: Phaser.GameObjects.Graphics;
+  private glowGraphics!: Phaser.GameObjects.Graphics;
   private hoverGraphics!: Phaser.GameObjects.Graphics;
   private safeZoneGraphics!: Phaser.GameObjects.Graphics;
   private hpGraphics!: Phaser.GameObjects.Graphics;
@@ -83,14 +99,17 @@ export class DungeonScene extends Phaser.Scene {
   }
 
   create(): void {
+    this.audio = new AudioSystem(this);
     this.simulation.startNewGame();
     this.drawDungeon();
-    this.safeZoneGraphics = this.add.graphics();
-    this.hoverGraphics = this.add.graphics();
-    this.pathGraphics = this.add.graphics();
-    this.transitionGraphics = this.add.graphics();
-    this.treasureGraphics = this.add.graphics();
-    this.remainsGraphics = this.add.graphics();
+    this.atmosphereGraphics = this.add.graphics().setDepth(8);
+    this.glowGraphics = this.add.graphics().setDepth(9);
+    this.safeZoneGraphics = this.add.graphics().setDepth(18);
+    this.hoverGraphics = this.add.graphics().setDepth(250);
+    this.pathGraphics = this.add.graphics().setDepth(14);
+    this.transitionGraphics = this.add.graphics().setDepth(20);
+    this.treasureGraphics = this.add.graphics().setDepth(23);
+    this.remainsGraphics = this.add.graphics().setDepth(22);
     this.hoverLabel = this.add
       .text(0, 0, '', {
         color: '#fff4d8',
@@ -102,9 +121,10 @@ export class DungeonScene extends Phaser.Scene {
       })
       .setDepth(260)
       .setVisible(false);
-    this.hpGraphics = this.add.graphics();
+    this.hpGraphics = this.add.graphics().setDepth(70);
     this.createBossView();
     this.bindInput();
+    this.syncAmbience();
     this.publishUi();
   }
 
@@ -117,6 +137,8 @@ export class DungeonScene extends Phaser.Scene {
     this.drawTreasure();
     this.drawRemains();
     this.drawSafeZone();
+    this.drawAtmosphere();
+    this.syncAmbience();
     this.uiPublishTimerMs -= delta;
 
     if (this.uiPublishTimerMs <= 0) {
@@ -141,8 +163,11 @@ export class DungeonScene extends Phaser.Scene {
 
       if (phase === 'wave') {
         this.simulation.inspectAdventurerAt(cell);
+        this.audio.playRandomSound(AUDIO_KEYS.ui.select, { volume: 0.28, cooldownMs: 120 });
       } else {
+        const tool = this.simulation.getRenderState().selectedConstructionTool;
         this.simulation.placeSelectedDefense(cell);
+        this.playBuildInteractionSound(tool);
       }
 
       this.publishUi();
@@ -152,51 +177,73 @@ export class DungeonScene extends Phaser.Scene {
     this.unsubscribeActions = onUiAction((action) => {
       if (action.type === 'select-defense') {
         this.simulation.selectDefense(action.defenseType);
+        this.audio.playRandomSound(AUDIO_KEYS.ui.select, { volume: 0.35 });
         this.publishUi();
       }
 
       if (action.type === 'select-construction') {
         this.simulation.selectConstructionTool(action.constructionType);
+        this.audio.playRandomSound(AUDIO_KEYS.ui.select, { volume: 0.35 });
         this.publishUi();
       }
 
       if (action.type === 'select-map') {
         this.simulation.selectMap(action.mapId);
+        this.audio.playRandomSound(AUDIO_KEYS.interaction.paper, { volume: 0.28, cooldownMs: 220 });
         this.publishUi();
         this.syncRenderState();
       }
 
       if (action.type === 'launch-wave') {
         this.simulation.launchWave();
+        this.audio.playRandomSound(AUDIO_KEYS.ui.confirm, { volume: 0.5, cooldownMs: 240 });
         this.publishUi();
       }
 
       if (action.type === 'continue-build') {
         this.simulation.continueBuild();
+        this.audio.playRandomSound(AUDIO_KEYS.ui.confirm, { volume: 0.42, cooldownMs: 240 });
         this.publishUi();
       }
 
       if (action.type === 'use-ability') {
         this.simulation.useBossAbility(action.abilityType);
+        this.audio.playRandomSound(AUDIO_KEYS.boss.roar, { volume: 0.52, cooldownMs: 520, rate: 0.9 });
         this.publishUi();
       }
 
       if (action.type === 'toggle-pause') {
         this.simulation.togglePause();
+        this.audio.playRandomSound(AUDIO_KEYS.ui.toggle, { volume: 0.32, cooldownMs: 140 });
         this.publishUi();
       }
 
       if (action.type === 'set-speed') {
         this.simulation.setGameSpeed(action.speed);
+        this.audio.playRandomSound(AUDIO_KEYS.ui.click, { volume: 0.24, cooldownMs: 100 });
         this.publishUi();
+      }
+
+      if (action.type === 'toggle-audio-mute') {
+        const muted = this.audio.toggleMute();
+
+        if (!muted) {
+          this.audio.playRandomSound(AUDIO_KEYS.ui.toggle, { volume: 0.34, cooldownMs: 0 });
+        }
+      }
+
+      if (action.type === 'set-audio-volume') {
+        this.audio.setMasterVolume(action.volume);
       }
 
       if (action.type === 'close-inspection') {
         this.simulation.clearInspection();
+        this.audio.playRandomSound(AUDIO_KEYS.ui.click, { volume: 0.24 });
         this.publishUi();
       }
 
       if (action.type === 'restart') {
+        this.audio.stopAmbience();
         this.scene.restart();
       }
     });
@@ -220,7 +267,13 @@ export class DungeonScene extends Phaser.Scene {
         const worldY = GRID_OFFSET_Y + y * TILE_SIZE;
         const tile = getTileAt(renderState.tiles, cell);
 
-        const image = this.add.image(worldX, worldY, tileTexture(tile)).setOrigin(0).setDisplaySize(TILE_SIZE, TILE_SIZE);
+        const visual = tileVisual(tile, renderState.currentMapId, cell);
+        const image = this.add
+          .image(worldX, worldY, visual.texture)
+          .setOrigin(0)
+          .setDisplaySize(TILE_SIZE, TILE_SIZE)
+          .setTint(visual.tint)
+          .setAlpha(visual.alpha);
         this.tileViews.set(cellKey(cell), image);
       }
     }
@@ -244,9 +297,11 @@ export class DungeonScene extends Phaser.Scene {
 
   private createBossView(): void {
     const world = cellToWorld(BOSS_CELL);
-    const sprite = this.add.image(0, 0, TEXTURE_KEYS.boss).setDisplaySize(42, 42);
+    const visual = ENTITY_VISUALS.boss;
+    const sprite = this.add.sprite(0, -5, visual.texture).setDisplaySize(visual.displaySize, visual.displaySize);
+    this.playAnimation(sprite, visual.idle);
     const label = this.add
-      .text(0, 24, 'BOSS', {
+      .text(0, 38, 'BOSS', {
         color: '#fff4d8',
         fontSize: '10px',
         fontStyle: 'bold',
@@ -254,7 +309,8 @@ export class DungeonScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
     const container = this.add.container(world.x, world.y, [sprite, label]);
-    this.bossView = { container, sprite, label };
+    container.setDepth(45);
+    this.bossView = { container, sprite, label, currentAnimation: visual.idle };
   }
 
   private syncRenderState(): void {
@@ -267,6 +323,7 @@ export class DungeonScene extends Phaser.Scene {
     this.defenseViews.forEach((view, id) => {
       if (!aliveDefenseIds.has(id)) {
         this.spawnDeathPuff(view.container.x, view.container.y, 0x9fbd4d);
+        this.audio.playRandomSound(AUDIO_KEYS.combat.death, { volume: 0.34, cooldownMs: 260, rate: 0.92 });
         view.container.destroy(true);
         this.defenseViews.delete(id);
         this.previousDefenseHp.delete(id);
@@ -277,6 +334,7 @@ export class DungeonScene extends Phaser.Scene {
     this.adventurerViews.forEach((view, id) => {
       if (!aliveAdventurerIds.has(id)) {
         this.spawnDeathPuff(view.container.x, view.container.y, 0xc88b4a);
+        this.audio.playRandomSound(AUDIO_KEYS.combat.death, { volume: 0.38, cooldownMs: 260, rate: 0.82 });
         view.container.destroy(true);
         this.adventurerViews.delete(id);
         this.previousAdventurerHp.delete(id);
@@ -296,8 +354,10 @@ export class DungeonScene extends Phaser.Scene {
 
     if (this.bossView) {
       const bossWorld = gridPositionToWorld(renderState.boss.x, renderState.boss.y);
+      const bossMoving = Phaser.Math.Distance.Between(this.bossView.container.x, this.bossView.container.y, bossWorld.x, bossWorld.y) > 0.5;
       this.bossView.container.setPosition(bossWorld.x, bossWorld.y);
       this.bossView.container.setAlpha(renderState.phase === 'defeat' ? 0.55 : 1);
+      this.syncEntityAnimation(this.bossView, ENTITY_VISUALS.boss, bossMoving || renderState.boss.targetAdventurerId !== null);
 
       if (this.previousBossHp > 0 && renderState.boss.hp < this.previousBossHp) {
         this.pulseHit(this.bossView.container);
@@ -308,18 +368,25 @@ export class DungeonScene extends Phaser.Scene {
     }
 
     this.syncCombatFeedback(renderState.combatFeedbackEvents);
+    this.syncStateChangeFeedback(renderState);
+    this.syncMovementAudio(renderState.adventurers);
   }
 
   private syncDungeonTiles(tiles: DungeonTile[]): void {
+    const renderState = this.simulation.getRenderState();
     for (let y = 0; y < GRID_ROWS; y += 1) {
       for (let x = 0; x < GRID_COLS; x += 1) {
         const cell = { x, y };
         const key = cellKey(cell);
         const tileView = this.tileViews.get(key);
-        const texture = tileTexture(getTileAt(tiles, cell));
+        const visual = tileVisual(getTileAt(tiles, cell), renderState.currentMapId, cell);
 
-        if (tileView && tileView.texture.key !== texture) {
-          tileView.setTexture(texture).setDisplaySize(TILE_SIZE, TILE_SIZE);
+        if (tileView) {
+          if (tileView.texture.key !== visual.texture) {
+            tileView.setTexture(visual.texture).setDisplaySize(TILE_SIZE, TILE_SIZE);
+          }
+
+          tileView.setTint(visual.tint).setAlpha(visual.alpha);
         }
       }
     }
@@ -328,15 +395,17 @@ export class DungeonScene extends Phaser.Scene {
   private syncDefense(defense: DefenseEntity): void {
     let view = this.defenseViews.get(defense.id);
     const definition = getDefenseDefinition(defense.type);
+    const visual: EntityVisualProfile = ENTITY_VISUALS.defense[defense.type];
     const world = defense.kind === 'minion'
       ? gridPositionToWorld(defense.x, defense.y)
       : cellToWorld(defense.cell);
-    const defenseSize = defense.type === 'guardian' ? 34 : defense.kind === 'minion' ? 28 : 24;
+    const defenseSize = visual.displaySize;
 
     if (!view) {
       const sprite = this.add
-        .image(0, 0, TEXTURE_KEYS.defense[defense.type])
+        .sprite(0, visual.hover ? -4 : 0, visual.texture)
         .setDisplaySize(defenseSize, defenseSize);
+      this.playAnimation(sprite, visual.idle);
       const labelText = defense.type === 'guardian'
         ? 'GARD'
         : defense.kind === 'minion'
@@ -362,13 +431,15 @@ export class DungeonScene extends Phaser.Scene {
         .setOrigin(0.5)
         .setVisible(false);
       const container = this.add.container(world.x, world.y, [sprite, label, fxLabel]);
-      view = { container, sprite, label, fxLabel };
+      view = { container, sprite, label, fxLabel, currentAnimation: visual.idle };
       this.defenseViews.set(defense.id, view);
     }
 
     const currentWorld = defense.kind === 'minion'
       ? gridPositionToWorld(defense.x, defense.y)
       : cellToWorld(defense.cell);
+    const moving = defense.kind === 'minion'
+      && Phaser.Math.Distance.Between(view.container.x, view.container.y, currentWorld.x, currentWorld.y) > 0.5;
     const previousHp = this.previousDefenseHp.get(defense.id);
     if (previousHp !== undefined && defense.hp < previousHp) {
       this.pulseHit(view.container);
@@ -378,6 +449,7 @@ export class DungeonScene extends Phaser.Scene {
     view.container.setPosition(currentWorld.x, currentWorld.y);
     view.container.setAlpha(trapVisualAlpha(defense));
     view.sprite.setDisplaySize(defenseSize, defenseSize);
+    this.syncEntityAnimation(view, visual, moving);
     view.label.setText(defense.type === 'guardian' ? 'GARD' : defense.kind === 'minion' ? shortDisplayName(defense.name, definition.shortName) : trapMapShortName(defense, definition.shortName));
 
     if (defense.kind === 'trap' && defense.trapState === 'disarmed') {
@@ -404,12 +476,14 @@ export class DungeonScene extends Phaser.Scene {
   private syncAdventurer(adventurer: AdventurerEntity): void {
     let view = this.adventurerViews.get(adventurer.id);
     const definition = getAdventurerDefinition(adventurer.role);
+    const visual: EntityVisualProfile = ENTITY_VISUALS.adventurer[adventurer.role];
     const world = gridPositionToWorld(adventurer.x, adventurer.y);
 
     if (!view) {
-      const sprite = this.add.image(0, 0, TEXTURE_KEYS.adventurer[adventurer.role]).setDisplaySize(28, 28);
+      const sprite = this.add.sprite(0, -3, visual.texture).setDisplaySize(visual.displaySize, visual.displaySize);
+      this.playAnimation(sprite, visual.idle);
       const badge = this.add
-        .text(0, -17, roleBadgeText(adventurer), {
+        .text(0, -25, roleBadgeText(adventurer), {
           color: '#100e12',
           fontSize: '8px',
           fontStyle: 'bold',
@@ -419,7 +493,7 @@ export class DungeonScene extends Phaser.Scene {
         })
         .setOrigin(0.5);
       const fxLabel = this.add
-        .text(0, -29, '', {
+        .text(0, -38, '', {
           color: '#100e12',
           fontSize: '8px',
           fontStyle: 'bold',
@@ -430,7 +504,7 @@ export class DungeonScene extends Phaser.Scene {
         .setOrigin(0.5)
         .setVisible(false);
       const intentLabel = this.add
-        .text(0, 31, '', {
+        .text(0, 36, '', {
           color: '#fff4d8',
           fontSize: '8px',
           fontStyle: 'bold',
@@ -441,7 +515,7 @@ export class DungeonScene extends Phaser.Scene {
         .setOrigin(0.5)
         .setVisible(false);
       const label = this.add
-        .text(0, 20, shortDisplayName(adventurer.name, definition.shortName), {
+        .text(0, 27, shortDisplayName(adventurer.name, definition.shortName), {
           color: '#fff4d8',
           fontSize: '8px',
           fontStyle: 'bold',
@@ -449,7 +523,7 @@ export class DungeonScene extends Phaser.Scene {
         })
         .setOrigin(0.5);
       const bark = this.add
-        .text(0, -46, '', {
+        .text(0, -58, '', {
           color: '#fff4d8',
           fontSize: '9px',
           fontFamily: 'monospace',
@@ -463,10 +537,11 @@ export class DungeonScene extends Phaser.Scene {
         .setVisible(false);
       const container = this.add.container(world.x, world.y, [sprite, badge, fxLabel, label, intentLabel, bark]);
       container.setDepth(30);
-      view = { container, sprite, label, badge, fxLabel, intentLabel, bark };
+      view = { container, sprite, label, badge, fxLabel, intentLabel, bark, currentAnimation: visual.idle };
       this.adventurerViews.set(adventurer.id, view);
     }
 
+    const moving = Phaser.Math.Distance.Between(view.container.x, view.container.y, world.x, world.y) > 0.45;
     const previousHp = this.previousAdventurerHp.get(adventurer.id);
     if (previousHp !== undefined && adventurer.hp < previousHp) {
       this.pulseHit(view.container);
@@ -477,7 +552,9 @@ export class DungeonScene extends Phaser.Scene {
     view.container.setPosition(world.x, world.y);
     view.container.setAlpha(adventurer.stunnedTimerMs > 0 ? 0.55 : 1);
     view.badge?.setText(roleBadgeText(adventurer)).setBackgroundColor(roleBadgeColor(adventurer));
-    view.sprite.setDisplaySize(adventurer.carryingTreasure ? 31 : 28, adventurer.carryingTreasure ? 31 : 28);
+    const adventurerSize = visual.displaySize + (adventurer.carryingTreasure ? 3 : 0);
+    view.sprite.setDisplaySize(adventurerSize, adventurerSize);
+    this.syncEntityAnimation(view, visual, moving);
 
     if (adventurer.lootFeedbackText && adventurer.lootFeedbackTimerMs > 0) {
       view.sprite.setTint(0xf6d88a);
@@ -570,11 +647,13 @@ export class DungeonScene extends Phaser.Scene {
 
     if (previousHp !== undefined && door.pickProgressMs > previousHp) {
       this.pulseHit(view.container);
+      this.audio.playRandomSound(AUDIO_KEYS.doors.pick, { volume: 0.16, cooldownMs: 420 });
     }
 
     this.previousDoorHp.set(door.id, door.pickProgressMs);
     view.container.setPosition(world.x, world.y);
     const picking = door.beingPickedById !== null && !door.openedForExpedition;
+    view.sprite.setTexture(door.openedForExpedition ? TEXTURE_KEYS.doorOpen : TEXTURE_KEYS.door).setDisplaySize(TILE_SIZE - 3, TILE_SIZE - 3);
     if (picking) {
       view.sprite.setTint(0xe1b35a);
     } else if (door.openedForExpedition) {
@@ -595,6 +674,39 @@ export class DungeonScene extends Phaser.Scene {
       yoyo: true,
       ease: 'Quad.easeOut',
     });
+  }
+
+  private syncEntityAnimation(view: RenderedEntity, visual: EntityVisualProfile, moving: boolean): void {
+    const actionActive = (view.actionUntilMs ?? 0) > this.time.now;
+    const key = actionActive ? visual.action : moving ? visual.walk : visual.idle;
+    this.playAnimation(view.sprite, key, view);
+
+    const pulse = this.time.now / (moving ? 85 : 240);
+    const baseY = visual.hover ? -4 : view.sprite.displayHeight > 44 ? -5 : -3;
+    const bob = moving ? Math.sin(pulse) * 1.8 : Math.sin(pulse) * 0.65;
+    view.sprite.setY(baseY + bob);
+    view.sprite.setAngle(moving ? Math.sin(pulse * 0.7) * 1.8 : 0);
+  }
+
+  private playEntityAction(view: RenderedEntity, visual: EntityVisualProfile, durationMs = 420): void {
+    view.actionUntilMs = Math.max(view.actionUntilMs ?? 0, this.time.now + durationMs);
+    this.playAnimation(view.sprite, visual.action, view);
+  }
+
+  private playAnimation(sprite: Phaser.GameObjects.Sprite, key: string, view?: RenderedEntity): void {
+    if (!this.anims.exists(key)) {
+      return;
+    }
+
+    if (view?.currentAnimation === key && sprite.anims.isPlaying) {
+      return;
+    }
+
+    sprite.play(key, true);
+
+    if (view) {
+      view.currentAnimation = key;
+    }
   }
 
   private spawnDeathPuff(x: number, y: number, color: number): void {
@@ -630,6 +742,9 @@ export class DungeonScene extends Phaser.Scene {
       const label = event.kind === 'heal'
         ? `${sign}${event.amount}`
         : `${style.prefix} ${sign}${event.amount}${event.boostedBySpecial ? '*' : ''}`;
+      this.playCombatSourceAnimation(event);
+      this.spawnCombatVfx(event, world.x, world.y, style.color);
+      this.playCombatFeedbackSound(event);
       this.spawnFloatingText(
         world.x + (stack % 2 === 0 ? -5 : 5),
         world.y - 30 - stack * 9,
@@ -641,6 +756,32 @@ export class DungeonScene extends Phaser.Scene {
 
     if (this.seenCombatFeedbackIds.size > 160) {
       this.seenCombatFeedbackIds = new Set([...this.seenCombatFeedbackIds].slice(-96));
+    }
+  }
+
+  private playCombatSourceAnimation(event: CombatFeedbackEvent): void {
+    if (event.sourceFaction === 'boss' && this.bossView) {
+      this.playEntityAction(this.bossView, ENTITY_VISUALS.boss, 620);
+      this.cameras.main.shake(110, 0.0028);
+      return;
+    }
+
+    if (event.sourceFaction === 'adventurer' && event.sourceId && event.sourceRole) {
+      const view = this.adventurerViews.get(event.sourceId);
+
+      if (view) {
+        this.playEntityAction(view, ENTITY_VISUALS.adventurer[event.sourceRole], event.kind === 'heal' ? 520 : 420);
+      }
+
+      return;
+    }
+
+    if (event.sourceFaction === 'monster' && event.sourceId && event.sourceType && event.sourceType !== 'trap' && event.sourceType !== 'boss') {
+      const view = this.defenseViews.get(event.sourceId);
+
+      if (view) {
+        this.playEntityAction(view, ENTITY_VISUALS.defense[event.sourceType], event.sourceType === 'guardian' ? 560 : 420);
+      }
     }
   }
 
@@ -665,6 +806,569 @@ export class DungeonScene extends Phaser.Scene {
       ease: 'Sine.easeOut',
       onComplete: () => label.destroy(),
     });
+  }
+
+  private syncStateChangeFeedback(renderState: ReturnType<DungeonSimulation['getRenderState']>): void {
+    renderState.doors.forEach((door) => {
+      const state = door.openedForExpedition ? 'opened' : door.beingPickedById ? 'picking' : 'closed';
+      const previous = this.previousDoorState.get(door.id);
+      const world = cellToWorld(door.cell);
+
+      if (previous && previous !== state) {
+        if (state === 'picking') {
+          this.audio.playRandomSound(AUDIO_KEYS.doors.pick, { volume: 0.22, cooldownMs: 320 });
+          this.spawnLockpickVfx(world.x, world.y);
+        } else if (state === 'opened') {
+          this.audio.playRandomSound(AUDIO_KEYS.doors.open, { volume: 0.46, cooldownMs: 260 });
+          this.spawnDoorVfx(world.x, world.y, 0x79c7a1);
+        } else if (previous === 'opened') {
+          this.audio.playRandomSound(AUDIO_KEYS.doors.close, { volume: 0.38, cooldownMs: 260 });
+        }
+      }
+
+      this.previousDoorState.set(door.id, state);
+    });
+
+    renderState.defenses
+      .filter((defense) => defense.kind === 'trap')
+      .forEach((trap) => {
+        const state = `${trap.trapState ?? 'none'}:${trap.cooldownRemainingMs > 0 ? 'cooldown' : 'ready'}`;
+        const previous = this.previousTrapState.get(trap.id);
+        const world = cellToWorld(trap.cell);
+
+        if (previous && previous !== state) {
+          if (trap.type === 'roomLockTrap' && trap.trapState === 'triggered') {
+            this.audio.playRandomSound(AUDIO_KEYS.traps.roomLock, { volume: 0.5, cooldownMs: 520 });
+            this.spawnRoomLockVfx(world.x, world.y);
+            this.cameras.main.shake(90, 0.002);
+          } else if (trap.type === 'roomLockTrap' && trap.trapState === 'cleared') {
+            this.audio.playRandomSound(AUDIO_KEYS.doors.open, { volume: 0.35, cooldownMs: 360 });
+            this.spawnDoorVfx(world.x, world.y, 0x9fb0c0);
+          } else if (state.endsWith('cooldown') && previous.endsWith('ready')) {
+            this.audio.playRandomSound(AUDIO_KEYS.traps.trigger, { volume: 0.46, cooldownMs: 260 });
+            this.spawnTrapBurst(world.x, world.y, trap.type === 'fireTrap' ? 0xd85a32 : 0xe1b35a);
+          } else if (trap.trapState === 'disarmed') {
+            this.audio.playRandomSound(AUDIO_KEYS.traps.disarm, { volume: 0.32, cooldownMs: 280 });
+            this.spawnDisarmVfx(world.x, world.y);
+          }
+        }
+
+        this.previousTrapState.set(trap.id, state);
+      });
+
+    renderState.treasures.forEach((treasure) => {
+      const state = `${treasure.status}:${treasure.holderAdventurerId ?? ''}:${treasure.droppedCell ? cellKey(treasure.droppedCell) : ''}`;
+      const previous = this.previousTreasureState.get(treasure.id);
+
+      if (previous && previous !== state) {
+        const point = this.treasureWorldPosition(treasure, renderState.adventurers);
+
+        if (treasure.status === 'carried') {
+          this.audio.playRandomSound(treasure.kind === 'gold' || treasure.kind === 'main' ? AUDIO_KEYS.loot.coins : AUDIO_KEYS.loot.special, {
+            volume: treasure.kind === 'main' ? 0.48 : 0.38,
+            cooldownMs: 260,
+          });
+          this.spawnLootVfx(point.x, point.y, treasureFillColor(treasure.kind));
+        } else if (treasure.status === 'dropped') {
+          this.audio.playRandomSound(AUDIO_KEYS.interaction.stone, { volume: 0.22, cooldownMs: 280 });
+          this.spawnImpactBurst(point.x, point.y, 0xd6b15f, 14);
+        }
+      }
+
+      this.previousTreasureState.set(treasure.id, state);
+    });
+
+    renderState.remains.forEach((remains) => {
+      const previousClaimed = this.previousRemainsLootState.get(remains.id);
+
+      if (previousClaimed === false && remains.loot.claimed) {
+        const world = cellToWorld(remains.cell);
+        this.audio.playRandomSound(AUDIO_KEYS.loot.coins, { volume: 0.3, cooldownMs: 260 });
+        this.spawnLootVfx(world.x, world.y, 0xd6b15f);
+      }
+
+      this.previousRemainsLootState.set(remains.id, remains.loot.claimed);
+    });
+  }
+
+  private syncMovementAudio(adventurers: AdventurerEntity[]): void {
+    if (this.simulation.getRenderState().phase !== 'wave') {
+      return;
+    }
+
+    adventurers.forEach((adventurer) => {
+      const current = `${adventurer.mapId}:${Math.round(adventurer.x)},${Math.round(adventurer.y)}`;
+      const previous = this.previousAdventurerCell.get(adventurer.id);
+
+      if (previous && previous !== current) {
+        this.audio.playRandomSound(AUDIO_KEYS.footsteps, {
+          volume: adventurer.carryingTreasure ? 0.16 : 0.11,
+          cooldownMs: 180,
+          skipRecent: true,
+        });
+      }
+
+      this.previousAdventurerCell.set(adventurer.id, current);
+    });
+  }
+
+  private playBuildInteractionSound(tool: ConstructionTool | null): void {
+    switch (tool) {
+      case 'dig':
+      case 'reseal':
+        this.audio.playRandomSound(AUDIO_KEYS.construction.dig, { volume: 0.36, cooldownMs: 180 });
+        return;
+      case 'door':
+      case 'removeDoor':
+        this.audio.playRandomSound(AUDIO_KEYS.doors.lock, { volume: 0.28, cooldownMs: 160 });
+        return;
+      case 'moveTreasure':
+      case 'addGoldTreasure':
+      case 'addWeaponTreasure':
+      case 'addArmorTreasure':
+      case 'addTechniqueTreasure':
+      case 'removeTreasure':
+        this.audio.playRandomSound(AUDIO_KEYS.loot.coins, { volume: 0.3, cooldownMs: 180 });
+        return;
+      case 'collectRemainsLoot':
+        this.audio.playRandomSound(AUDIO_KEYS.interaction.paper, { volume: 0.24, cooldownMs: 220 });
+        return;
+      case 'guardRoom':
+      case 'crypt':
+      case 'moveBoss':
+        this.audio.playRandomSound(AUDIO_KEYS.interaction.stone, { volume: 0.24, cooldownMs: 180 });
+        return;
+      default:
+        this.audio.playRandomSound(AUDIO_KEYS.ui.click, { volume: 0.22, cooldownMs: 120 });
+    }
+  }
+
+  private syncAmbience(): void {
+    const renderState = this.simulation.getRenderState();
+
+    if (renderState.phase === 'report' || renderState.phase === 'defeat') {
+      this.audio.stopAmbience();
+      return;
+    }
+
+    if (renderState.phase === 'wave' && this.isBossFightActive(renderState)) {
+      this.audio.crossfadeAmbience(AUDIO_KEYS.ambience.boss, { volume: 0.5, rate: 0.98, fadeMs: 900 });
+      return;
+    }
+
+    if (renderState.phase === 'wave' && this.isGuardianFightActive(renderState)) {
+      this.audio.crossfadeAmbience(AUDIO_KEYS.ambience.guardian, { volume: 0.42, rate: 0.96, fadeMs: 700 });
+      return;
+    }
+
+    const deep = renderState.currentMapId === FINAL_MAP_ID;
+    this.audio.crossfadeAmbience(deep ? AUDIO_KEYS.ambience.deep : AUDIO_KEYS.ambience.dungeon, {
+      volume: deep ? 0.9 : 0.72,
+      rate: deep ? 0.94 : 1,
+      fadeMs: 900,
+    });
+  }
+
+  private isBossFightActive(renderState: ReturnType<DungeonSimulation['getRenderState']>): boolean {
+    if (renderState.boss.mapId !== renderState.currentMapId) {
+      return false;
+    }
+
+    if (renderState.boss.targetAdventurerId || renderState.boss.hp < renderState.boss.maxHp) {
+      return true;
+    }
+
+    return renderState.adventurers.some((adventurer) => {
+      if (adventurer.mapId !== renderState.boss.mapId) {
+        return false;
+      }
+
+      return Math.abs(adventurer.x - renderState.boss.x) + Math.abs(adventurer.y - renderState.boss.y) <= 4;
+    });
+  }
+
+  private isGuardianFightActive(renderState: ReturnType<DungeonSimulation['getRenderState']>): boolean {
+    const guardian = renderState.defenses.find((defense) => defense.alive && defense.type === 'guardian' && defense.mapId === renderState.currentMapId);
+
+    if (!guardian) {
+      return false;
+    }
+
+    if (guardian.hp < guardian.maxHp) {
+      return true;
+    }
+
+    return renderState.adventurers.some((adventurer) => {
+      if (adventurer.mapId !== guardian.mapId) {
+        return false;
+      }
+
+      return Math.abs(adventurer.x - guardian.cell.x) + Math.abs(adventurer.y - guardian.cell.y) <= 3;
+    });
+  }
+
+  private drawAtmosphere(): void {
+    const renderState = this.simulation.getRenderState();
+    const deep = renderState.currentMapId === FINAL_MAP_ID;
+    const alpha = deep ? 0.22 : 0.15;
+
+    this.atmosphereGraphics.clear();
+    this.glowGraphics.clear();
+    this.atmosphereGraphics.fillStyle(0x060509, alpha);
+    this.atmosphereGraphics.fillRect(GRID_OFFSET_X, GRID_OFFSET_Y, GRID_COLS * TILE_SIZE, GRID_ROWS * TILE_SIZE);
+    this.atmosphereGraphics.fillStyle(0x020103, deep ? 0.42 : 0.32);
+    this.atmosphereGraphics.fillRect(GRID_OFFSET_X, GRID_OFFSET_Y, GRID_COLS * TILE_SIZE, 22);
+    this.atmosphereGraphics.fillRect(GRID_OFFSET_X, GRID_OFFSET_Y + GRID_ROWS * TILE_SIZE - 22, GRID_COLS * TILE_SIZE, 22);
+    this.atmosphereGraphics.fillRect(GRID_OFFSET_X, GRID_OFFSET_Y, 22, GRID_ROWS * TILE_SIZE);
+    this.atmosphereGraphics.fillRect(GRID_OFFSET_X + GRID_COLS * TILE_SIZE - 22, GRID_OFFSET_Y, 22, GRID_ROWS * TILE_SIZE);
+
+    const entry = cellToWorld(ENTRY_CELL);
+    this.drawGlow(entry.x, entry.y, 0xe1b35a, 38, 0.08);
+
+    renderState.doors.forEach((door) => {
+      if (!door.openedForExpedition) {
+        const world = cellToWorld(door.cell);
+        this.drawGlow(world.x, world.y, 0x6f7f91, 28, 0.055);
+      }
+    });
+
+    renderState.treasures.forEach((treasure) => {
+      if (treasure.status === 'stolen') {
+        return;
+      }
+
+      const point = this.treasureWorldPosition(treasure, renderState.adventurers);
+      this.drawGlow(point.x, point.y, treasureFillColor(treasure.kind), treasure.kind === 'main' ? 42 : 28, 0.07);
+    });
+
+    if (renderState.currentMapId === renderState.boss.mapId) {
+      const boss = gridPositionToWorld(renderState.boss.x, renderState.boss.y);
+      this.drawGlow(boss.x, boss.y, 0x8f2631, 58, deep ? 0.1 : 0.06);
+    }
+  }
+
+  private drawGlow(x: number, y: number, color: number, radius: number, alpha: number): void {
+    this.glowGraphics.fillStyle(color, alpha);
+    this.glowGraphics.fillCircle(x, y, radius);
+  }
+
+  private spawnCombatVfx(event: CombatFeedbackEvent, x: number, y: number, color: number): void {
+    if (event.kind === 'heal') {
+      this.spawnHealPulse(x, y);
+      return;
+    }
+
+    const source = this.findSourceWorld(event);
+
+    if (event.style === 'caster' || event.sourceRole === 'mage') {
+      this.spawnProjectile(source, { x, y }, 0xb873d6, 4);
+      return;
+    }
+
+    if (event.style === 'healer') {
+      this.spawnHealPulse(x, y);
+      return;
+    }
+
+    if (event.style === 'boss') {
+      this.spawnBossShockwave(x, y);
+      return;
+    }
+
+    if (event.style === 'guardian') {
+      this.spawnImpactBurst(x, y, 0xff9a7a, 22);
+      this.spawnSlash(x, y, 0xffc0a0, 1.2);
+      return;
+    }
+
+    if (event.style === 'trap') {
+      this.spawnTrapBurst(x, y, 0xd85a32);
+      return;
+    }
+
+    if (event.style === 'rogue' && source) {
+      this.spawnProjectile(source, { x, y }, 0x7d94d6, 3);
+      return;
+    }
+
+    this.spawnSlash(x, y, color, event.style === 'tank' ? 1.1 : 0.9);
+    this.spawnImpactBurst(x, y, color, 14);
+  }
+
+  private playCombatFeedbackSound(event: CombatFeedbackEvent): void {
+    if (event.kind === 'heal') {
+      this.audio.playRandomSound(AUDIO_KEYS.magic.heal, { volume: 0.34, cooldownMs: 280, rate: 1.08 });
+      return;
+    }
+
+    if (event.style === 'boss') {
+      this.audio.playRandomSound(AUDIO_KEYS.boss.attack, { volume: 0.58, cooldownMs: 420, rate: 0.86 });
+      this.audio.playRandomSound(AUDIO_KEYS.combat.armor, { volume: 0.42, cooldownMs: 180 });
+      return;
+    }
+
+    if (event.style === 'guardian') {
+      this.audio.playRandomSound(AUDIO_KEYS.combat.armor, { volume: 0.46, cooldownMs: 220, rate: 0.92 });
+      return;
+    }
+
+    if (event.style === 'trap') {
+      this.audio.playRandomSound(AUDIO_KEYS.traps.trigger, { volume: 0.44, cooldownMs: 240 });
+      return;
+    }
+
+    if (event.style === 'caster' || event.sourceRole === 'mage') {
+      this.audio.playRandomSound(AUDIO_KEYS.magic.cast, { volume: 0.36, cooldownMs: 240 });
+      return;
+    }
+
+    if (event.sourceType === 'slime') {
+      this.audio.playRandomSound(AUDIO_KEYS.combat.slime, { volume: 0.34, cooldownMs: 260 });
+      return;
+    }
+
+    if (event.sourceFaction === 'monster') {
+      this.audio.playRandomSound(AUDIO_KEYS.combat.hit, { volume: 0.38, cooldownMs: 150, rate: 0.92 });
+      return;
+    }
+
+    this.audio.playRandomSound(AUDIO_KEYS.combat.melee, { volume: 0.34, cooldownMs: 120 });
+  }
+
+  private spawnProjectile(source: { x: number; y: number } | null, target: { x: number; y: number }, color: number, radius: number): void {
+    if (!source || Phaser.Math.Distance.Between(source.x, source.y, target.x, target.y) < 18) {
+      this.spawnImpactBurst(target.x, target.y, color, 14);
+      return;
+    }
+
+    const projectile = this.add.circle(source.x, source.y, radius, color, 0.95).setDepth(120);
+    this.tweens.add({
+      targets: projectile,
+      x: target.x,
+      y: target.y,
+      alpha: 0.3,
+      duration: 140,
+      ease: 'Quad.easeOut',
+      onComplete: () => {
+        projectile.destroy();
+        this.spawnImpactBurst(target.x, target.y, color, 14);
+      },
+    });
+  }
+
+  private spawnSlash(x: number, y: number, color: number, scale: number): void {
+    const slash = this.add.graphics().setDepth(130);
+    slash.lineStyle(Math.max(2, 3 * scale), color, 0.95);
+    slash.beginPath();
+    slash.arc(0, 0, 16 * scale, Phaser.Math.DegToRad(210), Phaser.Math.DegToRad(330), false);
+    slash.strokePath();
+    slash.setPosition(x, y);
+    slash.setRotation(Phaser.Math.FloatBetween(-0.55, 0.55));
+    this.tweens.add({
+      targets: slash,
+      alpha: 0,
+      scaleX: 1.45,
+      scaleY: 1.45,
+      duration: 180,
+      ease: 'Sine.easeOut',
+      onComplete: () => slash.destroy(),
+    });
+  }
+
+  private spawnImpactBurst(x: number, y: number, color: number, radius: number): void {
+    const ring = this.add.graphics().setDepth(125);
+    ring.lineStyle(2, color, 0.82);
+    ring.strokeCircle(0, 0, radius);
+    ring.setPosition(x, y);
+    this.tweens.add({
+      targets: ring,
+      alpha: 0,
+      scaleX: 1.7,
+      scaleY: 1.7,
+      duration: 240,
+      ease: 'Quad.easeOut',
+      onComplete: () => ring.destroy(),
+    });
+
+    for (let i = 0; i < 4; i += 1) {
+      const particle = this.add.circle(x, y, 2, color, 0.72).setDepth(126);
+      this.tweens.add({
+        targets: particle,
+        x: x + Math.cos(i * Math.PI / 2 + 0.4) * (radius + 7),
+        y: y + Math.sin(i * Math.PI / 2 + 0.4) * (radius + 7),
+        alpha: 0,
+        duration: 220,
+        onComplete: () => particle.destroy(),
+      });
+    }
+  }
+
+  private spawnHealPulse(x: number, y: number): void {
+    const pulse = this.add.graphics().setDepth(126);
+    pulse.lineStyle(2, 0x9ee29f, 0.9);
+    pulse.strokeCircle(0, 0, 12);
+    pulse.lineStyle(1, 0xe5ffe1, 0.75);
+    pulse.lineBetween(-8, 0, 8, 0);
+    pulse.lineBetween(0, -8, 0, 8);
+    pulse.setPosition(x, y);
+    this.tweens.add({
+      targets: pulse,
+      alpha: 0,
+      scaleX: 1.8,
+      scaleY: 1.8,
+      duration: 360,
+      ease: 'Sine.easeOut',
+      onComplete: () => pulse.destroy(),
+    });
+  }
+
+  private spawnTrapBurst(x: number, y: number, color: number): void {
+    const burst = this.add.graphics().setDepth(128);
+    burst.fillStyle(color, 0.22);
+    burst.fillCircle(0, 0, 18);
+    burst.lineStyle(2, color, 0.85);
+    for (let i = 0; i < 8; i += 1) {
+      const angle = (Math.PI * 2 * i) / 8;
+      burst.lineBetween(Math.cos(angle) * 6, Math.sin(angle) * 6, Math.cos(angle) * 22, Math.sin(angle) * 22);
+    }
+    burst.setPosition(x, y);
+    this.tweens.add({
+      targets: burst,
+      alpha: 0,
+      scaleX: 1.35,
+      scaleY: 1.35,
+      duration: 260,
+      ease: 'Quad.easeOut',
+      onComplete: () => burst.destroy(),
+    });
+  }
+
+  private spawnBossShockwave(x: number, y: number): void {
+    this.spawnImpactBurst(x, y, 0xff6b6b, 28);
+    this.cameras.main.shake(110, 0.0028);
+    this.audio.playRandomSound(AUDIO_KEYS.boss.roar, { volume: 0.32, cooldownMs: 900, rate: 0.88 });
+  }
+
+  private spawnRoomLockVfx(x: number, y: number): void {
+    const ring = this.add.graphics().setDepth(132);
+    ring.lineStyle(3, 0x6f7f91, 0.95);
+    ring.strokeCircle(0, 0, 10);
+    ring.lineStyle(2, 0x15191f, 0.95);
+    ring.strokeCircle(0, 0, 22);
+    ring.setPosition(x, y);
+    this.tweens.add({
+      targets: ring,
+      alpha: 0,
+      scaleX: 2.1,
+      scaleY: 2.1,
+      duration: 420,
+      ease: 'Cubic.easeOut',
+      onComplete: () => ring.destroy(),
+    });
+  }
+
+  private spawnDoorVfx(x: number, y: number, color: number): void {
+    const flash = this.add.graphics().setDepth(124);
+    flash.lineStyle(2, color, 0.85);
+    flash.strokeRoundedRect(-15, -18, 30, 36, 4);
+    flash.setPosition(x, y);
+    this.tweens.add({
+      targets: flash,
+      alpha: 0,
+      scaleX: 1.25,
+      duration: 260,
+      ease: 'Sine.easeOut',
+      onComplete: () => flash.destroy(),
+    });
+  }
+
+  private spawnLockpickVfx(x: number, y: number): void {
+    const tick = this.add.graphics().setDepth(124);
+    tick.lineStyle(2, 0xe1b35a, 0.9);
+    tick.lineBetween(-9, -4, 2, 5);
+    tick.lineBetween(2, 5, 11, -7);
+    tick.setPosition(x, y - 12);
+    this.tweens.add({
+      targets: tick,
+      y: y - 20,
+      alpha: 0,
+      duration: 300,
+      ease: 'Sine.easeOut',
+      onComplete: () => tick.destroy(),
+    });
+  }
+
+  private spawnDisarmVfx(x: number, y: number): void {
+    const mark = this.add.graphics().setDepth(124);
+    mark.lineStyle(2, 0x9fb0c0, 0.9);
+    mark.lineBetween(-10, -10, 10, 10);
+    mark.lineBetween(10, -10, -10, 10);
+    mark.setPosition(x, y);
+    this.tweens.add({
+      targets: mark,
+      alpha: 0,
+      scaleX: 1.4,
+      scaleY: 1.4,
+      duration: 300,
+      onComplete: () => mark.destroy(),
+    });
+  }
+
+  private spawnLootVfx(x: number, y: number, color: number): void {
+    this.spawnImpactBurst(x, y, color, 12);
+    const sparkle = this.add.graphics().setDepth(130);
+    sparkle.fillStyle(color, 0.95);
+    sparkle.fillCircle(0, 0, 3);
+    sparkle.fillCircle(-8, 6, 2);
+    sparkle.fillCircle(9, -4, 2);
+    sparkle.setPosition(x, y);
+    this.tweens.add({
+      targets: sparkle,
+      y: y - 18,
+      alpha: 0,
+      duration: 480,
+      ease: 'Sine.easeOut',
+      onComplete: () => sparkle.destroy(),
+    });
+  }
+
+  private findSourceWorld(event: CombatFeedbackEvent): { x: number; y: number } | null {
+    if (!event.sourceId) {
+      return event.sourceType === 'boss' && this.bossView
+        ? { x: this.bossView.container.x, y: this.bossView.container.y }
+        : null;
+    }
+
+    const adventurer = this.adventurerViews.get(event.sourceId);
+    if (adventurer) {
+      return { x: adventurer.container.x, y: adventurer.container.y };
+    }
+
+    const defense = this.defenseViews.get(event.sourceId);
+    if (defense) {
+      return { x: defense.container.x, y: defense.container.y };
+    }
+
+    return event.sourceType === 'boss' && this.bossView
+      ? { x: this.bossView.container.x, y: this.bossView.container.y }
+      : null;
+  }
+
+  private treasureWorldPosition(
+    treasure: { status: string; holderAdventurerId: string | null; droppedCell: { x: number; y: number } | null; cell: { x: number; y: number } },
+    adventurers: AdventurerEntity[],
+  ): { x: number; y: number } {
+    if (treasure.status === 'carried' && treasure.holderAdventurerId) {
+      const carrier = adventurers.find((adventurer) => adventurer.id === treasure.holderAdventurerId);
+
+      if (carrier) {
+        const world = gridPositionToWorld(carrier.x, carrier.y);
+        return { x: world.x + 12, y: world.y - 12 };
+      }
+    }
+
+    const cell = treasure.status === 'dropped' && treasure.droppedCell ? treasure.droppedCell : treasure.cell;
+    return cellToWorld(cell);
   }
 
   private drawHealthBars(): void {
@@ -729,6 +1433,7 @@ export class DungeonScene extends Phaser.Scene {
 
   private drawTreasure(): void {
     const renderState = this.simulation.getRenderState();
+    const visibleIds = new Set<string>();
     this.treasureGraphics.clear();
 
     renderState.treasures.forEach((treasure) => {
@@ -744,7 +1449,9 @@ export class DungeonScene extends Phaser.Scene {
         }
 
         const world = gridPositionToWorld(carrier.x, carrier.y);
-        this.drawTreasureMarker(world.x + 12, world.y - 12, treasure.kind, 5);
+        this.syncTreasureSprite(treasure.id, world.x + 12, world.y - 12, treasure.kind, 15, 0.9);
+        this.drawTreasureGlow(world.x + 12, world.y - 12, treasure.kind, 7);
+        visibleIds.add(treasure.id);
         return;
       }
 
@@ -755,21 +1462,55 @@ export class DungeonScene extends Phaser.Scene {
       }
 
       const world = cellToWorld(cell);
-      this.drawTreasureMarker(world.x, world.y, treasure.kind, treasure.kind === 'main' ? 8 : 6);
+      const size = treasure.kind === 'main' ? 22 : 18;
+      this.syncTreasureSprite(treasure.id, world.x, world.y, treasure.kind, size, 1);
+      this.drawTreasureGlow(world.x, world.y, treasure.kind, treasure.kind === 'main' ? 10 : 8);
+      visibleIds.add(treasure.id);
+    });
+
+    this.treasureViews.forEach((view, id) => {
+      if (!visibleIds.has(id)) {
+        view.destroy();
+        this.treasureViews.delete(id);
+      }
     });
   }
 
-  private drawTreasureMarker(x: number, y: number, kind: DungeonTreasureKind, radius: number): void {
+  private syncTreasureSprite(id: string, x: number, y: number, kind: DungeonTreasureKind, size: number, alpha: number): void {
+    let view = this.treasureViews.get(id);
+
+    if (!view) {
+      view = this.add.image(x, y, treasureTexture(kind)).setDepth(24);
+      this.treasureViews.set(id, view);
+      this.tweens.add({
+        targets: view,
+        scaleX: 1.18,
+        scaleY: 1.18,
+        duration: 220,
+        yoyo: true,
+        ease: 'Sine.easeOut',
+      });
+    }
+
+    view
+      .setPosition(x, y)
+      .setTexture(treasureTexture(kind))
+      .setDisplaySize(size, size)
+      .setTint(treasureTint(kind))
+      .setAlpha(alpha);
+  }
+
+  private drawTreasureGlow(x: number, y: number, kind: DungeonTreasureKind, radius: number): void {
     const fill = treasureFillColor(kind);
     const stroke = treasureStrokeColor(kind);
 
-    this.treasureGraphics.fillStyle(fill, 0.96);
-    this.treasureGraphics.fillCircle(x, y, radius);
-    this.treasureGraphics.lineStyle(2, stroke, 1);
-    this.treasureGraphics.strokeCircle(x, y, radius);
+    this.treasureGraphics.fillStyle(fill, 0.16);
+    this.treasureGraphics.fillCircle(x, y, radius + 6);
+    this.treasureGraphics.lineStyle(1, stroke, 0.75);
+    this.treasureGraphics.strokeCircle(x, y, radius + 3);
 
     if (kind !== 'main') {
-      this.treasureGraphics.lineStyle(1, 0x3a220a, 0.9);
+      this.treasureGraphics.lineStyle(1, fill, 0.55);
       this.treasureGraphics.beginPath();
       this.treasureGraphics.moveTo(x - radius + 2, y);
       this.treasureGraphics.lineTo(x + radius - 2, y);
@@ -779,6 +1520,7 @@ export class DungeonScene extends Phaser.Scene {
 
   private drawTransitions(): void {
     const renderState = this.simulation.getRenderState();
+    const visibleIds = new Set<string>();
     this.transitionGraphics.clear();
 
     renderState.transitions.forEach((transition) => {
@@ -788,8 +1530,33 @@ export class DungeonScene extends Phaser.Scene {
 
       const world = cellToWorld(transition.fromCell);
       const down = transition.label.toLowerCase().includes('desc');
+      this.syncTransitionSprite(transition.id, world.x, world.y, down);
       this.drawTransitionMarker(world.x, world.y, down);
+      visibleIds.add(transition.id);
     });
+
+    this.transitionViews.forEach((view, id) => {
+      if (!visibleIds.has(id)) {
+        view.destroy();
+        this.transitionViews.delete(id);
+      }
+    });
+  }
+
+  private syncTransitionSprite(id: string, x: number, y: number, down: boolean): void {
+    let view = this.transitionViews.get(id);
+
+    if (!view) {
+      view = this.add.image(x, y, down ? TEXTURE_KEYS.decor.transitionDown : TEXTURE_KEYS.decor.transitionUp).setDepth(21);
+      this.transitionViews.set(id, view);
+    }
+
+    view
+      .setTexture(down ? TEXTURE_KEYS.decor.transitionDown : TEXTURE_KEYS.decor.transitionUp)
+      .setPosition(x, y)
+      .setDisplaySize(19, 19)
+      .setTint(down ? 0x7d94d6 : 0x79c7a1)
+      .setAlpha(0.92);
   }
 
   private drawTransitionMarker(x: number, y: number, down: boolean): void {
@@ -819,6 +1586,7 @@ export class DungeonScene extends Phaser.Scene {
   private drawRemains(): void {
     const renderState = this.simulation.getRenderState();
     const byCell = new Map<string, AdventurerRemains[]>();
+    const visibleIds = new Set<string>();
 
     this.remainsGraphics.clear();
     renderState.remains.forEach((remains) => {
@@ -833,9 +1601,13 @@ export class DungeonScene extends Phaser.Scene {
       const world = cellToWorld(stack[0].cell);
 
       visible.forEach((remains, index) => {
+        const x = world.x - 5 + index * 5;
+        const y = world.y + 6 - index * 3;
+        this.syncRemainsSprite(remains.id, x, y, remains.visualState, remains.emotionalTone, !remains.loot.claimed);
+        visibleIds.add(remains.id);
         this.drawRemainsMarker(
-          world.x - 5 + index * 5,
-          world.y + 6 - index * 3,
+          x,
+          y,
           remains.visualState,
           remains.emotionalTone,
           !remains.loot.claimed,
@@ -849,6 +1621,36 @@ export class DungeonScene extends Phaser.Scene {
         this.remainsGraphics.fillCircle(world.x + 11, world.y - 9, 2);
       }
     });
+
+    this.remainsViews.forEach((view, id) => {
+      if (!visibleIds.has(id)) {
+        view.destroy();
+        this.remainsViews.delete(id);
+      }
+    });
+  }
+
+  private syncRemainsSprite(
+    id: string,
+    x: number,
+    y: number,
+    visualState: AdventurerRemains['visualState'],
+    tone: AdventurerRemains['emotionalTone'],
+    hasLoot: boolean,
+  ): void {
+    let view = this.remainsViews.get(id);
+
+    if (!view) {
+      view = this.add.image(x, y - 4, TEXTURE_KEYS.decor.remains).setDepth(21);
+      this.remainsViews.set(id, view);
+    }
+
+    view
+      .setPosition(x, y - 4)
+      .setTexture(hasLoot ? TEXTURE_KEYS.decor.relic : TEXTURE_KEYS.decor.remains)
+      .setDisplaySize(hasLoot ? 15 : 17, hasLoot ? 15 : 17)
+      .setTint(hasLoot ? remainsToneColor(tone) : 0xd8d0b8)
+      .setAlpha(visualState === 'old' ? 0.48 : visualState === 'bones' ? 0.62 : 0.78);
   }
 
   private drawRemainsMarker(
@@ -1093,48 +1895,90 @@ export class DungeonScene extends Phaser.Scene {
   }
 }
 
-function tileTexture(tile: DungeonTile | null): string {
+function tileVisual(tile: DungeonTile | null, mapId: string, cell: { x: number; y: number }): { texture: string; tint: number; alpha: number } {
+  const deep = mapId === FINAL_MAP_ID;
+  const variation = cellHash(cell) % 4;
+  const floorTints = deep
+    ? [0x59606b, 0x63605f, 0x4f5d58, 0x66565e]
+    : [0x6d6a68, 0x756b60, 0x616b68, 0x6f6258];
+
   if (!tile) {
-    return TEXTURE_KEYS.tileRock;
+    return { texture: TEXTURE_KEYS.tileRock, tint: deep ? 0x4c5059 : 0x5e6064, alpha: 1 };
   }
 
   if (tile.type === 'rock') {
-    return TEXTURE_KEYS.tileRock;
+    return { texture: TEXTURE_KEYS.tileRock, tint: deep ? 0x454d57 : 0x565c61, alpha: 1 };
   }
 
   if (tile.type === 'entrance') {
-    return TEXTURE_KEYS.tileEntry;
+    return { texture: TEXTURE_KEYS.tileEntry, tint: 0x7ca78c, alpha: 1 };
   }
 
   if (tile.type === 'treasure') {
-    return TEXTURE_KEYS.tileTreasure;
+    return { texture: TEXTURE_KEYS.tileTreasure, tint: 0xb48a48, alpha: 1 };
   }
 
   if (tile.type === 'throne') {
-    return TEXTURE_KEYS.tileBoss;
+    return { texture: TEXTURE_KEYS.tileBoss, tint: 0x8f3540, alpha: 1 };
   }
 
   if (tile.roomType === 'guardRoom') {
-    return TEXTURE_KEYS.tileGuardRoom;
+    return { texture: TEXTURE_KEYS.tileGuardRoom, tint: deep ? 0x5f7d71 : 0x698b76, alpha: 1 };
   }
 
   if (tile.roomType === 'crypt') {
-    return TEXTURE_KEYS.tileCrypt;
+    return { texture: TEXTURE_KEYS.tileCrypt, tint: deep ? 0x75727e : 0x827b72, alpha: 1 };
   }
 
   if (tile.roomType === 'treasureRoom') {
-    return TEXTURE_KEYS.tileTreasureRoom;
+    return { texture: TEXTURE_KEYS.tileTreasureRoom, tint: deep ? 0x8a6c3d : 0x9a7141, alpha: 1 };
   }
 
   if (tile.roomType === 'throneRoom') {
-    return TEXTURE_KEYS.tileThroneRoom;
+    return { texture: TEXTURE_KEYS.tileThroneRoom, tint: deep ? 0x8b303d : 0x963945, alpha: 1 };
   }
 
   if (tile.type === 'room') {
-    return TEXTURE_KEYS.tileRoom;
+    return { texture: TEXTURE_KEYS.tileRoom, tint: floorTints[(variation + 1) % floorTints.length], alpha: 1 };
   }
 
-  return TEXTURE_KEYS.tileFloor;
+  return { texture: TEXTURE_KEYS.tileFloor, tint: floorTints[variation], alpha: 1 };
+}
+
+function cellHash(cell: { x: number; y: number }): number {
+  return Math.abs((cell.x * 73856093) ^ (cell.y * 19349663));
+}
+
+function treasureTexture(kind: DungeonTreasureKind): string {
+  switch (kind) {
+    case 'specialWeapon':
+      return TEXTURE_KEYS.decor.treasureWeapon;
+    case 'specialArmor':
+      return TEXTURE_KEYS.decor.treasureArmor;
+    case 'specialTechnique':
+      return TEXTURE_KEYS.decor.treasureTechnique;
+    case 'gold':
+    case 'main':
+    default:
+      return TEXTURE_KEYS.decor.treasureGold;
+  }
+}
+
+function treasureTint(kind: DungeonTreasureKind): number {
+  switch (kind) {
+    case 'main':
+      return 0xf6d88a;
+    case 'gold':
+      return 0xffc44d;
+    case 'specialWeapon':
+      return 0xd85a32;
+    case 'specialArmor':
+      return 0x8ea6ff;
+    case 'specialTechnique':
+      return 0xb873d6;
+    default:
+      return 0xffc44d;
+  }
 }
 
 function shortDisplayName(name: string, fallback: string): string {

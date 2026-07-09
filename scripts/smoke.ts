@@ -54,6 +54,12 @@ import {
 } from '../src/systems/expeditionComposition';
 import { buildWaveRoster, createAdventurer } from '../src/systems/waveDirector';
 import {
+  applyRunProgressionFromExpedition,
+  computeReputationRolePressure,
+  getReputationTierInfo,
+  isDefenseUnlockedByReputation,
+} from '../src/systems/runProgressionSystem';
+import {
   computeSpecialTreasureModifiers,
   grantSpecialTreasureBonus,
 } from '../src/systems/specialTreasuresSystem';
@@ -68,6 +74,7 @@ import {
 import { findPath, hasWalkablePath } from '../src/systems/pathfinding';
 import { buildGuildTavernScene } from '../src/systems/guildTavernSceneSystem';
 import { buildSurvivorChronicle } from '../src/systems/survivorChronicleSystem';
+import { getDefenseDefinition } from '../src/entities/definitions';
 import type {
   AdventurerEntity,
   AdventurerRemains,
@@ -572,8 +579,9 @@ function validateSpecialRoomBuildRules(): void {
 
   buildSim.placeSelectedDefense({ x: 15, y: 4 });
   const afterTreasureRoomTrap = buildSim.getSnapshot();
+  const spikeTrapCost = getDefenseDefinition('spikeTrap').cost;
 
-  if (afterTreasureRoomTrap.gold !== startingGold - 4) {
+  if (afterTreasureRoomTrap.gold !== startingGold - spikeTrapCost) {
     console.error('ECHEC: un piege devrait etre accepte dans la salle du tresor autour du tresor.');
     process.exit(1);
   }
@@ -581,15 +589,16 @@ function validateSpecialRoomBuildRules(): void {
   buildSim.selectDefense('skeleton');
   buildSim.placeSelectedDefense({ x: 21, y: 12 });
   const afterThroneRoomMinion = buildSim.getSnapshot();
+  const skeletonCost = getDefenseDefinition('skeleton').cost;
 
-  if (afterThroneRoomMinion.gold !== startingGold - 4 - 8) {
+  if (afterThroneRoomMinion.gold !== startingGold - spikeTrapCost - skeletonCost) {
     console.error('ECHEC: un monstre devrait etre accepte dans la salle du trone autour du boss.');
     process.exit(1);
   }
 
   buildSim.placeSelectedDefense({ x: 22, y: 12 });
 
-  if (buildSim.getSnapshot().gold !== startingGold - 4 - 8) {
+  if (buildSim.getSnapshot().gold !== startingGold - spikeTrapCost - skeletonCost) {
     console.error('ECHEC: une defense a ete acceptee sur la case boss exacte.');
     process.exit(1);
   }
@@ -1776,6 +1785,7 @@ function validateRemainsRelicsRules(): void {
 function validateZonesGuardianRules(): void {
   const sim = new DungeonSimulation();
   sim.startNewGame();
+  (sim as unknown as { state: GameState }).state.wave = 4;
   const entranceZones = sim.getRenderState().zones;
   const entranceRequiredTypes = ['entrance', 'defense', 'secondary', 'antechamber'] as const;
 
@@ -1849,9 +1859,10 @@ function validateZonesGuardianRules(): void {
   state.remains = [];
   sim.placeSelectedDefense(guardianCell);
   const guardian = sim.getRenderState().defenses.find((defense) => defense.type === 'guardian') ?? null;
+  const guardianCost = getDefenseDefinition('guardian').cost;
 
-  if (!guardian || sim.getSnapshot().gold !== STARTING_GOLD - 18) {
-    console.error('ECHEC: le gardien devrait etre pose dans une zone avancee et couter 18 or.');
+  if (!guardian || sim.getSnapshot().gold !== STARTING_GOLD - guardianCost) {
+    console.error(`ECHEC: le gardien devrait etre pose dans une zone avancee et couter ${guardianCost} or.`);
     process.exit(1);
   }
 
@@ -2092,6 +2103,7 @@ function validateOpaqueExplorationRules(): void {
 function validateRoomLockTrapRules(): void {
   const rejectSim = new DungeonSimulation();
   rejectSim.startNewGame();
+  (rejectSim as unknown as { state: GameState }).state.wave = 3;
   rejectSim.selectDefense('roomLockTrap');
   rejectSim.placeSelectedDefense({ x: 8, y: 10 });
 
@@ -2102,6 +2114,7 @@ function validateRoomLockTrapRules(): void {
 
   const lockSim = new DungeonSimulation();
   lockSim.startNewGame();
+  (lockSim as unknown as { state: GameState }).state.wave = 3;
   lockSim.selectDefense('skeleton');
   lockSim.placeSelectedDefense({ x: 7, y: 10 });
   lockSim.selectDefense('roomLockTrap');
@@ -2889,6 +2902,7 @@ function validateCombatAbilityRules(): void {
 function validateGoblinChaseRules(): void {
   const goblinSim = new DungeonSimulation();
   goblinSim.startNewGame();
+  (goblinSim as unknown as { state: GameState }).state.world.dungeonReputation.value = 8;
   goblinSim.selectDefense('goblin');
   goblinSim.placeSelectedDefense({ x: 7, y: 10 });
   const testGoblin = (goblinSim as unknown as {
@@ -3254,6 +3268,116 @@ function validateHumanAdventurerBehaviorRules(): void {
   }
 }
 
+function validateRunProgressionRules(): void {
+  const world = createInitialWorldMemory();
+  const stats = createSmokeStats();
+  stats.adventurersKilled = 3;
+  stats.adventurersEscaped = 2;
+  stats.cartographerSurvivors = 1;
+  stats.guardianKills = 1;
+  stats.observedBoss = true;
+  stats.trapStats.spikeTrap = { damage: 44, kills: 1 };
+  stats.minionStats.guardian = { damage: 32, kills: 1 };
+
+  const result = applyRunProgressionFromExpedition(world, {
+    wave: 3,
+    cleared: true,
+    treasureStolen: false,
+    stats,
+    currentGold: 160,
+  });
+
+  if (result.reputationDelta <= 0 || result.threatDelta <= 0 || world.dungeonReputation.value <= 0 || world.dungeonReputation.threat <= 0) {
+    console.error('ECHEC: une expedition meurtriere avec survivants devrait augmenter reputation et menace.');
+    process.exit(1);
+  }
+
+  if (world.kingdomFacts.length !== 0 || world.kingdomMemory.facts.length !== 0) {
+    console.error('ECHEC: la reputation ne doit pas creer de faits Kingdom precis gratuitement.');
+    process.exit(1);
+  }
+
+  const wipeWorld = createInitialWorldMemory();
+  const wipeStats = createSmokeStats();
+  wipeStats.adventurersKilled = PARTY_SIZE;
+  wipeStats.adventurersEscaped = 0;
+  const wipe = applyRunProgressionFromExpedition(wipeWorld, {
+    wave: 2,
+    cleared: true,
+    treasureStolen: false,
+    stats: wipeStats,
+    currentGold: 90,
+  });
+
+  if (wipe.reputationDelta <= 0 || wipe.threatDelta <= 0 || wipeWorld.kingdomFacts.length !== 0) {
+    console.error('ECHEC: un wipe doit augmenter la notoriete vague sans details Kingdom gratuits.');
+    process.exit(1);
+  }
+
+  if (getReputationTierInfo(22).tier !== 2 || getReputationTierInfo(62).tier !== 4) {
+    console.error('ECHEC: les seuils de palier reputation ne correspondent pas aux constantes V1.');
+    process.exit(1);
+  }
+
+  const lockWorld = createInitialWorldMemory();
+  if (isDefenseUnlockedByReputation('guardian', lockWorld.dungeonReputation, 1)) {
+    console.error('ECHEC: le gardien ne doit pas etre debloque au depart.');
+    process.exit(1);
+  }
+
+  lockWorld.dungeonReputation.value = 22;
+  if (!isDefenseUnlockedByReputation('guardian', lockWorld.dungeonReputation, 1)) {
+    console.error('ECHEC: le palier Donjon dangereux devrait debloquer le gardien V1.');
+    process.exit(1);
+  }
+
+  const lowPressure = computeReputationRolePressure(createInitialWorldMemory());
+  const highPressureWorld = createInitialWorldMemory();
+  highPressureWorld.dungeonReputation.value = 62;
+  highPressureWorld.dungeonReputation.threat = 60;
+  const highPressure = computeReputationRolePressure(highPressureWorld);
+
+  if ((highPressure.healer ?? 0) <= (lowPressure.healer ?? 0) || (highPressure.warrior ?? 0) <= (lowPressure.warrior ?? 0)) {
+    console.error('ECHEC: un haut palier devrait augmenter la pression guerrier/soigneur.');
+    process.exit(1);
+  }
+
+  const sim = new DungeonSimulation();
+  sim.startNewGame();
+  const startSnapshot = sim.getSnapshot();
+  const startGuardian = startSnapshot.availableDefenses.find((defense) => defense.type === 'guardian');
+
+  if (startSnapshot.dungeonReputationTier !== 0 || startSnapshot.dungeonThreat !== 0 || !startGuardian?.locked) {
+    console.error('ECHEC: le snapshot initial devrait exposer reputation tier 0, menace 0 et gardien verrouille.');
+    process.exit(1);
+  }
+
+  (sim as unknown as { state: GameState }).state.wave = 4;
+  const unlockSnapshot = sim.getSnapshot();
+
+  if (unlockSnapshot.availableDefenses.find((defense) => defense.type === 'guardian')?.locked) {
+    console.error('ECHEC: le gardien devrait etre debloque par la vague 4 meme sans reputation.');
+    process.exit(1);
+  }
+
+  const tavernReport = buildFakeReport({
+    reputationDelta: 9,
+    threatDelta: 7,
+    dungeonReputation: 24,
+    dungeonThreat: 18,
+    reputationTier: 2,
+    reputationTierName: 'Donjon dangereux',
+    participants: [buildFakeParticipant({ name: 'Temoin', role: 'warrior', status: 'survivant' })],
+    adventurersEscaped: 1,
+  });
+  const tavernScene = buildGuildTavernScene(tavernReport);
+
+  if (!tavernScene.beats.some((beat) => beat.text.includes('Donjon dangereux') || beat.text.includes('reputation'))) {
+    console.error('ECHEC: la taverne devrait refleter le palier de reputation reel.');
+    process.exit(1);
+  }
+}
+
 function buildFakeParticipant(overrides: Partial<ExpeditionParticipantReport>): ExpeditionParticipantReport {
   return {
     name: 'Aventurier',
@@ -3275,6 +3399,7 @@ function buildFakeReport(overrides: Partial<Omit<WaveReport, 'guildTavernScene'>
     adventurersEscaped: 0,
     bossDamageTaken: 0,
     goldAwarded: 30,
+    reputationBonusGold: 0,
     trapRefundGold: 0,
     treasurePenaltyGold: 0,
     treasureProtectedBonusGold: 0,
@@ -3291,7 +3416,12 @@ function buildFakeReport(overrides: Partial<Omit<WaveReport, 'guildTavernScene'>
     disobeys: 0,
     treasureStolen: false,
     dungeonReputation: 0,
+    dungeonThreat: 0,
+    reputationTier: 0,
+    reputationTierName: 'Donjon inconnu',
     reputationDelta: 0,
+    threatDelta: 0,
+    runProgressionLines: [],
     trapHighlights: [],
     minionHighlights: [],
     storyLines: [],
@@ -3534,6 +3664,7 @@ validateCombatAbilityRules();
 validateGoblinChaseRules();
 validateDefenseAggroRules();
 validateHumanAdventurerBehaviorRules();
+validateRunProgressionRules();
 validateGuildTavernSceneRules();
 
 const sim = new DungeonSimulation();

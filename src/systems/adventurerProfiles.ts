@@ -13,6 +13,7 @@ import type {
 import { ADVENTURER_DEFINITIONS } from '../entities/definitions';
 import { PARTY_SIZE } from '../game/constants';
 import { createInitialKingdomMemory } from './kingdomMemorySystem';
+import { createInitialDungeonReputation, getReputationTierInfo, normalizeDungeonReputation } from './runProgressionSystem';
 
 const GUILD_ID = 'guild-ashen-contract';
 const REALM_ID = 'realm-candlemark';
@@ -37,10 +38,10 @@ const TRAIT_CYCLE: AdventurerTrait[] = [
 ];
 
 export const SURVIVOR_RECOVERY_BALANCE = {
-  lowHpInjuryThreshold: 0.28,
-  moderateHpRestThreshold: 0.55,
-  highCasualtyShakenDeaths: 2,
-  violentBossDamageThreshold: 90,
+  lowHpInjuryThreshold: 0.24,
+  moderateHpRestThreshold: 0.48,
+  highCasualtyShakenDeaths: 3,
+  violentBossDamageThreshold: 110,
   injuredRecoveryExpeditions: 1,
   restingRecoveryExpeditions: 1,
   shakenRecoveryExpeditions: 1,
@@ -64,11 +65,7 @@ export function createInitialWorldMemory(): RunWorldMemory {
     expeditionHistory: [],
     chronicles: [],
     kingdomMemory: createInitialKingdomMemory(),
-    dungeonReputation: {
-      value: 0,
-      title: 'Donjon oublie',
-      lastChangeReason: 'Personne ne prend encore le donjon au serieux. Erreur classique.',
-    },
+    dungeonReputation: createInitialDungeonReputation(),
     guilds: {
       [GUILD_ID]: {
         id: GUILD_ID,
@@ -256,9 +253,12 @@ export function recordBossDefeatSurvivors(world: RunWorldMemory, profileIds: str
 }
 
 export function updateDungeonReputation(world: RunWorldMemory, delta: number, reason: string): number {
+  world.dungeonReputation = normalizeDungeonReputation(world.dungeonReputation);
   const previous = world.dungeonReputation.value;
   world.dungeonReputation.value = Math.max(0, previous + delta);
-  world.dungeonReputation.title = reputationTitle(world.dungeonReputation.value);
+  const tier = getReputationTierInfo(world.dungeonReputation.value);
+  world.dungeonReputation.tier = tier.tier;
+  world.dungeonReputation.title = tier.title;
   world.dungeonReputation.lastChangeReason = reason;
   return world.dungeonReputation.value - previous;
 }
@@ -306,11 +306,11 @@ export function recordProfileNemesis(world: RunWorldMemory, profileId: string, d
 }
 
 export function createInjury(profileName: string, causedBy: string, hpRatio: number): AdventurerInjury | null {
-  if (hpRatio > 0.55) {
+  if (hpRatio > SURVIVOR_RECOVERY_BALANCE.moderateHpRestThreshold) {
     return null;
   }
 
-  const serious = hpRatio < 0.28;
+  const serious = hpRatio < SURVIVOR_RECOVERY_BALANCE.lowHpInjuryThreshold;
   return {
     name: serious ? 'Blessure grave' : 'Blessure legere',
     severity: serious ? 'serious' : 'minor',
@@ -851,30 +851,6 @@ function recoveryFallbackNote(profile: AdventurerProfile): string {
     default:
       return `${profile.name} est disponible.`;
   }
-}
-
-function reputationTitle(value: number): string {
-  if (value >= 60) {
-    return 'Fleau du Royaume';
-  }
-
-  if (value >= 42) {
-    return 'Le Donjon Noir';
-  }
-
-  if (value >= 28) {
-    return 'Forteresse maudite';
-  }
-
-  if (value >= 16) {
-    return 'Donjon dangereux';
-  }
-
-  if (value >= 6) {
-    return 'Petit repaire';
-  }
-
-  return 'Donjon oublie';
 }
 
 function updateLevel(profile: AdventurerProfile): void {

@@ -83,8 +83,17 @@ const BARKS: Record<BarkKind, string[]> = {
   mageIce: ['Le froid les ralentira.', 'Reculez, je lance un sort !'],
 };
 
-const GLOBAL_BARK_COOLDOWN_MS = 9000;
-const MAX_VISIBLE_BARKS = 2;
+export const BARK_BALANCE = {
+  globalCooldownMs: 11000,
+  highPriorityCooldownMs: 5600,
+  normalCooldownMs: 8600,
+  highPriorityTimerMs: 2400,
+  normalTimerMs: 1900,
+  maxVisibleBarks: 2,
+} as const;
+
+const GLOBAL_BARK_COOLDOWN_MS = BARK_BALANCE.globalCooldownMs;
+const MAX_VISIBLE_BARKS = BARK_BALANCE.maxVisibleBarks;
 const BARK_PRIORITY: Partial<Record<BarkKind, number>> = {
   doorNoThief: 3,
   doorNoLockpicks: 3,
@@ -161,8 +170,8 @@ export function tryBark(adventurer: AdventurerEntity, kind: BarkKind, visibleBar
   const text = selected.text;
 
   adventurer.barkText = text;
-  adventurer.barkTimerMs = priority >= 3 ? 2500 : 2000;
-  adventurer.barkCooldownMs = priority >= 3 ? 5400 : 7600;
+  adventurer.barkTimerMs = priority >= 3 ? BARK_BALANCE.highPriorityTimerMs : BARK_BALANCE.normalTimerMs;
+  adventurer.barkCooldownMs = priority >= 3 ? BARK_BALANCE.highPriorityCooldownMs : BARK_BALANCE.normalCooldownMs;
   adventurer.lastBarkKey = `${kind}:${selected.index}`;
   phraseCooldownMs.set(text, GLOBAL_BARK_COOLDOWN_MS);
   lastGlobalText = text;

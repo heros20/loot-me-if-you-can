@@ -33,6 +33,14 @@ import { finalizeBeats, makeBeat, pickDialogueLine } from './tavernDialogueSeque
 
 const RETURNING_STATUS = new Set(['survivant', 'blesse', 'fuite']);
 
+const REPUTATION_TAVERN_LINES: Record<number, string[]> = {
+  0: ['Encore un trou dans la terre, parait-il.', 'Ils disent que le donjon paie bien. On verra.'],
+  1: ['Ce nom revient trop souvent sur le tableau.', 'On ne part plus la-bas sans regarder derriere soi.'],
+  2: ['Ce donjon a une reputation maintenant.', 'Les recrues sourient moins quand on prononce son nom.'],
+  3: ['Meme les veterans demandent le plan avant de signer.', 'Le Royaume commence a connaitre ce trou par son nom.'],
+  4: ["Ce n'est plus une expedition. C'est une chasse.", "On n'envoie plus des curieux. On envoie des survivants."],
+};
+
 /**
  * Guild Tavern Scene V3: espace in-game (Phaser) + acteurs reels + dialogues
  * contextualises issus de pools larges. Chaque beat provient du rapport.
@@ -229,6 +237,12 @@ function buildSurvivorBeats(report: SceneSource, layout: TavernSceneLayout, ctx:
     usedIds.add(outcomeLine.id);
   }
 
+  const reputationBeat = buildReputationBeat(report, layout.counterActors.find((actor) => actor.id === 'tavernkeeper') ?? layout.counterActors[0]);
+
+  if (reputationBeat) {
+    beats.push(reputationBeat);
+  }
+
   const recruiter = layout.counterActors.find((actor) => actor.id === 'recruiter');
   const recruiterLine = pickRecruiterResponse(report, ctx, usedIds);
 
@@ -400,6 +414,12 @@ function buildNoSurvivorBeats(report: SceneSource, layout: TavernSceneLayout, ct
     usedIds.add(openLine.id);
   }
 
+  const reputationBeat = buildReputationBeat(report, tavernkeeper);
+
+  if (reputationBeat) {
+    beats.push(reputationBeat);
+  }
+
   if (report.kingdomMemoryLines.length > 0) {
     beats.push({
       id: 'kingdom-memory-empty-table',
@@ -495,6 +515,23 @@ function pickSpeaker(speakers: TavernActor[], preferredRoles: TavernActor['role'
   return speakers[0] ?? null;
 }
 
+function buildReputationBeat(report: SceneSource, actor: TavernActor | undefined): TavernBeat | null {
+  if (!actor || (report.reputationDelta <= 0 && report.reputationTier < 1)) {
+    return null;
+  }
+
+  const lines = REPUTATION_TAVERN_LINES[report.reputationTier] ?? REPUTATION_TAVERN_LINES[0];
+  const text = lines[report.wave % lines.length] ?? lines[0];
+
+  return {
+    id: `reputation-tier-${report.reputationTier}`,
+    actorId: actor.id,
+    speakerName: actor.name,
+    role: actor.role,
+    text: `${text} (${report.reputationTierName}, menace ${report.dungeonThreat}.)`,
+  };
+}
+
 function pickHazardLine(speaker: TavernActor, ctx: DialogueContext, usedIds: Set<string>) {
   if (ctx.report.doorNoThiefRetreats > 0) {
     return pickDialogueLine(DOOR_LINES, { ...ctx, speakerName: speaker.name }, usedIds);
@@ -579,6 +616,7 @@ function buildSummaryFacts(report: SceneSource): GuildTavernSummaryFact[] {
     { label: 'Or perdu', value: report.treasurePenaltyGold > 0 ? `${report.treasurePenaltyGold} or` : 'Aucun', tone: report.treasurePenaltyGold > 0 ? 'bad' : 'neutral' },
     { label: 'Absents', value: report.unavailableSurvivors.length > 0 ? String(report.unavailableSurvivors.length) : 'Aucun', tone: report.unavailableSurvivors.length > 0 ? 'warning' : 'neutral' },
     { label: 'Rumeurs', value: report.kingdomMemoryLines.length > 0 ? String(report.kingdomMemoryLines.length) : 'Aucune', tone: report.kingdomMemoryLines.length > 0 ? 'warning' : 'neutral' },
+    { label: 'Reputation', value: report.reputationTierName, tone: report.reputationTier >= 2 ? 'warning' : 'neutral' },
     ...(report.cartographerReports > 0 || report.cartographerDeaths > 0
       ? [{
           label: 'Carte',

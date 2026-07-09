@@ -5,6 +5,7 @@ import type {
   RumorEffect,
   WaveStats,
 } from '../game/types';
+import { getReputationTierInfo } from './runProgressionSystem';
 
 const PLAN_LABELS: Record<ExpeditionPlanType, string> = {
   greedy: 'Expedition cupide',
@@ -22,6 +23,7 @@ export function createPartyPlan(
   rumorBias: RumorEffect | null = null,
 ): PartyPlan {
   let type = PLAN_CYCLE[(wave + Math.floor(dungeonReputation / 8)) % PLAN_CYCLE.length] ?? 'greedy';
+  const tier = getReputationTierInfo(dungeonReputation).tier;
 
   if (rumorBias === 'greedSurge' && wave % 2 === 0) {
     type = 'greedy';
@@ -30,6 +32,15 @@ export function createPartyPlan(
   if (rumorBias === 'cautionSurge' && type !== 'fanatic') {
     type = 'cautious';
   }
+
+  if (tier >= 3 && type === 'greedy') {
+    type = 'heroic';
+  }
+
+  if (tier >= 4 && type !== 'cautious') {
+    type = wave % 2 === 0 ? 'heroic' : 'fanatic';
+  }
+
   return {
     type,
     label: PLAN_LABELS[type],

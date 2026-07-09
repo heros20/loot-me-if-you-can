@@ -54,6 +54,8 @@ Actés lors de la réunion de design #001, ces cinq piliers résument l'identit�
 
 **Résumé en un paragraphe** : le joueur prépare un donjon en dépensant de l'or sur une grille (vision cible : en creusant la roche, voir [§4](#4-donjon-creusé-)), puis lance une expédition de cinq aventuriers qui tentent de voler un trésor et de tuer le boss. Le combat se résout automatiquement ; le joueur peut activer des capacités de boss. Après chaque expédition, un débriefing narratif explique ce qui s'est passé, et le royaume adapte sa prochaine expédition en fonction de ce qu'il croit avoir appris (voir [DECISIONS.md](./DECISIONS.md) D-010).
 
+**Etat presentation/audio (2026-07-08, V2)** : la presentation primaire vise maintenant un dark fantasy plus sombre : tiles/portes/pieges/objectifs generes localement, aventuriers animes par role, defenses/guardian/boss en spritesheets top-down Warlock, boss final demoniaque, VFX de combat lisibles, taverne opaque separee, PNJ animes, ambiances donjon/taverne et musiques boss/gardien. L'audio reste une couche separee de la simulation avec volume global/mute et unlock navigateur gere cote presentation. Les sources et licences sont documentees dans [THIRD_PARTY_ASSETS.md](./THIRD_PARTY_ASSETS.md).
+
 ---
 
 ## 3. Gameplay Loop 🟢
@@ -99,7 +101,7 @@ Il n'existe pas de victoire permanente : survivre à une expédition ne fait que
 |---|---|
 | Grille | 23 x 16 cases par etage |
 | Cellules fixes protegees | Entree (0,7) ; tresor principal (16,4) ; boss final (22,12) ; transitions d'escalier |
-| Or de depart | 120 |
+| Or de depart | 115 |
 | Outils actuels | **Creuser**, **Reboucher**, **Porte**, **Retirer porte**, marquage **Salle de garde/Crypte**, deplacement boss/tresor, tresors secondaires |
 | Contrainte de validation | Toute modification qui casserait le chemin global entree -> tresors actifs -> boss final a travers les transitions est refusee |
 
@@ -157,17 +159,17 @@ Une fois le donjon creusé (voir [§4](#4-donjon-creusé-)), certaines zones peu
 
 | Flux | Formule / valeur |
 |---|---|
-| Or de départ | 30 |
-| Récompense d'expédition repoussée | `14 + vague × 4` |
-| Remboursement des pièges | Coût plein des pièges restants (les pièges sont démontés après chaque expédition) |
-| Pénalité de trésor volé | `min(or gagné + remboursement pièges, 8 + vague × 2)` |
+| Or de depart | 115 |
+| Recompense d'expedition repoussee | `20 + vague x 5` |
+| Remboursement des pieges | Salvage partiel : 35 % du cout des pieges restants |
+| Penalite de tresor vole | `min(or gagne + salvage pieges, 10 + vague x 3)` |
 | Soin du boss entre expéditions | `24 + vague × 2` PV |
 | Soin des monstres entre expéditions | `+28 %` des PV max |
 
 *(la variable `vague` dans les formules correspond au numéro d'expédition — voir la note de terminologie en tête de document)*
 
 **Principes économiques** :
-- Les **pièges** sont un investissement à usage unique par expédition : posés, potentiellement rentabilisés, puis remboursés — le coût réel d'un piège est nul sur la durée s'il n'est jamais détruit, mais il occupe une décision de placement à chaque cycle.
+- Les **pieges** sont un investissement a usage unique par expedition : poses, potentiellement rentabilises, puis seulement partiellement recuperes. Leur cout reel existe donc, sans bloquer les essais de placement.
 - Les **monstres** sont un investissement permanent : ils survivent, se soignent, gagnent en réputation individuelle (voir [§17 Réputation](#17-réputation-)), mais aucune mécanique actuelle ne les fait mourir définitivement de vieillesse — seule leur mort en combat compte.
 - Le **trésor volé** est la seule perte nette du joueur : elle est plafonnée pour éviter une spirale économique impossible à rattraper, mais reste toujours douloureuse.
 
@@ -177,12 +179,13 @@ Une fois le donjon creusé (voir [§4](#4-donjon-creusé-)), certaines zones peu
 
 | Piège | Coût | Dégâts | Cooldown |
 |---|---|---|---|
-| Piège à pics (`spikeTrap`) | 4 or | 24 | 1450 ms |
-| Piège de feu (`fireTrap`) | 7 or | 34 | 2100 ms |
+| Piege a pics (`spikeTrap`) | 5 or | 22 | 1450 ms |
+| Piege de feu (`fireTrap`) | 9 or | 31 | 2150 ms |
+| Room lock (`roomLockTrap`) | 12 or | 0 direct | salle verrouillee |
 
 **Règles** :
 - Un piège s'active quand un aventurier entre sur sa case, avec un temps de recharge avant de pouvoir refrapper.
-- Les pièges sont **démontés et intégralement remboursés** à la fin de chaque expédition résolue : le joueur repart d'une page blanche de pièges à chaque préparation.
+- Les pieges sont **demontes avec salvage partiel** a la fin de chaque expedition resolue : le joueur repart d'une page blanche de pieges a chaque preparation, mais le spam a un cout.
 - Le multiplicateur de dégâts de piège dépend du rôle de l'aventurier qui marche dessus (voir [§12 Aventuriers](#12-aventuriers-)) — un voleur encaisse moitié moins qu'un guerrier.
 - Chaque mort causée par un piège sur une case donnée **augmente durablement la dangerosité apprise de cette case** dans le pathfinding adverse (`trapDangerByCell`, +1.25 par kill) : les expéditions suivantes évitent activement les cases qui ont déjà tué.
 
@@ -260,11 +263,11 @@ Le combat se résout **en temps réel et automatiquement** : chaque unité (aven
 
 | Statistique | Scaling |
 |---|---|
-| PV | +13 % par numéro d'expédition |
-| Dégâts | +8 % par numéro d'expédition |
-| Vitesse | jusqu'à +22 % (plafonné) |
-| Vétérans (ont survécu à une expédition précédente) | +8 % par expédition survécue, plus bonus de réputation |
-| Héritiers | ×1.12 sur l'ensemble des statistiques |
+| PV | +11,5 % par numero d'expedition |
+| Degats | +6,5 % par numero d'expedition |
+| Vitesse | jusqu'a +18 % (plafonne) |
+| Veterans (ont survecu a une expedition precedente) | +7 % par expedition survecue, plus bonus de reputation plafonne |
+| Heritiers | x1.10 sur l'ensemble des statistiques |
 
 ---
 
@@ -422,6 +425,7 @@ Conséquence directe de D-010 (voir [DECISIONS.md](./DECISIONS.md)) : le Royaume
 🟡 **PARTIEL (Cartographer V1 + Remains & Relics V1 + Zones/Guardian V1)** :
 - Les aventuriers produisent maintenant des observations limitées aux portes, pièges, trésors, trésors spéciaux, défenseurs, gardien, boss, zones importantes/dangereuses, routes bloquées/changées, restes et sites de mort qu'ils ont plausiblement vus.
 - Seuls les survivants transmettent leurs observations. Un cartographe survivant augmente la confiance, la précision et la correction de faits périmés ; un cartographe mort perd ses notes personnelles.
+- Equilibrage global V1 plafonne les faits conserves (`kingdomFacts` et ancienne `kingdomMemory`) et augmente le decay : le Royaume garde les faits utiles, pas une carte exhaustive.
 - Les rumeurs/taverne peuvent afficher "Croquis fiable", "Carte perdue" ou une relique/site de mort reconnu sans créer de carte visuelle.
 
 🔵 **CIBLE (Milestone 3 — The Kingdom Remembers)** :
@@ -517,6 +521,27 @@ Non-objectifs V1 : généalogie, famille automatique, inventaire de cadavre, éq
 
 **Progression intra-partie** (🟢 implémentée) : scaling par expédition (voir [§12](#12-aventuriers-)), soin du boss et des monstres entre les expéditions, accumulation de mémoire tactique (voir [§15](#15-mémoire-)).
 
+**Reputation du donjon / menace V1** (implemente) : la run suit maintenant deux valeurs dans `RunWorldMemory.dungeonReputation`.
+
+| Axe | Role |
+|---|---|
+| Reputation / notoriete (`value`) | A quel point le donjon est connu et attire contrats, rumeurs et recompenses |
+| Menace (`threat`) | A quel point la Guilde le considere dangereux et prepare mieux ses equipes |
+
+Paliers V1 :
+
+| Palier | Nom | Effets principaux |
+|---|---|---|
+| 0 | Donjon inconnu | Base naive, defenses de depart |
+| 1 | Rumeur locale | Leger bonus recompense, pression cartographe/soigneur, premiers unlocks |
+| 2 | Donjon dangereux | Meilleure preparation, pression guerrier/soigneur, `roomLockTrap`/`guardian` accessibles par palier |
+| 3 | Menace regionale | Plans plus serieux, plus de mage/healer, bonus de recompense accru |
+| 4 | Donjon tristement celebre | Expeditions fortement preparees, lignes taverne dediees, recompense maximale V1 |
+
+La reputation monte avec les morts, survivants revenus raconter, cartographes survivants, gardien meurtrier, boss vu/atteint, wipes, tresors speciaux lootes, richesse du donjon et progression des expeditions. Une expedition sans survivant n'ajoute qu'une notoriete vague : aucun fait precis Kingdom n'est cree sans temoin. Kingdom Remembers garde son role : il decrit ce que la Guilde croit savoir, tandis que la reputation dit seulement a quel point le donjon semble connu/dangereux.
+
+Effets V1 : bonus d'or modere, leger bonus PV/degats aux aventuriers prepares, pression de roles dans `expeditionComposition`, plans d'expedition plus ambitieux a haut palier, unlocks de defenses existantes par palier OU vague, affichage HUD (`Reputation`, `Menace`) et ligne taverne contextuelle. Non-objectifs : factions, politique, carte du royaume, evenements mondiaux, reputation par ville, arbre de tech complet.
+
 **Progression trans-parties** (🟡 partielle) : à ce jour, seul le **record d'expéditions survécues** persiste après une Defeat (stockage local, sans effet sur le gameplay). Toute la mémoire du monde repart de zéro à chaque nouvelle partie.
 
 🔵 **CIBLE** — Une forme de méta-progression compatible avec le principe *« le joueur finit toujours par perdre »* (voir [DESIGN_PRINCIPLES.md](./DESIGN_PRINCIPLES.md) #18) : par exemple, un royaume qui commence légèrement différent (mais jamais plus facile) à chaque nouvelle partie, informé par le souvenir collectif — nécessairement imparfait (voir [DECISIONS.md](./DECISIONS.md) D-010, [§23](#23-informations-imparfaites-)) — des parties précédentes plutôt que par un bonus de puissance pour le joueur. Cette question est ouverte — voir [IDEAS.md](./IDEAS.md), section « À explorer ».
@@ -541,6 +566,7 @@ Interface hybride : rendu de jeu via Phaser (`#game-canvas`) et interface HTML/D
 **Éléments principaux de l'UI** :
 - Panneau de construction (sélection de piège/monstre, coût, or restant) ;
 - Aperçu de la prochaine escouade et rumeurs actives ;
+- Indication compacte `Reputation` / `Menace` du donjon dans le HUD ;
 - Barre d'expéditions, PV du boss, contrôles pause/vitesse ;
 - Panneau d'inspection d'un aventurier (niveau, traits, blessures, vendetta) au clic pendant une expédition ;
 - Écran de débriefing (voir [§25](#25-débriefing-)).

@@ -20,10 +20,10 @@ export const ENTRY_CELL: GridCell = { x: 0, y: 7 };
 export const TREASURE_CELL: GridCell = { x: 16, y: 4 };
 export const BOSS_CELL: GridCell = { x: 22, y: 12 };
 export const SAFE_ZONE_RADIUS = 2;
-export const GOLD_TREASURE_DEFAULT_VALUE = 20;
-export const GOLD_TREASURE_MIN_VALUE = 10;
-export const GOLD_TREASURE_MAX_VALUE = 50;
-export const MAX_TREASURES_V1 = 3;
+export const GOLD_TREASURE_DEFAULT_VALUE = ECONOMY_BALANCE.goldTreasureDefaultValue;
+export const GOLD_TREASURE_MIN_VALUE = ECONOMY_BALANCE.goldTreasureMinValue;
+export const GOLD_TREASURE_MAX_VALUE = ECONOMY_BALANCE.goldTreasureMaxValue;
+export const MAX_TREASURES_V1 = ECONOMY_BALANCE.maxTreasuresV1;
 
 export const STARTING_GOLD = ECONOMY_BALANCE.startingGold;
 export const DIG_COST = ECONOMY_BALANCE.digCost;

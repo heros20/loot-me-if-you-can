@@ -15,6 +15,17 @@ import type {
 
 export const MAX_PERSISTENT_REMAINS = 80;
 export const MAX_VISIBLE_REMAINS_PER_CELL = 3;
+export const REMAINS_BALANCE = {
+  maxLevelLootBonus: 3,
+  lootVariance: 3,
+  bossDeathLootBonus: 2,
+  minLootGold: 2,
+  baseReactionChance: 10,
+  sameRoleReactionBonus: 9,
+  anxiousTraitReactionBonus: 6,
+  cartographerReactionBonus: 8,
+  relicRecognitionCap: 48,
+} as const;
 
 interface RelicTemplate {
   type: RelicType;
@@ -50,41 +61,41 @@ const LOOT_TEMPLATES: LootTemplate[] = [
     kind: 'looseGold',
     label: 'Bourse eparpillee',
     description: 'Quelques pieces tombees entre deux dalles.',
-    baseGold: 5,
+    baseGold: 3,
   },
   {
     kind: 'sellableGear',
     label: 'Materiel revendable',
     description: 'Boucles, laniere et petite quincaillerie revendables.',
-    baseGold: 7,
+    baseGold: 5,
     roleBias: 'warrior',
   },
   {
     kind: 'guildSupplies',
     label: 'Provisions de Guilde',
     description: 'Bandages secs et fioles ordinaires repris comme fournitures.',
-    baseGold: 6,
+    baseGold: 4,
     roleBias: 'healer',
   },
   {
     kind: 'mapScrap',
     label: 'Fragment annote',
     description: "Un bout de croquis que l'archiviste paie sans poser de question.",
-    baseGold: 8,
+    baseGold: 5,
     roleBias: 'cartographer',
   },
   {
     kind: 'sellableGear',
     label: 'Outils abimes',
     description: 'Crochets tordus et etuis encore recuperables.',
-    baseGold: 6,
+    baseGold: 4,
     roleBias: 'thief',
   },
   {
     kind: 'guildSupplies',
     label: 'Composants mineurs',
     description: 'Poudre, craie et babioles arcanes sans proprietaire vivant.',
-    baseGold: 7,
+    baseGold: 5,
     roleBias: 'mage',
   },
 ];
@@ -171,10 +182,10 @@ export function shouldReactToRemains(input: {
 
   const score = Math.abs(hashText(`${input.adventurer.profileId}:${input.remains.id}:react:${input.wave}`)) % 100;
   const threshold =
-    16 +
-    (input.adventurer.role === input.remains.ownerRole ? 12 : 0) +
-    (input.adventurer.traits.includes('cautious') || input.adventurer.traits.includes('traumatized') ? 8 : 0) +
-    (input.adventurer.role === 'cartographer' ? 10 : 0) +
+    REMAINS_BALANCE.baseReactionChance +
+    (input.adventurer.role === input.remains.ownerRole ? REMAINS_BALANCE.sameRoleReactionBonus : 0) +
+    (input.adventurer.traits.includes('cautious') || input.adventurer.traits.includes('traumatized') ? REMAINS_BALANCE.anxiousTraitReactionBonus : 0) +
+    (input.adventurer.role === 'cartographer' ? REMAINS_BALANCE.cartographerReactionBonus : 0) +
     Math.min(10, input.adventurer.level * 2);
 
   return score < threshold;
@@ -208,7 +219,7 @@ export function shouldRecognizeRelic(input: {
     (input.cartographerInParty ? 5 : 0);
   const score = Math.abs(hashText(`${input.adventurer.profileId}:${input.remains.id}:recognize`)) % 100;
 
-  return score < Math.min(58, threshold);
+  return score < Math.min(REMAINS_BALANCE.relicRecognitionCap, threshold);
 }
 
 export function describeRemains(remains: AdventurerRemains): string {
@@ -271,14 +282,14 @@ function createRemainsLoot(
   const biased = LOOT_TEMPLATES.filter((template) => !template.roleBias || template.roleBias === role);
   const pool = biased.length > 0 ? biased : LOOT_TEMPLATES;
   const template = pool[Math.abs(hashText(`${ownerName}:${role}:${wave}:loot`)) % pool.length];
-  const causeBonus = causeKind === 'boss' ? 2 : causeKind === 'minion' ? 1 : 0;
-  const variance = Math.abs(hashText(`${ownerName}:${template.kind}:${wave}:value`)) % 4;
+  const causeBonus = causeKind === 'boss' ? REMAINS_BALANCE.bossDeathLootBonus : causeKind === 'minion' ? 1 : 0;
+  const variance = Math.abs(hashText(`${ownerName}:${template.kind}:${wave}:value`)) % REMAINS_BALANCE.lootVariance;
 
   return {
     kind: template.kind,
     label: template.label,
     description: template.description,
-    goldValue: Math.max(2, template.baseGold + Math.min(4, level) + causeBonus + variance),
+    goldValue: Math.max(REMAINS_BALANCE.minLootGold, template.baseGold + Math.min(REMAINS_BALANCE.maxLevelLootBonus, level) + causeBonus + variance),
     claimed: false,
   };
 }

@@ -48,6 +48,8 @@ export class GameDomUi {
   private lastSnapshot: UiSnapshot | null = null;
   private openSections = new Set<string>(DEFAULT_OPEN_SECTIONS);
   private creditsOpen = false;
+  private audioMuted = false;
+  private audioVolume = 0.72;
   private tavernReportRef: WaveReport | null = null;
   private tavernProgress: TavernProgressState = { revealedCount: 0, totalBeats: 0, fullyRevealed: false };
   private readonly unsubscribe: () => void;
@@ -236,7 +238,28 @@ export class GameDomUi {
           <span class="phase-pill phase-pill--${phase.tone}">${phase.label}</span>
         </div>
         <p class="control-header__meta"><strong>${snapshot.gold} or</strong> &middot; Expedition ${snapshot.wave} &middot; ${escapeHtml(snapshot.currentMapLabel)}</p>
+        <p class="control-header__meta">Reputation : <strong>${escapeHtml(snapshot.dungeonReputationTitle)}</strong> (${snapshot.dungeonReputation}) &middot; Menace : ${snapshot.dungeonThreat}</p>
+        ${this.renderAudioControls()}
       </header>
+    `;
+  }
+
+  private renderAudioControls(): string {
+    return `
+      <div class="audio-controls" aria-label="Audio">
+        <button class="control-button control-button--icon" type="button" data-action="toggle-audio-mute" title="${this.audioMuted ? 'Activer le son' : 'Couper le son'}">
+          ${this.audioMuted ? 'Muet' : 'Son'}
+        </button>
+        <input
+          class="audio-slider"
+          type="range"
+          min="0"
+          max="100"
+          value="${Math.round(this.audioVolume * 100)}"
+          data-audio-volume
+          aria-label="Volume general"
+        />
+      </div>
     `;
   }
 
@@ -403,12 +426,13 @@ export class GameDomUi {
 
   private renderDefenseCard(item: DefenseUiItem, snapshot: DungeonSnapshot): string {
     const selected = item.type === snapshot.selectedDefense ? ' is-selected' : '';
+    const lockText = item.locked && item.unlockHint ? item.unlockHint : '';
 
     return `
-      <button class="defense-card${selected}" data-defense="${item.type}" ${item.disabled ? 'disabled' : ''}>
+      <button class="defense-card${selected}" data-defense="${item.type}" ${item.disabled ? 'disabled' : ''} title="${escapeHtml(lockText || item.description)}">
         <span class="defense-card__swatch" style="--swatch:${item.color}"></span>
         <strong>${escapeHtml(item.name)}</strong>
-        <span class="defense-card__cost">${item.cost} or</span>
+        <span class="defense-card__cost">${item.locked ? 'Verrouille' : `${item.cost} or`}</span>
       </button>
     `;
   }
@@ -444,7 +468,7 @@ export class GameDomUi {
         <p class="detail-card__title">Outil : ${escapeHtml(item.name)}</p>
         <div class="detail-card__row"><span>Cout</span><strong>${item.cost} or</strong></div>
         <p class="detail-card__effect">${escapeHtml(item.description)}</p>
-        <p class="detail-card__hint">Placement : sol creuse, hors entree, tresor et trone.</p>
+        <p class="detail-card__hint">${escapeHtml(item.unlockHint ?? 'Placement : sol creuse, hors entree, tresor et trone.')}</p>
       </div>
     `;
   }
@@ -686,6 +710,7 @@ export class GameDomUi {
 
         <div class="tavern-hud__actions debrief__actions">
           <span class="tavern-hud__hint">Espace/Entree: avancer | Echap: passer</span>
+          ${this.renderAudioControls()}
           <button class="button button--ghost" data-action="tavern-skip">Passer</button>
           <button class="button button--primary" data-action="tavern-advance">${canAdvance ? 'Continuer' : 'Vers la preparation'}</button>
         </div>
@@ -715,6 +740,7 @@ export class GameDomUi {
 
         <div class="tavern-hud__actions debrief__actions">
           <span class="tavern-hud__hint">Espace/Entree: avancer | Echap: passer</span>
+          ${this.renderAudioControls()}
           ${canAdvance ? '<button class="button button--ghost" data-action="tavern-skip">Passer</button><button class="button button--primary" data-action="tavern-advance">Continuer</button>' : ''}
           <button class="button" data-action="restart">Rebatir sur les cendres</button>
         </div>
@@ -811,6 +837,12 @@ export class GameDomUi {
           emitUiAction({ type: 'toggle-pause' });
         }
 
+        if (action === 'toggle-audio-mute') {
+          this.audioMuted = !this.audioMuted;
+          emitUiAction({ type: 'toggle-audio-mute' });
+          this.refresh();
+        }
+
         if (action === 'close-inspection') {
           emitUiAction({ type: 'close-inspection' });
         }
@@ -826,6 +858,14 @@ export class GameDomUi {
         if (action === 'tavern-skip') {
           emitUiAction({ type: 'tavern-skip' });
         }
+      });
+    });
+
+    this.root.querySelectorAll<HTMLInputElement>('[data-audio-volume]').forEach((input) => {
+      input.addEventListener('input', () => {
+        const value = safeNumber(input.value) / 100;
+        this.audioVolume = Math.max(0, Math.min(1, value));
+        emitUiAction({ type: 'set-audio-volume', volume: this.audioVolume });
       });
     });
 
@@ -893,6 +933,11 @@ export class GameDomUi {
       });
     });
   }
+}
+
+function safeNumber(value: string): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 // ---------------------------------------------------------------------

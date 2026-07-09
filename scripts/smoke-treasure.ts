@@ -63,7 +63,7 @@ for (let wave = 1; wave <= 8; wave += 1) {
     if (s.phase === 'report' || s.phase === 'defeat') {
       console.log(
         `Vague ${wave}: phase=${s.phase} stolen=${s.report?.treasureStolen} penalty=${s.report?.treasurePenaltyGold}` +
-          ` budget=${s.report?.preparationBudget} infamie=${s.dungeonReputation}`,
+          ` budget=${s.report?.preparationBudget} reputation=${s.dungeonReputation}/${s.dungeonThreat}`,
       );
       break;
     }

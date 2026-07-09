@@ -4,7 +4,7 @@
 |---|---|
 | **Statut** | Vivant — journal append-only, on n'édite jamais une décision passée |
 | **Propriétaire** | Game Design |
-| **Dernière mise à jour** | 2026-07-08 (D-027) |
+| **Dernière mise à jour** | 2026-07-08 (D-031) |
 | **Documents liés** | [DESIGN_PRINCIPLES.md](./DESIGN_PRINCIPLES.md) · [GAME_DESIGN_DOCUMENT.md](./GAME_DESIGN_DOCUMENT.md) |
 
 ---
@@ -26,6 +26,54 @@ Chaque décision structurante obtient une entrée, numérotée dans l'ordre chro
 **Conséquences** : impact sur le design, le code ou la production
 **Remplace / Remplacé par** : lien vers une autre entrée le cas échéant
 ```
+
+---
+
+## D-031 - Art/Animation/Tavern V2 replaces the prototype-looking presentation layer
+
+**Date** : 2026-07-08
+**Statut** : Actif
+**Contexte** : la passe V1 compilait et chargeait des assets, mais le test manuel refusait encore la direction artistique : trop Kenney/prototype, sprites trop petits, boss lisible comme un crabe, taverne percue comme une superposition, audio taverne fragile, et manque d'animation/musique de combat.
+**Decision** : garder la simulation intacte et remplacer la presentation primaire. Les tiles/portes/pieges/objectifs utilisent des textures runtime sombres generees localement. Les aventuriers utilisent des spritesheets 64px derivees des assets Warlock woodsman/bandit avec recoloration et overlays de role. Les defenses/gardien/boss utilisent des spritesheets Warlock animees, avec le boss final remplace par `demon.png`. `animationManifest.ts` devient le mapping texture -> idle/walk/action/display size. `AudioSystem` gere maintenant l'unlock par evenements DOM/fenetre et conserve les options d'ambiance en attente. `DungeonScene` choisit ambiance donjon, musique gardien ou musique boss selon l'etat de combat. `GuildTavernScene` dessine un fond opaque plein ecran, anime PNJ/survivants/volontaires et joue de rares sons de vie.
+**Alternatives envisagees** : continuer avec Kenney Tiny Dungeon comme rendu principal (rejete : encore prototype) ; ajouter de nouveaux types gameplay archer/monte/volant uniquement pour satisfaire l'art (rejete : hors scope et non supporte par `DefenseType`) ; utiliser des assets itch bloques par un flux de telechargement non reproductible (rejete : integration non fiable) ; placer l'audio/animation dans la simulation (rejete : presentation seulement).
+**Consequences** : l'identite visuelle devient plus sombre, plus lisible et plus animee, avec des licences documentees CC0/CC-BY. Les futurs ajouts de sprites passent par `SPRITESHEET_ASSETS`, `ENTITY_VISUALS`, `ANIMATION_KEYS` et `npm run verify-media`. Les limites restantes sont le mix audio a verifier a l'oreille et la densite des labels en vagues chargees.
+**Remplace / Remplace par** : etend et corrige D-030.
+
+---
+
+## D-030 - Presentation V1 uses licensed assets and scene-side VFX/audio only
+
+**Date** : 2026-07-08
+**Statut** : Actif
+**Contexte** : apres les passes gameplay/reputation/equilibrage, le jeu devait perdre son aspect prototype sans ouvrir de nouveau chantier de classes, monstres, defenses, economie, pathfinding ou contenu D&D officiel. Les contraintes etaient strictes : actifs reels, non generes par IA, licences documentees, et aucun changement de regles.
+**Decision** : utiliser uniquement des assets tiers CC0 verifies pour la V1 presentation : Kenney Tiny Dungeon pour les sprites, Kenney/Rubberduck/OpenGameArt pour les SFX, ambiances et musique de taverne. `docs/THIRD_PARTY_ASSETS.md` devient l'inventaire canonique des sources et fichiers. Les visuels sont remappes par `src/assets/manifest.ts`, les fallbacks internes restent dans `placeholderTextures.ts`, et l'audio passe par `AUDIO_ASSETS` + `AudioSystem`. Les effets supplementaires (glows, fog, slash, projectile, shockwave, trap burst, loot glint, lock pips) sont dessines cote Phaser dans `DungeonScene`, a partir de l'etat rendu et des `combatFeedbackEvents`. L'audio garde un etat global volume/mute entre scenes, gere l'unlock navigateur, et reste une couche de presentation.
+**Alternatives envisagees** : generer des images/audio par IA (rejete : interdit pour cette passe) ; utiliser de l'art D&D officiel, commercial ou rippe (rejete : risque legal/licence et hors identite propre) ; ajouter de nouveaux archetypes archer/monte/volant juste pour l'art (rejete : le `DefenseType`/simulation ne les supporte pas encore) ; placer l'audio dans la simulation (rejete : bruit dans les tests et couplage inutile) ; remplacer les fallbacks internes (rejete : ils restent utiles si un asset externe manque).
+**Consequences** : le donjon, la taverne et les combats gagnent en lisibilite audiovisuelle sans modifier la balance ni les contrats de simulation. Les assets tiers ont une trace de licence, le build peut rester fonctionnel si un media manque, et les futurs ajouts artistiques doivent passer par le meme inventaire. Les risques restants sont surtout de production : mix audio a affiner a l'oreille, densite visuelle a verifier en playtest, et besoin potentiel d'assets plus specifiques quand de vrais nouveaux types gameplay seront ajoutes.
+**Remplace / Remplace par** : etend la passe Kenney initiale et respecte D-028/D-029.
+
+---
+
+## D-029 - Reputation du donjon comme progression de run V1
+
+**Date** : 2026-07-08
+**Statut** : Actif
+**Contexte** : apres l'equilibrage global, la run avait besoin d'une montee lisible : le donjon devait devenir connu et plus dangereux, attirer plus de valeur, provoquer une Guilde mieux preparee, et debloquer des options sans ouvrir un systeme politique, une carte du royaume, des factions ou une economie avancee.
+**Decision** : etendre `RunWorldMemory.dungeonReputation` en deux axes simples : `value` pour la reputation/notoriete et `threat` pour la menace estimee. `runProgressionSystem.ts` centralise les cinq paliers (`Donjon inconnu`, `Rumeur locale`, `Donjon dangereux`, `Menace regionale`, `Donjon tristement celebre`), les seuils, les bonus de recompense, les pressions de roles, le bonus leger de preparation des aventuriers, le bonus de confiance Kingdom, et les unlocks V1. La reputation/menace monte par expedition selon morts, survivants bavards, cartographes revenus, gardien meurtrier, boss vu/atteint, wipe, tresors speciaux lootes, richesse du donjon et baseline d'expedition. Une expedition sans survivant augmente seulement une notoriete vague : aucun fait precis n'est cree dans Kingdom Remembers. Les paliers influencent la composition via pressions de roles, les plans d'expedition a haut niveau, les recompenses, l'affichage HUD/taverne, et les unlocks des defenses deja presentes (`fireTrap`, `goblin`, `roomLockTrap`, `guardian`) par palier ou vague.
+**Alternatives envisagees** : creer une reputation politique/factions/royaume (rejete : hors V1) ; faire de la reputation une connaissance automatique du donjon (rejete : viole D-010/D-023/D-024) ; remplacer Kingdom Remembers par la reputation (rejete : la reputation dit "dangereux", Kingdom dit "on croit savoir quoi et ou") ; bloquer fortement les premieres vagues derriere les unlocks (rejete : les unlocks combinent palier OU vague pour garder la boucle jouable).
+**Consequences** : la run a une trajectoire plus claire : plus le donjon tue et survit aux expeditions, plus il attire or et aventuriers serieux. La Guilde devient un peu mieux preparee sans devenir parfaite ni omnisciente. Les valeurs restent tuneables dans un seul module et `smoke-longrun` verifie maintenant reputation, menace et tier final en plus de l'economie, survivants, duree, facts et indisponibles. Les defenses avancees absentes du `DefenseType` actuel (archer, montee, volante) ne sont pas ajoutees ; elles devront rejoindre ces tables quand elles existeront.
+**Remplace / Remplace par** : etend D-028 et respecte D-010, D-023, D-024.
+
+---
+
+## D-028 - Equilibrage global V1 stabilise avant nouveau contenu
+
+**Date** : 2026-07-08
+**Statut** : Actif
+**Contexte** : apres Multi-map, Cartographe, Remains, rebouchage, room lock, survivants persistants et tresors speciaux, les systemes commencaient a se renforcer entre eux : or qui monte trop vite, survivants qui snowball, Royaume qui accumule trop de faits, reactions narratives trop frequentes, et rythme d'exploration potentiellement trop lent. Le besoin etait une passe de stabilisation, pas une nouvelle feature.
+**Decision** : centraliser les valeurs de tuning importantes dans des tables explicites : `economyBalance.ts` pour or/couts/penalites/salvage, `combatBalance.ts` pour boss/aventuriers/defenses/scaling, `progressionBalance.ts` pour rythme d'exploration et seuils longrun, plus les tables locales existantes (`SPECIAL_TREASURE_BALANCE`, `SURVIVOR_RECOVERY_BALANCE`, `KINGDOM_MEMORY_BALANCE`, `REMAINS_BALANCE`, `BARK_BALANCE`, `COMBAT_ABILITY_BALANCE`). L'economie recompense moins fort les vagues tardives, les pieges ne sont plus recuperes a plein cout, le remplacement d'un tresor vole coute plus cher, et la fouille de restes reste un petit appoint. Les aventuriers scalent un peu moins vite, le boss final est plus robuste, le gardien reste une menace intermediaire, les tresors speciaux coutent plus cher et donnent des bonus contenus. Le Royaume garde des faits plafonnes et decroissants ; le cartographe ameliore la qualite sans rendre la Guilde omnisciente. L'exploration opaque est limitee a peu de salles, plus avec cartographe, et les barks/reactions ont des cooldowns plus stricts.
+**Alternatives envisagees** : ajouter une difficulte dynamique complete (rejete : trop gros et hors V1) ; ajouter des nouvelles defenses/classes pour corriger la difficulte (rejete : ce serait du contenu, pas de l'equilibrage) ; laisser les smoke tests seulement verifier l'absence de crash (rejete : pas assez utile pour tuner) ; figer des valeurs dans les tests (rejete : les tests lisent maintenant les tables de couts quand possible).
+**Consequences** : `smoke-longrun` devient un outil de diagnostic de balance avec survivants moyens, morts moyens, duree moyenne, or final/max, budgets, special loot, cartographes, portes, restes fouilles, facts Kingdom et indisponibles. Les seuils restent volontairement larges : ils detectent les regressions de rythme, richesse, omniscience ou paralysie, mais ne remplacent pas un test manuel. Les defenses avancees nommees dans la roadmap (archer/monture/volant) ne sont pas ajoutees ici ; quand elles existeront, elles devront entrer dans `combatBalance.ts` et les memes longruns.
+**Remplace / Remplace par** : etend D-023, D-024, D-025, D-026 et D-027.
 
 ---
 

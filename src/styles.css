@@ -399,6 +399,24 @@ body.tavern-active .side-panel {
   font-weight: 900;
 }
 
+.audio-controls {
+  display: grid;
+  grid-template-columns: 58px minmax(110px, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+}
+
+.control-button--icon {
+  min-width: 58px;
+  padding-inline: 8px;
+}
+
+.audio-slider {
+  width: 100%;
+  accent-color: #e1b35a;
+}
+
 .floor-selector {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

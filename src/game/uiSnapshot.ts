@@ -25,6 +25,8 @@ export interface DefenseUiItem {
   cost: number;
   color: string;
   disabled: boolean;
+  locked: boolean;
+  unlockHint: string | null;
 }
 
 export interface ConstructionUiItem {
@@ -118,6 +120,9 @@ export interface DungeonSnapshot {
   message: string;
   dungeonReputation: number;
   dungeonReputationTitle: string;
+  dungeonThreat: number;
+  dungeonReputationTier: 0 | 1 | 2 | 3 | 4;
+  dungeonReputationSummary: string;
   constructionTools: ConstructionUiItem[];
   availableDefenses: DefenseUiItem[];
   dungeonTiles: DungeonTile[];
@@ -171,6 +176,8 @@ export type UiAction =
   | { type: 'use-ability'; abilityType: BossAbilityType }
   | { type: 'toggle-pause' }
   | { type: 'set-speed'; speed: number }
+  | { type: 'toggle-audio-mute' }
+  | { type: 'set-audio-volume'; volume: number }
   | { type: 'close-inspection' }
   | { type: 'tavern-advance' }
   | { type: 'tavern-skip' };

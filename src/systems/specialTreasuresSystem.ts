@@ -8,15 +8,15 @@ import type {
 } from '../game/types';
 
 export const SPECIAL_TREASURE_BALANCE = {
-  weaponCost: 18,
-  armorCost: 18,
-  techniqueCost: 20,
+  weaponCost: 22,
+  armorCost: 22,
+  techniqueCost: 24,
   weaponDamageBonus: 2,
-  armorMaxHpBonus: 8,
+  armorMaxHpBonus: 7,
   armorDamageReduction: 1,
   techniqueDamageBonus: 1,
   techniqueMageDamageBonus: 2,
-  techniqueHealingBonus: 3,
+  techniqueHealingBonus: 2,
   attractionWeight: 3,
 };
 

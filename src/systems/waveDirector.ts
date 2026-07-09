@@ -1,7 +1,9 @@
 import { ENTRANCE_MAP_ID, ENTRY_CELL, PARTY_SIZE, THIEF_MAX_LOCKPICKS_PER_EXPEDITION, cellKey } from '../game/constants';
-import type { AdventurerEntity, AdventurerProfile, AdventurerRole, AdaptationMemory } from '../game/types';
+import type { AdventurerEntity, AdventurerProfile, AdventurerRole, AdaptationMemory, DungeonReputation } from '../game/types';
 import { getAdventurerDefinition } from '../entities/definitions';
 import { COMBAT_ABILITY_BALANCE } from './combatAbilitySystem';
+import { ADVENTURER_SCALING_BALANCE } from './combatBalance';
+import { computeReputationAdventurerStatBonus } from './runProgressionSystem';
 import { computeSpecialTreasureModifiers } from './specialTreasuresSystem';
 
 const ADAPTIVE_ROLE_ORDER: AdventurerRole[] = ['warrior', 'thief', 'mage', 'healer', 'cartographer'];
@@ -35,30 +37,37 @@ export function buildWaveRoster(
   return roles;
 }
 
-export function createAdventurer(profile: AdventurerProfile, id: string, wave: number, index: number): AdventurerEntity {
+export function createAdventurer(profile: AdventurerProfile, id: string, wave: number, index: number, dungeonReputation?: DungeonReputation): AdventurerEntity {
   const role = profile.role;
   const definition = getAdventurerDefinition(role);
-  const hpScale = 1 + (wave - 1) * 0.13;
-  const damageScale = 1 + (wave - 1) * 0.08;
-  const speedScale = 1 + Math.min(0.22, (wave - 1) * 0.012);
-  const veteranScale = 1 + profile.survivedExpeditions * 0.08 + Math.min(0.18, profile.reputation * 0.01);
-  const heirScale = profile.heirOfProfileId ? 1.12 : 1;
-  const levelScale = 1 + (profile.level - 1) * 0.06;
+  const hpScale = 1 + (wave - 1) * ADVENTURER_SCALING_BALANCE.hpPerWave;
+  const damageScale = 1 + (wave - 1) * ADVENTURER_SCALING_BALANCE.damagePerWave;
+  const speedScale = 1 + Math.min(
+    ADVENTURER_SCALING_BALANCE.maxSpeedScaleBonus,
+    (wave - 1) * ADVENTURER_SCALING_BALANCE.speedPerWave,
+  );
+  const veteranScale =
+    1 +
+    profile.survivedExpeditions * ADVENTURER_SCALING_BALANCE.veteranHpDamagePerSurvival +
+    Math.min(ADVENTURER_SCALING_BALANCE.maxReputationScaleBonus, profile.reputation * ADVENTURER_SCALING_BALANCE.reputationScalePerPoint);
+  const heirScale = profile.heirOfProfileId ? ADVENTURER_SCALING_BALANCE.heirScale : 1;
+  const levelScale = 1 + (profile.level - 1) * ADVENTURER_SCALING_BALANCE.levelScalePerLevel;
   const courageDamage = profile.traits.includes('courageous') ? 1.05 : 1;
   const cautionHp = profile.traits.includes('cautious') ? 1.04 : 1;
   const greedSpeed = profile.traits.includes('greedy') ? 1.04 : 1;
   const specialModifiers = computeSpecialTreasureModifiers(profile);
+  const runPreparationScale = dungeonReputation ? 1 + computeReputationAdventurerStatBonus(dungeonReputation) : 1;
   const injuryPerformanceMultiplier = profile.injuries.reduce(
     (multiplier, injury) => multiplier * injury.performanceMultiplier,
     1,
   );
   const spawnOffset = ((index % 5) - 2) * 0.08;
 
-  const baseMaxHp = Math.round(definition.hp * hpScale * veteranScale * levelScale * cautionHp * heirScale * injuryPerformanceMultiplier)
+  const baseMaxHp = Math.round(definition.hp * hpScale * veteranScale * levelScale * cautionHp * heirScale * runPreparationScale * injuryPerformanceMultiplier)
     + specialModifiers.maxHpBonus;
   const baseDamage = Math.max(
     1,
-    Math.round(definition.damage * damageScale * veteranScale * levelScale * courageDamage * heirScale * injuryPerformanceMultiplier)
+    Math.round(definition.damage * damageScale * veteranScale * levelScale * courageDamage * heirScale * runPreparationScale * injuryPerformanceMultiplier)
       + specialModifiers.damageBonus,
   );
 

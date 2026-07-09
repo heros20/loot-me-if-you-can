@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
+    "verify-media": "tsx scripts/verify-media.ts",
     "smoke": "tsx scripts/smoke.ts && npm run smoke-treasure && npm run smoke-longrun",
     "smoke-treasure": "tsx scripts/smoke-treasure.ts",
     "smoke-longrun": "tsx scripts/smoke-longrun.ts"

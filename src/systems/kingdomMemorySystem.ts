@@ -16,16 +16,18 @@ import type {
 } from '../game/types';
 import { getTileAt } from '../game/dungeonTiles';
 import { isSpecialTreasureKind, specialKindFromTreasureKind, specialTreasureLabel } from './specialTreasuresSystem';
+import { getReputationTierInfo } from './runProgressionSystem';
 
-export const CARTOGRAPHER_CONFIDENCE_BOOST = 0.22;
+export const CARTOGRAPHER_CONFIDENCE_BOOST = 0.18;
 export const CARTOGRAPHER_OBSERVATION_RADIUS = 4.0;
 export const BASE_OBSERVATION_RADIUS = 2.35;
-export const CARTOGRAPHER_STALE_RESOLVE_BOOST = 0.12;
-export const CARTOGRAPHER_SPECIAL_TREASURE_REPORT_BOOST = 0.08;
-export const CARTOGRAPHER_TRAP_REPORT_BOOST = 0.07;
-export const CARTOGRAPHER_ZONE_REPORT_BOOST = 0.08;
+export const CARTOGRAPHER_STALE_RESOLVE_BOOST = 0.1;
+export const CARTOGRAPHER_SPECIAL_TREASURE_REPORT_BOOST = 0.06;
+export const CARTOGRAPHER_TRAP_REPORT_BOOST = 0.06;
+export const CARTOGRAPHER_ZONE_REPORT_BOOST = 0.06;
 
 const STALE_AFTER_WAVES = 3;
+const MAX_WORLD_KINGDOM_FACTS = 28;
 
 export interface KingdomMemoryCommitResult {
   committedObservations: number;
@@ -59,6 +61,7 @@ export function commitSurvivorObservations(
   const lostCartographerNames = new Set<string>();
   const cartographerNames = new Set<string>();
   const improvedFacts: KingdomMemoryFact[] = [];
+  const reputationConfidenceBonus = getReputationTierInfo(world.dungeonReputation.value).kingdomConfidenceBonus;
   let committedObservations = 0;
   let cartographerReports = 0;
 
@@ -76,7 +79,7 @@ export function commitSurvivorObservations(
 
     const fact = upsertFact(world, observation, wave);
     const boost = confidenceBoostFor(observation, fact.stale);
-    const nextConfidence = clamp(observation.confidence + boost, 0.1, fromCartographer ? 0.94 : 0.78);
+    const nextConfidence = clamp(observation.confidence + boost + reputationConfidenceBonus, 0.1, fromCartographer ? 0.94 : 0.78);
     const confirmationBoost = fromCartographer ? 0.18 : 0.08;
 
     fact.confidence = clamp(Math.max(fact.confidence, nextConfidence) + confirmationBoost, 0.1, fromCartographer ? 0.98 : 0.86);
@@ -98,6 +101,7 @@ export function commitSurvivorObservations(
     }
   });
 
+  trimWorldKingdomFacts(world);
   world.lostCartographerReports += lostCartographerNames.size;
 
   return {
@@ -136,12 +140,12 @@ export function computeCartographerRecruitmentPressure(world: RunWorldMemory): n
   ).length;
 
   return Math.min(
-    3.2,
+    2.6,
     staleCount * 0.32 +
-      lowConfidenceCount * 0.2 +
-      uncertainSpecialCount * 0.34 +
-      routeConcernCount * 0.55 +
-      world.lostCartographerReports * 0.18,
+      lowConfidenceCount * 0.16 +
+      uncertainSpecialCount * 0.28 +
+      routeConcernCount * 0.48 +
+      world.lostCartographerReports * 0.14,
   );
 }
 
@@ -196,6 +200,18 @@ function upsertFact(world: RunWorldMemory, observation: KingdomMemoryObservation
 
   world.kingdomFacts.push(fact);
   return fact;
+}
+
+function trimWorldKingdomFacts(world: RunWorldMemory): void {
+  world.kingdomFacts = world.kingdomFacts
+    .sort(
+      (a, b) =>
+        Number(b.confirmedByCartographer) - Number(a.confirmedByCartographer) ||
+        b.confidence - a.confidence ||
+        b.confirmations - a.confirmations ||
+        b.lastSeenWave - a.lastSeenWave,
+    )
+    .slice(0, MAX_WORLD_KINGDOM_FACTS);
 }
 
 function sameFact(fact: KingdomMemoryFact, observation: KingdomMemoryObservation): boolean {
@@ -257,15 +273,15 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 export const KINGDOM_MEMORY_BALANCE = {
-  maxFacts: 32,
-  baseConfidence: 0.56,
-  strongConfidence: 0.72,
+  maxFacts: 14,
+  baseConfidence: 0.52,
+  strongConfidence: 0.68,
   weakConfidence: 0.32,
-  confirmationBoost: 0.16,
-  confidenceDecayPerExpedition: 0.025,
-  stalePenalty: 0.28,
+  confirmationBoost: 0.13,
+  confidenceDecayPerExpedition: 0.035,
+  stalePenalty: 0.32,
   lowConfidenceCutoff: 0.18,
-  reliableFactConfidence: 0.62,
+  reliableFactConfidence: 0.66,
 } as const;
 
 export function createInitialKingdomMemory(): KingdomMemory {
@@ -299,13 +315,16 @@ export function rememberExpeditionFromSurvivors(input: {
   }
 
   const source = pickLegacySource(input.survivors);
+  const reputationConfidenceBonus = getReputationTierInfo(input.world.dungeonReputation.value).kingdomConfidenceBonus;
+  const baseSurvivorConfidence = clamp(KINGDOM_MEMORY_BALANCE.baseConfidence + 0.08 + reputationConfidenceBonus, 0, 0.9);
+  const strongSurvivorConfidence = clamp(KINGDOM_MEMORY_BALANCE.strongConfidence + reputationConfidenceBonus, 0, 0.94);
 
   input.stats.observedDoorCells.forEach((cell) => addLegacyKingdomFact(input.world.kingdomMemory, {
     type: 'lockedDoorSeen',
     cell,
     wave: input.wave,
     source,
-    confidence: KINGDOM_MEMORY_BALANCE.baseConfidence + 0.08,
+    confidence: baseSurvivorConfidence,
     danger: input.stats.doorNoThiefRetreats > 0 ? 3 : 1,
     label: 'Porte verrouillee signalee.',
     data: { locked: true },
@@ -316,7 +335,7 @@ export function rememberExpeditionFromSurvivors(input: {
     cell,
     wave: input.wave,
     source,
-    confidence: KINGDOM_MEMORY_BALANCE.baseConfidence + 0.08,
+    confidence: baseSurvivorConfidence,
     danger: input.stats.heavyDamageCells[cellKey(cell)] ?? 1,
     label: 'Piege signale par les survivants.',
     data: {},
@@ -327,7 +346,7 @@ export function rememberExpeditionFromSurvivors(input: {
     cell,
     wave: input.wave,
     source,
-    confidence: KINGDOM_MEMORY_BALANCE.baseConfidence + 0.08,
+    confidence: baseSurvivorConfidence,
     danger: input.stats.heavyDamageCells[cellKey(cell)] ?? 1,
     label: 'Defenseur signale.',
     data: {},
@@ -340,7 +359,7 @@ export function rememberExpeditionFromSurvivors(input: {
       cell: parseLegacyCellKey(key),
       wave: input.wave,
       source,
-      confidence: KINGDOM_MEMORY_BALANCE.baseConfidence + 0.08,
+      confidence: baseSurvivorConfidence,
       danger: Number(damage),
       label: 'Zone dangereuse rapportee.',
       data: { damage: Number(damage) },
@@ -352,7 +371,7 @@ export function rememberExpeditionFromSurvivors(input: {
       cell: input.stats.observedTrapCells[0] ?? input.stats.observedDefenderCells[0] ?? null,
       wave: input.wave,
       source,
-      confidence: KINGDOM_MEMORY_BALANCE.baseConfidence + 0.08,
+      confidence: baseSurvivorConfidence,
       danger: input.stats.roomEvaluations,
       label: 'Salle dangereuse signalee.',
       data: { roomEvaluations: input.stats.roomEvaluations },
@@ -366,7 +385,7 @@ export function rememberExpeditionFromSurvivors(input: {
       cell: treasure.cell,
       wave: input.wave,
       source,
-      confidence: input.stats.specialTreasureLoots.length > 0 ? KINGDOM_MEMORY_BALANCE.strongConfidence : KINGDOM_MEMORY_BALANCE.baseConfidence + 0.08,
+      confidence: input.stats.specialTreasureLoots.length > 0 ? strongSurvivorConfidence : baseSurvivorConfidence,
       danger: 0,
       label: specialKind ? `${specialTreasureLabel(specialKind)} signale.` : 'Tresor special signale.',
       data: { treasureKind: treasure.kind },
@@ -379,7 +398,7 @@ export function rememberExpeditionFromSurvivors(input: {
       cell: null,
       wave: input.wave,
       source,
-      confidence: KINGDOM_MEMORY_BALANCE.strongConfidence,
+      confidence: strongSurvivorConfidence,
       danger: 0,
       label: 'Route vers un tresor confirmee.',
       data: { stolenValue: input.stats.treasureValueStolen },
@@ -392,7 +411,7 @@ export function rememberExpeditionFromSurvivors(input: {
       cell: null,
       wave: input.wave,
       source,
-      confidence: KINGDOM_MEMORY_BALANCE.baseConfidence + 0.1,
+      confidence: clamp(baseSurvivorConfidence + 0.02, 0, 0.92),
       danger: input.stats.bossDamageTaken,
       label: input.stats.bossDamageTaken > 0 ? 'Boss atteint.' : 'Boss apercu.',
       data: { bossDamageTaken: input.stats.bossDamageTaken },
@@ -405,7 +424,7 @@ export function rememberExpeditionFromSurvivors(input: {
       cell: input.stats.observedDoorCells[0] ?? null,
       wave: input.wave,
       source,
-      confidence: KINGDOM_MEMORY_BALANCE.strongConfidence,
+      confidence: strongSurvivorConfidence,
       danger: 3,
       label: 'Route bloquee sans voleur.',
       data: { reason: 'lockedDoorNoThief' },
@@ -419,7 +438,7 @@ export function rememberExpeditionFromSurvivors(input: {
       cell,
       wave: input.wave,
       source,
-      confidence: KINGDOM_MEMORY_BALANCE.baseConfidence,
+      confidence: baseSurvivorConfidence,
       danger: 1,
       label: 'Le donjon semble avoir change.',
       data: { blockedCell: cellKey(cell) },
@@ -446,24 +465,24 @@ export function kingdomMemoryRolePressure(memory: KingdomMemory, currentWave: nu
     switch (fact.type) {
       case 'lockedDoorSeen':
       case 'routeBlocked':
-        pressure.thief = (pressure.thief ?? 0) + 2.2;
+        pressure.thief = (pressure.thief ?? 0) + 1.9;
         break;
       case 'trapSeen':
-        pressure.thief = (pressure.thief ?? 0) + 1.3;
+        pressure.thief = (pressure.thief ?? 0) + 1.05;
         break;
       case 'dangerousRoomSeen':
       case 'heavyDamageArea':
-        pressure.warrior = (pressure.warrior ?? 0) + 0.9;
-        pressure.healer = (pressure.healer ?? 0) + 1.1;
+        pressure.warrior = (pressure.warrior ?? 0) + 0.75;
+        pressure.healer = (pressure.healer ?? 0) + 0.9;
         break;
       case 'defenderSeen':
-        pressure.warrior = (pressure.warrior ?? 0) + 0.6;
-        pressure.mage = (pressure.mage ?? 0) + 0.8;
+        pressure.warrior = (pressure.warrior ?? 0) + 0.5;
+        pressure.mage = (pressure.mage ?? 0) + 0.65;
         break;
       case 'bossReached':
       case 'bossSeen':
-        pressure.warrior = (pressure.warrior ?? 0) + 0.9;
-        pressure.healer = (pressure.healer ?? 0) + 0.9;
+        pressure.warrior = (pressure.warrior ?? 0) + 0.75;
+        pressure.healer = (pressure.healer ?? 0) + 0.75;
         break;
       case 'specialTreasureSeen':
         addLegacySpecialTreasurePressure(pressure, fact.data.treasureKind);
@@ -509,18 +528,18 @@ export function kingdomTreasureAttractionBonus(
   }
 
   if (treasure.kind === 'specialArmor') {
-    return role === 'warrior' ? 16 : 7;
+    return role === 'warrior' ? 12 : 5;
   }
 
   if (treasure.kind === 'specialWeapon') {
-    return role === 'warrior' || role === 'thief' ? 14 : 5;
+    return role === 'warrior' || role === 'thief' ? 11 : 4;
   }
 
   if (treasure.kind === 'specialTechnique') {
-    return role === 'mage' || role === 'healer' || role === 'thief' ? 15 : 5;
+    return role === 'mage' || role === 'healer' || role === 'thief' ? 12 : 4;
   }
 
-  return 6;
+  return 4;
 }
 
 export function nearbyRememberedRouteFact(memory: KingdomMemory, cell: GridCell, currentWave: number): LegacyKingdomMemoryFact | null {
@@ -641,20 +660,20 @@ function pickLegacySource(survivors: AdventurerProfile[]): AdventurerProfile | n
 
 function addLegacySpecialTreasurePressure(pressure: Partial<Record<AdventurerRole, number>>, treasureKind: unknown): void {
   if (treasureKind === 'specialArmor') {
-    pressure.warrior = (pressure.warrior ?? 0) + 1.1;
+    pressure.warrior = (pressure.warrior ?? 0) + 0.85;
     return;
   }
 
   if (treasureKind === 'specialWeapon') {
-    pressure.warrior = (pressure.warrior ?? 0) + 0.6;
-    pressure.thief = (pressure.thief ?? 0) + 0.9;
+    pressure.warrior = (pressure.warrior ?? 0) + 0.45;
+    pressure.thief = (pressure.thief ?? 0) + 0.7;
     return;
   }
 
   if (treasureKind === 'specialTechnique') {
-    pressure.mage = (pressure.mage ?? 0) + 0.8;
-    pressure.healer = (pressure.healer ?? 0) + 0.8;
-    pressure.thief = (pressure.thief ?? 0) + 0.4;
+    pressure.mage = (pressure.mage ?? 0) + 0.65;
+    pressure.healer = (pressure.healer ?? 0) + 0.65;
+    pressure.thief = (pressure.thief ?? 0) + 0.3;
   }
 }
 

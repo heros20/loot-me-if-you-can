@@ -1,7 +1,9 @@
 import Phaser from 'phaser';
-import { TEXTURE_KEYS } from '../assets/manifest';
+import { ENTITY_VISUALS, type EntityVisualProfile } from '../assets/animationManifest';
+import { AUDIO_KEYS, TEXTURE_KEYS } from '../assets/manifest';
 import { CANVAS_HEIGHT, CANVAS_WIDTH } from '../game/constants';
 import type { AdventurerRole, GamePhase, GuildTavernScene as GuildTavernScenePayload, TavernActor, TavernBeat, WaveReport } from '../game/types';
+import { AudioSystem } from '../systems/audioSystem';
 import {
   advanceTavernSceneState,
   createInitialTavernSceneState,
@@ -19,10 +21,13 @@ export interface GuildTavernSceneData {
 
 interface ActorView {
   container: Phaser.GameObjects.Container;
-  sprite: Phaser.GameObjects.Image;
+  sprite: Phaser.GameObjects.Sprite;
   nameLabel: Phaser.GameObjects.Text;
   tagLabel: Phaser.GameObjects.Text;
   highlight: Phaser.GameObjects.Graphics;
+  baseX: number;
+  baseY: number;
+  seated: boolean;
 }
 
 interface GuildZone {
@@ -80,7 +85,9 @@ export class GuildTavernScene extends Phaser.Scene {
   private bubbleContainer: Phaser.GameObjects.Container | null = null;
   private autoplayTimer: Phaser.Time.TimerEvent | null = null;
   private unsubscribeActions: (() => void) | null = null;
+  private audio!: AudioSystem;
   private moodGlow!: Phaser.GameObjects.Graphics;
+  private tavernLifeTimer: Phaser.Time.TimerEvent | null = null;
 
   constructor() {
     super('GuildTavernScene');
@@ -94,6 +101,9 @@ export class GuildTavernScene extends Phaser.Scene {
   }
 
   create(): void {
+    this.cameras.main.fadeIn(320, 0, 0, 0);
+    this.audio = new AudioSystem(this);
+    this.audio.playAmbience(AUDIO_KEYS.ambience.tavern, { volume: 0.42, fadeMs: 800 });
     this.drawRoom();
     this.drawTavernCounter();
     this.drawArchiveCorner();
@@ -106,11 +116,15 @@ export class GuildTavernScene extends Phaser.Scene {
     this.bindInput();
     this.syncDialogue(true);
     this.scheduleAutoplay();
+    this.scheduleTavernLife();
     this.publishProgress();
   }
 
   shutdown(): void {
+    this.audio?.stopAmbience();
     this.autoplayTimer?.remove(false);
+    this.tavernLifeTimer?.remove(false);
+    this.tavernLifeTimer = null;
     this.autoplayTimer = null;
     this.unsubscribeActions?.();
     this.unsubscribeActions = null;
@@ -119,10 +133,12 @@ export class GuildTavernScene extends Phaser.Scene {
 
   private drawRoom(): void {
     const floorKey = this.textures.exists(TEXTURE_KEYS.tileFloor) ? TEXTURE_KEYS.tileFloor : TEXTURE_KEYS.tileRoom;
+    this.cameras.main.setBackgroundColor('#100b09');
+    this.add.rectangle(CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2, CANVAS_WIDTH, CANVAS_HEIGHT, 0x100b09, 1).setDepth(-1000);
 
     for (let y = 0; y < CANVAS_HEIGHT; y += 32) {
       for (let x = 0; x < CANVAS_WIDTH; x += 32) {
-        const tile = this.add.image(x, y, floorKey).setOrigin(0).setDisplaySize(32, 32).setAlpha(0.72);
+        const tile = this.add.image(x, y, floorKey).setOrigin(0).setDisplaySize(32, 32).setAlpha(1);
         if ((x / 32 + y / 32) % 2 === 0) {
           tile.setTint(0xa88b66);
         } else {
@@ -389,8 +405,9 @@ export class GuildTavernScene extends Phaser.Scene {
   }
 
   private createActorView(actor: TavernActor, x: number, y: number, seated: boolean): void {
-    const texture = this.textureForActor(actor);
-    const sprite = this.add.image(0, seated ? 4 : 0, texture).setDisplaySize(seated ? 34 : 30, seated ? 34 : 30);
+    const visual = this.visualForActor(actor);
+    const sprite = this.add.sprite(0, seated ? 4 : 0, visual.texture).setDisplaySize(seated ? 38 : Math.min(42, visual.displaySize), seated ? 38 : Math.min(42, visual.displaySize));
+    this.playAnimation(sprite, visual.idle);
 
     if (actor.kind === 'npc') {
       sprite.setTint(0xb8a890);
@@ -422,7 +439,9 @@ export class GuildTavernScene extends Phaser.Scene {
     const container = this.add.container(x, y, [highlight, sprite, nameLabel, tagLabel]);
     container.setData('testid', 'tavern-actor');
     container.setData('actorId', actor.id);
-    this.actorViews.set(actor.id, { container, sprite, nameLabel, tagLabel, highlight });
+    const view = { container, sprite, nameLabel, tagLabel, highlight, baseX: x, baseY: y, seated };
+    this.actorViews.set(actor.id, view);
+    this.animateActorLife(view, actor, visual);
   }
 
   private createEmptySeat(deadName: string | null, x: number, y: number): void {
@@ -445,31 +464,74 @@ export class GuildTavernScene extends Phaser.Scene {
     container.setAlpha(deadName ? 0.95 : 0.55);
   }
 
-  private textureForActor(actor: TavernActor): string {
+  private visualForActor(actor: TavernActor): EntityVisualProfile {
     if (actor.kind === 'survivor' && actor.role !== 'guild' && actor.role !== 'rumor') {
-      const key = TEXTURE_KEYS.adventurer[actor.role as AdventurerRole];
-
-      if (this.textures.exists(key)) {
-        return key;
-      }
+      return ENTITY_VISUALS.adventurer[actor.role as AdventurerRole];
     }
 
-    const npcFallback =
+    const role =
       actor.id === 'archivist'
-        ? TEXTURE_KEYS.adventurer.mage
+        ? 'mage'
         : actor.id === 'recruiter'
-          ? TEXTURE_KEYS.adventurer.warrior
-          : TEXTURE_KEYS.adventurer.healer;
+          ? 'warrior'
+          : actor.id === 'tavernkeeper'
+            ? 'healer'
+            : actor.id.startsWith('volunteer-')
+              ? ['warrior', 'thief', 'cartographer', 'mage'][Number(actor.id.replace(/\D/g, '')) % 4] ?? 'thief'
+              : 'cartographer';
 
-    if (this.textures.exists(npcFallback)) {
-      return npcFallback;
+    return ENTITY_VISUALS.adventurer[role as AdventurerRole];
+  }
+
+  private animateActorLife(view: ActorView, actor: TavernActor, visual: EntityVisualProfile): void {
+    if (view.seated) {
+      this.tweens.add({
+        targets: view.sprite,
+        y: view.sprite.y - 2,
+        angle: actor.isVeteran ? 1.6 : 1,
+        duration: 1300 + (view.baseX % 5) * 180,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut',
+      });
+      return;
     }
 
-    if (this.textures.exists(TEXTURE_KEYS.adventurer.warrior)) {
-      return TEXTURE_KEYS.adventurer.warrior;
+    if (actor.id === 'tavernkeeper' || actor.id === 'archivist' || actor.id === 'recruiter') {
+      this.tweens.add({
+        targets: view.sprite,
+        y: view.sprite.y - 1.5,
+        angle: actor.id === 'tavernkeeper' ? -1.4 : 1.2,
+        duration: 1500 + (view.baseY % 4) * 180,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut',
+      });
+      return;
     }
 
-    return TEXTURE_KEYS.tileFloor;
+    const roamRadius = actor.id.startsWith('volunteer-') ? 28 : 18;
+    const targetX = Phaser.Math.Clamp(view.baseX + Phaser.Math.Between(-roamRadius, roamRadius), 720, 902);
+    const targetY = Phaser.Math.Clamp(view.baseY + Phaser.Math.Between(-roamRadius, roamRadius), 360, 502);
+    this.playAnimation(view.sprite, visual.walk);
+    this.tweens.add({
+      targets: view.container,
+      x: targetX,
+      y: targetY,
+      duration: 2200 + Phaser.Math.Between(0, 900),
+      ease: 'Sine.easeInOut',
+      yoyo: true,
+      repeat: -1,
+      repeatDelay: 900 + Phaser.Math.Between(0, 1200),
+      onYoyo: () => this.playAnimation(view.sprite, visual.idle),
+      onRepeat: () => this.playAnimation(view.sprite, visual.walk),
+    });
+  }
+
+  private playAnimation(sprite: Phaser.GameObjects.Sprite, key: string): void {
+    if (this.anims.exists(key)) {
+      sprite.play(key, true);
+    }
   }
 
   private formatDisplayName(name: string): string {
@@ -606,11 +668,25 @@ export class GuildTavernScene extends Phaser.Scene {
   private bindInput(): void {
     this.unsubscribeActions = onUiAction((action) => {
       if (action.type === 'tavern-advance') {
+        this.audio.playRandomSound(AUDIO_KEYS.interaction.paper, { volume: 0.24, cooldownMs: 160 });
         this.handleAdvance();
       }
 
       if (action.type === 'tavern-skip') {
+        this.audio.playRandomSound(AUDIO_KEYS.ui.confirm, { volume: 0.32, cooldownMs: 160 });
         this.handleSkip();
+      }
+
+      if (action.type === 'toggle-audio-mute') {
+        const muted = this.audio.toggleMute();
+
+        if (!muted) {
+          this.audio.playRandomSound(AUDIO_KEYS.ui.toggle, { volume: 0.32, cooldownMs: 0 });
+        }
+      }
+
+      if (action.type === 'set-audio-volume') {
+        this.audio.setMasterVolume(action.volume);
       }
     });
   }
@@ -651,6 +727,38 @@ export class GuildTavernScene extends Phaser.Scene {
     this.autoplayTimer = this.time.addEvent({
       delay: 2800,
       callback: () => this.handleAdvance(),
+    });
+  }
+
+  private scheduleTavernLife(): void {
+    this.tavernLifeTimer?.remove(false);
+    this.tavernLifeTimer = this.time.addEvent({
+      delay: 2200,
+      loop: true,
+      callback: () => {
+        const actors = [...this.actorViews.values()];
+        const actor = Phaser.Utils.Array.GetRandom(actors);
+
+        if (actor) {
+          this.tweens.add({
+            targets: actor.sprite,
+            scaleX: actor.sprite.scaleX * 1.06,
+            scaleY: actor.sprite.scaleY * 0.96,
+            duration: 120,
+            yoyo: true,
+            ease: 'Quad.easeOut',
+          });
+        }
+
+        const roll = Phaser.Math.Between(0, 4);
+        if (roll === 0) {
+          this.audio.playRandomSound(AUDIO_KEYS.interaction.wood, { volume: 0.1, cooldownMs: 2400, skipRecent: true });
+        } else if (roll === 1) {
+          this.audio.playRandomSound(AUDIO_KEYS.footsteps, { volume: 0.07, cooldownMs: 1800, skipRecent: true });
+        } else if (roll === 2) {
+          this.audio.playRandomSound(AUDIO_KEYS.interaction.paper, { volume: 0.08, cooldownMs: 2600, skipRecent: true });
+        }
+      },
     });
   }
 
